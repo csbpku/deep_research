@@ -135,6 +135,10 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `ZREAD_CLI_TIMEOUT_SECONDS` | int | CLI 目录+页面生成超时；0=不限时，中断保留已生成的部分页 | `7200` |
 | `GBRAIN_MCP_URL` | url | 只读 GBrain HTTP MCP sidecar 端点（可选） | 空 |
 | `GBRAIN_MCP_TOKEN` | secret | GBrain sidecar 鉴权 token（可选） | 空 |
+| `ADMIN_ALERT_WEBHOOK_URL` | secret | 雷达同步异常告警 webhook（飞书或通用 JSON，必须 https；空=关闭）。日志不记录该 URL | 空 |
+| `ADMIN_ALERT_WEBHOOK_FORMAT` | str | `feishu` 或 `generic`；缺省按域名推断（feishu.cn / larksuite.com 视为飞书） | 自动 |
+| `ADMIN_ALERT_FEISHU_SECRET` | secret | 飞书机器人签名密钥（可选，设置后附带 timestamp 与 sign） | 空 |
+| `ADMIN_ALERT_DEDUP_MINUTES` | int | 同一告警 key 的去重窗口，0=每次都发 | `60` |
 | `ANYTHINGLLM_URL` | url | AnythingLLM 可选端点：AI 调研助手集成及遗留雷达 AI 会话 API；雷达页面当前未挂载该聊天面板 | 空 |
 | `ANYTHINGLLM_API_KEY` | secret | AnythingLLM API key（可选） | 空 |
 | `ANYTHINGLLM_WORKSPACE` | str | AnythingLLM workspace slug（可选） | 空 |

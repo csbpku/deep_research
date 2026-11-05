@@ -30,6 +30,7 @@ import { TIER_LABELS, readingTierColor } from '../domain/ScoreBar';
 import { AppButton } from '@/components/material/AppButton';
 import { READER_STORE_URL } from '@/lib/reader-install';
 import { effectiveOriginalKind, zreadRepositoryUrl } from './radar-repository';
+import { radarEvidenceNotice, visibleRadarTags } from '@/lib/radar/evidence';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
 
@@ -94,7 +95,7 @@ export function formatRadarDetailDate(value: string | null | undefined): string 
 }
 
 export function cleanRadarTags(tags: string[] | undefined): string[] {
-  return (tags ?? []).filter((tag) => {
+  return visibleRadarTags(tags).filter((tag) => {
     if (!tag || tag.startsWith('tier_') || tag.startsWith('profile_')) return false;
     if (tag.startsWith('veto_') || tag.startsWith('risk_')) return false;
     if (tag.startsWith('migration_') || tag.endsWith('_pending')) return false;
@@ -245,7 +246,7 @@ export function RadarExternalReadingLanding({
                   </Box>
                 ) : null}
                 <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 2 }}>
-                  同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
+                  {radarEvidenceNotice(detail)}
                 </Typography>
               </Box>
             </Box>

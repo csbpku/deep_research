@@ -1952,3 +1952,161 @@ def test_strip_overlap_drops_repeated_tail_sentence() -> None:
     previous = "最后一句话"
     chunk = "最后一句话\n\n## 结论\n\n完整。"
     assert _strip_overlap(previous, chunk) == "## 结论\n\n完整。"
+
+
+@pytest.mark.parametrize("brief_kind", [None, "engineering", "paper", "project", "change"])
+async def test_summary_brief_focus_is_typed_only_when_kind_is_known(
+    monkeypatch: pytest.MonkeyPatch, brief_kind: str | None,
+) -> None:
+    from ai_engine.radar.brief_kind import TYPED_BRIEF_QUESTIONS
+
+    seen: dict[str, object] = {}
+
+    async def fake_generate_text(**kwargs: object) -> SimpleNamespace:
+        seen.update(kwargs)
+        return SimpleNamespace(text="这是基于来源正文生成的有效雷达摘要。" * 12, input_tokens=1, output_tokens=1)
+
+    monkeypatch.setattr("ai_engine.llm.client.generate_text", fake_generate_text)
+    request = ResearchRequest(
+        job_id=f"radar-brief-kind-{brief_kind}",
+        request_id=f"radar-brief-kind-{brief_kind}",
+        topic="类型化导读",
+        context="正文内容。" * 40,
+        report_type="summary_brief",
+        source_policy=SOURCE_POLICY["ONLY_USER_SOURCES"],  # type: ignore[arg-type]
+        source_refs=({"type": "url", "value": "https://example.com/post"},),
+        brief_kind=brief_kind,
+    )
+    job = _Job(request)
+    adapter = object.__new__(GptResearcherAdapter)
+    adapter._brief_llm = "openai:test"
+
+    await adapter._run_brief(job)
+
+    prompt = str(seen["user_prompt"])
+    assert "4-7 句 AI 摘要" in prompt
+    assert "250-500 个中文字符" in prompt
+    if brief_kind is None:
+        assert "优先覆盖文章要解决的问题" in prompt
+        assert "优先回答：" not in prompt
+    else:
+        assert "优先覆盖文章要解决的问题" not in prompt
+        assert "优先回答：" + TYPED_BRIEF_QUESTIONS[brief_kind][0] in prompt
+        assert "不使用标题、列表或 Markdown" in prompt
+
+
+async def test_map_step_carries_typed_focus_questions() -> None:
+    from ai_engine.radar.brief_kind import TYPED_BRIEF_QUESTIONS
+
+    prompts: list[str] = []
+
+    async def call_llm(prompt: str, **kwargs: object) -> SimpleNamespace:
+        prompts.append(prompt)
+        return SimpleNamespace(text='{"summary":"分块要点","key_facts":[],"limitations":[],"quotes":[]}')
+
+    chunks = [SimpleNamespace(index=1, section="第一节", text="正文片段一")]
+    adapter = object.__new__(GptResearcherAdapter)
+    questions = TYPED_BRIEF_QUESTIONS["paper"]
+    await adapter._map_brief_chunks(
+        call_llm,
+        topic="论文",
+        chunks=chunks,
+        untrusted_fragment=lambda value: str(value),
+        focus_questions=questions,
+    )
+    assert len(prompts) == 1
+    assert "重点关注这些问题" in prompts[0]
+    assert questions[0] in prompts[0]
+
+    prompts.clear()
+    await adapter._map_brief_chunks(
+        call_llm,
+        topic="论文",
+        chunks=chunks,
+        untrusted_fragment=lambda value: str(value),
+    )
+    assert "重点关注这些问题" not in prompts[0]
+
+
+async def test_json_call_retries_once_with_larger_ceiling_when_truncated() -> None:
+    from ai_engine.adapters.gpt_researcher import (
+        BRIEF_JSON_CALL_MAX_TOKENS,
+        BRIEF_JSON_RETRY_MAX_TOKENS,
+        _call_json_with_truncation_retry,
+    )
+
+    ceilings: list[int] = []
+
+    async def call_llm(prompt: str, *, max_tokens: int) -> SimpleNamespace:
+        ceilings.append(max_tokens)
+        if len(ceilings) == 1:
+            return SimpleNamespace(text='{"summary":"截', truncated=True, output_tokens=max_tokens)
+        return SimpleNamespace(text='{"summary":"完整"}', truncated=False, output_tokens=40)
+
+    result = await _call_json_with_truncation_retry(call_llm, "prompt")
+
+    assert ceilings == [BRIEF_JSON_CALL_MAX_TOKENS, BRIEF_JSON_RETRY_MAX_TOKENS]
+    assert result.text == '{"summary":"完整"}'
+
+
+async def test_json_call_does_not_retry_when_output_is_complete() -> None:
+    from ai_engine.adapters.gpt_researcher import _call_json_with_truncation_retry
+
+    calls = 0
+
+    async def call_llm(prompt: str, *, max_tokens: int) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(text='{"summary":"ok"}', truncated=False, output_tokens=20)
+
+    await _call_json_with_truncation_retry(call_llm, "prompt")
+    assert calls == 1
+
+
+async def test_map_step_recovers_a_truncated_chunk_instead_of_failing_the_brief() -> None:
+    from ai_engine.adapters.gpt_researcher import GptResearcherAdapter
+
+    seen_ceilings: list[int] = []
+    attempts = 0
+
+    async def call_llm(prompt: str, *, max_tokens: int) -> SimpleNamespace:
+        nonlocal attempts
+        attempts += 1
+        seen_ceilings.append(max_tokens)
+        if max_tokens < 1536:
+            return SimpleNamespace(text='{"summary":"被截断', truncated=True, output_tokens=max_tokens)
+        return SimpleNamespace(
+            text='{"summary":"分块要点","key_facts":[],"limitations":[],"quotes":[]}',
+            truncated=False,
+            output_tokens=120,
+        )
+
+    chunks = [SimpleNamespace(index=1, section="第一节", text="正文片段一")]
+    adapter = object.__new__(GptResearcherAdapter)
+    notes = await adapter._map_brief_chunks(
+        call_llm,
+        topic="论文",
+        chunks=chunks,
+        untrusted_fragment=lambda value: str(value),
+    )
+
+    assert attempts == 2
+    assert seen_ceilings == [768, 1536]
+    assert notes[0]["summary"] == "分块要点"
+
+
+async def test_map_step_still_fails_when_the_retry_is_also_truncated() -> None:
+    from ai_engine.adapters.gpt_researcher import GptResearcherAdapter
+
+    async def call_llm(prompt: str, *, max_tokens: int) -> SimpleNamespace:
+        return SimpleNamespace(text='{"summary":"被截断', truncated=True, output_tokens=max_tokens)
+
+    chunks = [SimpleNamespace(index=1, section="第一节", text="正文片段一")]
+    adapter = object.__new__(GptResearcherAdapter)
+    with pytest.raises(Exception):
+        await adapter._map_brief_chunks(
+            call_llm,
+            topic="论文",
+            chunks=chunks,
+            untrusted_fragment=lambda value: str(value),
+        )

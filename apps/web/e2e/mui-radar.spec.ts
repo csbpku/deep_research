@@ -21,6 +21,87 @@ async function fixture(page: Page) {
 test.describe('MUI radar migration contracts (no database writes)', () => {
   test.beforeEach(async ({ page }) => { await fixture(page); });
 
+  for (const width of [1440, 320]) {
+    test(`${width}px: the reading preview discloses limited feed evidence`, async ({ page }) => {
+      const limited = {
+        ...candidate,
+        tags: ['rss', 'external_reading', 'evidence_feed_excerpt', 'brief_typed_v1', 'agent'],
+        scoreReason: 'RSS 来源片段初筛：未核实完整原文，评分仅供发现排序；请打开原文复核。',
+      };
+      await page.route('**/api/radar?*', route => route.fulfill({
+        json: { page: 1, perPage: 20, total: 1, totalPages: 1, items: [limited] },
+      }));
+      await page.route(`**/api/radar/${id}?*`, route => route.fulfill({ json: limited }));
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/radar?date=all');
+      await page.getByRole('link', { name: candidate.title, exact: true }).click();
+      const preview = page.locator('aside[aria-label="文章概览"]:visible');
+      await expect(preview).toBeVisible();
+      await expect(preview.getByText('该文章曾使用 RSS 来源片段生成摘要或评分；原文覆盖情况请打开原文核实。')).toBeVisible();
+      await expect(preview.getByText('#agent')).toBeVisible();
+      await expect(preview.getByText('#evidence_feed_excerpt')).toHaveCount(0);
+      await expect(preview.getByText('#brief_typed_v1')).toHaveCount(0);
+      await expect(preview.getByText('同步时临时读取原文生成摘要和评分', { exact: false })).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    });
+  }
+
+  for (const width of [1440, 320]) {
+    test(`${width}px: highlights use one bounded filtered pool and the full list remains available`, async ({ page }) => {
+      const seenQueries: URLSearchParams[] = [];
+      const ranked = Array.from({ length: 12 }, (_, index) => ({
+        ...candidate,
+        id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+        title: `精选阅读测试 ${index}`,
+        sourceName: index === 11 ? '另一来源' : '重复来源',
+      }));
+      await page.route('**/api/radar?*', route => {
+        const params = new URL(route.request().url()).searchParams;
+        seenQueries.push(params);
+        const items = params.get('q') === 'no-match' ? [] : ranked;
+        return route.fulfill({ json: { page: 1, perPage: Number(params.get('per_page')), total: items.length, totalPages: 1, items } });
+      });
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/radar?date=all');
+      await page.getByRole('button', { name: '本次精选', exact: true }).click();
+      await expect(page.getByRole('button', { name: '本次精选', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('article')).toHaveCount(10);
+      await expect(page.getByRole('link', { name: '精选阅读测试 11', exact: true })).toBeVisible();
+      await expect(page.getByText('从符合筛选条件的前 100 条中优先兼顾不同类型和来源，最多展示 10 条。')).toBeVisible();
+      await expect.poll(() => seenQueries.some(params => params.get('page') === '1' && params.get('per_page') === '100')).toBe(true);
+      await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('highlights');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.reload();
+      await expect(page.getByRole('button', { name: '本次精选', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('article')).toHaveCount(10);
+      await page.getByRole('link', { name: '精选阅读测试 0', exact: true }).click();
+      await expect(page.locator('aside[aria-label="文章概览"]:visible')).toBeVisible();
+      await page.getByRole('button', { name: '关闭预览', exact: true }).click();
+      await expect(page.locator('aside[aria-label="文章概览"]:visible')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '本次精选', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      const search = page.locator('input[type="search"]:visible');
+      await search.fill('no-match');
+      await search.press('Enter');
+      await expect(page.getByText('当前筛选没有内容')).toBeVisible();
+      await expect.poll(() => seenQueries.some(params => params.get('q') === 'no-match' && params.get('per_page') === '100')).toBe(true);
+      await expect(page.getByRole('button', { name: '本次精选', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await search.fill('');
+      await search.press('Enter');
+      await expect(page.locator('article')).toHaveCount(10);
+      await page.getByRole('button', { name: '推荐排序', exact: true }).click();
+      await expect(page.locator('article')).toHaveCount(12);
+      await expect(page.getByRole('link', { name: '精选阅读测试 10', exact: true })).toBeVisible();
+      await expect.poll(() => seenQueries.some(params => params.get('per_page') === '20')).toBe(true);
+      await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('ranked');
+      await page.goto('/radar?date=all&view=highlights');
+      await expect(page.getByRole('button', { name: '本次精选', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await page.goBack();
+      await expect(page.getByRole('button', { name: '推荐排序', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await page.goForward();
+      await expect(page.getByRole('button', { name: '本次精选', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    });
+  }
+
   test('preview hands focus to the panel, closes on Escape and returns focus to the source title', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/radar?date=all');

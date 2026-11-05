@@ -91,12 +91,15 @@ async def test_generate_brief_does_not_refetch_a_verified_entry_snapshot() -> No
     adapter = _CapturingBriefAdapter()
     await _generate_brief(
         adapter,
-        {"title": "Release note", "snippet": "The verified entry.", "context_is_source_snapshot": True},
+        {"title": "Release note", "snippet": "The verified entry.",
+         "context_is_source_snapshot": True, "context_is_source_excerpt": True, "brief_kind": "change"},
         "https://example.com/notes#entry",
         timeout_seconds=1,
     )
     assert adapter.request.context == "The verified entry."
     assert adapter.request.source_refs == ()
+    assert adapter.request.context_is_source_excerpt is True
+    assert adapter.request.brief_kind == "change"
 
 
 async def test_ingestion_publishes_generated_brief_with_metrics() -> None:

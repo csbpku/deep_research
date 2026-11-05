@@ -238,3 +238,29 @@ def test_profile_for_source_url_dispatches_to_expected_profile() -> None:
         assert profile_id == expected_id, (
             f"{source_type} expected profile {expected_id}, got {profile_id}"
         )
+
+
+def test_profile_for_source_url_distinguishes_docs_from_news_in_mixed_feeds() -> None:
+    cases = [
+        ("rss", "https://platform.openai.com/docs/guides/agents", "engineering"),
+        ("vendor_news", "https://docs.anthropic.com/en/docs/agents", "engineering"),
+        ("rss", "https://example.com/docs/agents", "engineering"),
+        ("rss", "https://example.com/docs", "engineering"),
+        ("rss", "https://ai.google.dev/gemini-api/docs", "engineering"),
+        ("rss", "https://docs.example.com/guide", "engineering"),
+        ("rss", "https://openai.com/index/agents", "news"),
+        ("vendor_news", "https://platform.openai.com", "news"),
+        ("vendor_news", "https://platform.openai.com/announcements/new", "news"),
+        ("vendor_news", "https://ai.google.dev/blog/launch", "news"),
+        ("rss", "https://platform.openai.com.attacker.example/announcements", "news"),
+        ("rss", "https://docs-openai.com/announcement", "news"),
+        ("rss", "https://example.com/article?next=/docs/guide", "news"),
+        ("rss", "https://example.com/blog/docs-are-useful", "news"),
+        ("rss", "https://[invalid", "news"),
+        ("rss", "not a url /docs/guides", "news"),
+        ("arxiv", "https://arxiv.org/abs/2401.00001", "paper"),
+        ("github", "https://github.com/openai/codex", "engineering"),
+    ]
+    for source_type, url, expected_id in cases:
+        profile, profile_id = profile_for_source_url(source_type, url)
+        assert profile.id == profile_id == expected_id

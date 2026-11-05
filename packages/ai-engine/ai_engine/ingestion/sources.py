@@ -420,11 +420,25 @@ def _parse_via_feedparser(text: str) -> list[dict[str, str]] | None:
             item["link"] = str(entry.link).strip()
         if hasattr(entry, "summary") and entry.summary:
             item["description"] = str(entry.summary).strip()
-        elif hasattr(entry, "content") and entry.content:
+            if not entry.get("summary_detail") and entry.get("content"):
+                # feedparser synthesizes summary from content for content-only
+                # feeds; this is not an independently supplied summary.
+                item["description_is_content"] = "1"
+        if hasattr(entry, "content") and entry.content:
             try:
-                value = entry.content[0].get("value") if entry.content else ""
+                # Retain the separately supplied textual content even when a
+                # shorter summary is present. Feed content may be partial;
+                # callers must not infer completeness from its length.
+                value = next((part.get("value") for part in entry.content
+                              if isinstance(part, dict)
+                              and str(part.get("type") or "text/plain").split(";", 1)[0].lower()
+                              in {"text/plain", "text/html", "application/xhtml+xml", "html", "xhtml", "text"}
+                              and isinstance(part.get("value"), str)), "")
                 if value:
-                    item["description"] = str(value).strip()
+                    item["content"] = str(value).strip()
+                    if "description" not in item:
+                        item["description"] = item["content"]
+                        item["description_is_content"] = "1"
             except Exception:
                 pass
         if hasattr(entry, "published") and entry.published:
@@ -460,6 +474,17 @@ def _parse_via_regex(text: str) -> list[dict[str, str]]:
                 value = _html.unescape(value)
                 item[field] = value
         if item:
+            content_match = _re.search(
+                r"<content:encoded[^>]*>(.*?)</content:encoded>", block,
+                _re.DOTALL | _re.IGNORECASE,
+            )
+            if content_match:
+                value = content_match.group(1).strip()
+                if value.startswith("<![CDATA[") and value.endswith("]]>"):
+                    value = value[9:-3]
+                item["content"] = _html.unescape(value)
+                if not _re.search(r"<description\b", block, _re.IGNORECASE):
+                    item["description_is_content"] = "1"
             items.append(item)
 
     # Atom: <entry>...</entry>
@@ -506,15 +531,29 @@ def _parse_via_regex(text: str) -> list[dict[str, str]]:
         ) or (safe_links[0] if safe_links else None)
         if preferred:
             atom_item["link"] = preferred[0]
+        # Atom content may be arbitrary media. Do not treat XML/JSON/binary
+        # alternatives as article prose when the primary parser is unavailable.
+        cm = _re.search(r"<content\b([^>]*)>(.*?)</content>", block, _re.DOTALL | _re.IGNORECASE)
+        if cm:
+            type_match = _re.search(r"\btype\s*=\s*(['\"])(.*?)\1", cm.group(1), _re.IGNORECASE)
+            media_type = (type_match.group(2) if type_match else "text").split(";", 1)[0].strip().lower()
+            if media_type not in {"text", "html", "xhtml", "text/plain", "text/html", "application/xhtml+xml"}:
+                cm = None
         # summary/content
         sm = _re.search(r"<summary[^>]*>(.*?)</summary>", block, _re.DOTALL)
-        if not sm:
-            sm = _re.search(r"<content[^>]*>(.*?)</content>", block, _re.DOTALL)
         if sm:
             value = sm.group(1).strip()
             if value.startswith("<![CDATA[") and value.endswith("]]>"):
                 value = value[9:-3]
             atom_item["description"] = _html.unescape(value)
+        if cm:
+            value = cm.group(2).strip()
+            if value.startswith("<![CDATA[") and value.endswith("]]>"):
+                value = value[9:-3]
+            atom_item["content"] = _html.unescape(value)
+            if "description" not in atom_item:
+                atom_item["description"] = atom_item["content"]
+                atom_item["description_is_content"] = "1"
         # published/updated
         pm = _re.search(r"<published[^>]*>(.*?)</published>", block, _re.DOTALL)
         if not pm:

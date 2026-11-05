@@ -43,6 +43,14 @@ class RadarCandidate:
     # migration; the persisted score contains the final audited snapshot.
     repo_signals: dict[str, Any] = field(default_factory=dict)
     source_diagnostic: tuple[str, str] | None = None
+    # Bounded, transient publisher-feed evidence. It may be an excerpt even
+    # when long, is never equivalent to independently fetched full text, and
+    # must not be serialized into diagnostics, logs, or originalMarkdown.
+    feed_excerpt: str = field(default="", repr=False, compare=False)
+    # Host of the actual feed response after safe redirects, without its URL or
+    # query string. Used only to check feed-to-article source identity.
+    feed_source_host: str = field(default="", repr=False, compare=False)
+    feed_snippet_from_content: bool = field(default=False, repr=False, compare=False)
     # Legacy fields kept only so historical fixtures and old serialized
     # candidates remain readable. No active source populates or consumes them.
     repo_activity: "RepoActivity | None" = None

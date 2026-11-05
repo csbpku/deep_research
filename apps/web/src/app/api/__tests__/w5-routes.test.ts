@@ -279,6 +279,17 @@ describe('GET /api/admin/radar/runs', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('GET /api/radar', () => {
+  it('uses the summary ID as a deterministic final tie-breaker', async () => {
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+    await radarList(new Request('http://localhost/api/radar?per_page=100') as never);
+    expect(mocks.summaryFindMany.mock.calls[0][0].orderBy).toEqual([
+      { distilledTotal: { sort: 'desc', nulls: 'last' } },
+      { createdAt: 'desc' },
+      { id: 'asc' },
+    ]);
+  });
+
   it('filters invalid scores before pagination and counting in one snapshot', async () => {
     mocks.summaryQueryRaw.mockResolvedValueOnce([{ id: SUM_ID }]);
     mocks.summaryFindMany.mockResolvedValue([]);

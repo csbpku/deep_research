@@ -14,7 +14,7 @@ from ai_engine.radar.topic_clustering import (
     title_concepts,
 )
 from ai_engine.radar.topic_proposal_worker import _clean_json, _prompt, _source_key
-from ai_engine.radar.topic_synthesis_worker import _generate_for_topic, _parse_payload
+from ai_engine.radar.topic_synthesis_worker import _build_prompt, _generate_for_topic, _parse_payload
 from ai_engine.radar.topic_refresh_worker import (
     _matches_topic,
     _source_key as _refresh_source_key,
@@ -37,6 +37,7 @@ from ai_engine.radar.topic_refresh_worker import (
         "ai", "AI", "llm", "large-language-model", "machinelearning",
         "programming", "opensource", "python", "typescript", "javascript",
         "rust", "golang", "nodejs",
+        "brief_typed_v1",
     ],
 )
 def test_is_metadata_tag_filters_sync_metadata(tag: str) -> None:
@@ -67,12 +68,12 @@ def test_title_concepts_removes_generic_stopwords() -> None:
 
 def test_build_candidate_clusters_groups_shared_concepts() -> None:
     rows = [
-        {"id": "1", "title": "MCP server compliance", "sourceKey": "a.dev", "tags": ["mcp"]},
-        {"id": "2", "title": "MCP stateless update", "sourceKey": "b.dev", "tags": ["mcp"]},
-        {"id": "3", "title": "MCP validation tool", "sourceKey": "c.dev", "tags": ["mcp"]},
-        {"id": "4", "title": "RAG retrieval benchmark", "sourceKey": "d.dev", "tags": ["rag"]},
-        {"id": "5", "title": "RAG memory store", "sourceKey": "e.dev", "tags": ["rag"]},
-        {"id": "6", "title": "RAG evaluation setup", "sourceKey": "f.dev", "tags": ["rag"]},
+        {"id": "1", "title": "MCP server compliance", "sourceKey": "a.dev", "tags": ["mcp", "brief_typed_v1"]},
+        {"id": "2", "title": "MCP stateless update", "sourceKey": "b.dev", "tags": ["mcp", "brief_typed_v1"]},
+        {"id": "3", "title": "MCP validation tool", "sourceKey": "c.dev", "tags": ["mcp", "brief_typed_v1"]},
+        {"id": "4", "title": "RAG retrieval benchmark", "sourceKey": "d.dev", "tags": ["rag", "brief_typed_v1"]},
+        {"id": "5", "title": "RAG memory store", "sourceKey": "e.dev", "tags": ["rag", "brief_typed_v1"]},
+        {"id": "6", "title": "RAG evaluation setup", "sourceKey": "f.dev", "tags": ["rag", "brief_typed_v1"]},
     ]
     clusters = build_candidate_clusters(rows)
     assert {cluster["concept"] for cluster in clusters} == {"mcp", "rag"}
@@ -85,6 +86,17 @@ def test_build_candidate_clusters_skips_single_source_groups() -> None:
         {"id": str(i), "title": f"MCP note {i}", "sourceKey": "a.dev", "tags": ["mcp"]}
         for i in range(4)
     ]
+    assert build_candidate_clusters(rows) == []
+
+
+@pytest.mark.parametrize("tag", ["evidence_feed_excerpt", "brief_typed_v1"])
+def test_processing_metadata_does_not_cluster_unrelated_articles(tag: str) -> None:
+    rows = [
+        {"id": "1", "title": "Quantum circuits", "sourceKey": "a.dev", "tags": [tag]},
+        {"id": "2", "title": "Distributed databases", "sourceKey": "b.dev", "tags": [tag]},
+        {"id": "3", "title": "Compiler optimizations", "sourceKey": "c.dev", "tags": [tag]},
+    ]
+    assert is_metadata_tag(tag)
     assert build_candidate_clusters(rows) == []
 
 
@@ -118,7 +130,7 @@ def test_topic_aggregation_only_accepts_deep_read_and_above() -> None:
 
 def test_existing_topic_refresh_uses_non_metadata_anchor_tags() -> None:
     anchors = _topic_anchor_tags(
-        [{"tags": ["mcp", "tier_deep_read", "github"]}],
+        [{"tags": ["mcp", "tier_deep_read", "github", "brief_typed_v1"]}],
         "MCP security",
     )
     assert anchors == {"mcp"}
@@ -163,6 +175,19 @@ def test_topic_proposal_prompt_prefers_followable_scope() -> None:
     assert "不要用某个项目名" in prompt
     assert "通常只生成 1 个主题提议" in prompt
     assert "最多生成 2 个" in prompt
+
+
+def test_topic_model_inputs_exclude_processing_tags_and_keep_content_tags() -> None:
+    row = {
+        "id": "1", "title": "MCP server", "sourceKey": "a.dev",
+        "tags": ["brief_typed_v1", "evidence_feed_excerpt", "profile_engineering", "tier_deep_read", "mcp"],
+        "interpretation": "Concrete engineering evidence.",
+    }
+    for prompt in (_prompt([row]), _build_prompt("MCP security", [row])):
+        for tag in row["tags"][:-1]:
+            assert tag not in prompt
+        assert "mcp" in prompt
+        assert "Concrete engineering evidence." in prompt
 
 
 # ── topic_synthesis payload 解析 ─────────────────────────────────
