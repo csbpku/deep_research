@@ -97,6 +97,35 @@ BRIEF_CHUNK_TOKEN_BUDGET = max(
     512, int(os.environ.get("RADAR_BRIEF_CHUNK_TOKENS", "6000"))
 )
 BRIEF_REDUCE_INPUT_TOKEN_BUDGET = 4_500
+# Map and reduce each ask for a small JSON object. A cut-off object cannot be
+# parsed and would fail the whole brief, so one truncated call is retried once
+# with a larger ceiling. Measured reduce outputs reached 768 tokens (one of 24
+# calls truncated) and peaked near 810, so 1536 leaves headroom.
+BRIEF_JSON_CALL_MAX_TOKENS = 768
+BRIEF_JSON_RETRY_MAX_TOKENS = 1536
+
+
+async def _call_json_with_truncation_retry(
+    call_llm: Callable[..., Awaitable[Any]],
+    prompt: str,
+) -> Any:
+    """Call the model for one JSON map/reduce step, retrying once if the output was cut off.
+
+    max_tokens is a ceiling, not a target: a call that finishes normally costs the
+    same with a larger ceiling, and only a call that would have been truncated
+    uses the extra budget.
+    """
+    result = await call_llm(prompt, max_tokens=BRIEF_JSON_CALL_MAX_TOKENS)
+    if not getattr(result, "truncated", False):
+        return result
+    logger.info(
+        "ai_engine.brief.json_truncated_retry",
+        extra={
+            "max_tokens": BRIEF_JSON_RETRY_MAX_TOKENS,
+            "output_tokens": getattr(result, "output_tokens", None),
+        },
+    )
+    return await call_llm(prompt, max_tokens=BRIEF_JSON_RETRY_MAX_TOKENS)
 BRIEF_REDUCE_BATCH_TOKEN_BUDGET = 3_500
 
 
@@ -5402,7 +5431,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
 
 只输出 JSON：{{"summary":"本段要点","key_facts":[],"limitations":[],"quotes":[]}}"""
             async with semaphore:
-                result = await call_llm(prompt, max_tokens=768)
+                result = await _call_json_with_truncation_retry(call_llm, prompt)
             parsed = _parse_summary_map_json(result.text)
             quote_candidates = parsed.get("quotes")
             quotes = [
@@ -5462,7 +5491,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
 </untrusted-section-notes>
 
 只输出 JSON：{{"section":"覆盖章节","summary":"综合要点","key_facts":[],"limitations":[],"quotes":[]}}"""
-                result = await call_llm(prompt, max_tokens=768)
+                result = await _call_json_with_truncation_retry(call_llm, prompt)
                 parsed = _parse_summary_map_json(result.text)
                 source_text = " ".join(original_content.split())
                 quotes = [

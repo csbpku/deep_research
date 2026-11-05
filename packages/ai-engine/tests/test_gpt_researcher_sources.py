@@ -2026,3 +2026,87 @@ async def test_map_step_carries_typed_focus_questions() -> None:
         untrusted_fragment=lambda value: str(value),
     )
     assert "重点关注这些问题" not in prompts[0]
+
+
+async def test_json_call_retries_once_with_larger_ceiling_when_truncated() -> None:
+    from ai_engine.adapters.gpt_researcher import (
+        BRIEF_JSON_CALL_MAX_TOKENS,
+        BRIEF_JSON_RETRY_MAX_TOKENS,
+        _call_json_with_truncation_retry,
+    )
+
+    ceilings: list[int] = []
+
+    async def call_llm(prompt: str, *, max_tokens: int) -> SimpleNamespace:
+        ceilings.append(max_tokens)
+        if len(ceilings) == 1:
+            return SimpleNamespace(text='{"summary":"截', truncated=True, output_tokens=max_tokens)
+        return SimpleNamespace(text='{"summary":"完整"}', truncated=False, output_tokens=40)
+
+    result = await _call_json_with_truncation_retry(call_llm, "prompt")
+
+    assert ceilings == [BRIEF_JSON_CALL_MAX_TOKENS, BRIEF_JSON_RETRY_MAX_TOKENS]
+    assert result.text == '{"summary":"完整"}'
+
+
+async def test_json_call_does_not_retry_when_output_is_complete() -> None:
+    from ai_engine.adapters.gpt_researcher import _call_json_with_truncation_retry
+
+    calls = 0
+
+    async def call_llm(prompt: str, *, max_tokens: int) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(text='{"summary":"ok"}', truncated=False, output_tokens=20)
+
+    await _call_json_with_truncation_retry(call_llm, "prompt")
+    assert calls == 1
+
+
+async def test_map_step_recovers_a_truncated_chunk_instead_of_failing_the_brief() -> None:
+    from ai_engine.adapters.gpt_researcher import GptResearcherAdapter
+
+    seen_ceilings: list[int] = []
+    attempts = 0
+
+    async def call_llm(prompt: str, *, max_tokens: int) -> SimpleNamespace:
+        nonlocal attempts
+        attempts += 1
+        seen_ceilings.append(max_tokens)
+        if max_tokens < 1536:
+            return SimpleNamespace(text='{"summary":"被截断', truncated=True, output_tokens=max_tokens)
+        return SimpleNamespace(
+            text='{"summary":"分块要点","key_facts":[],"limitations":[],"quotes":[]}',
+            truncated=False,
+            output_tokens=120,
+        )
+
+    chunks = [SimpleNamespace(index=1, section="第一节", text="正文片段一")]
+    adapter = object.__new__(GptResearcherAdapter)
+    notes = await adapter._map_brief_chunks(
+        call_llm,
+        topic="论文",
+        chunks=chunks,
+        untrusted_fragment=lambda value: str(value),
+    )
+
+    assert attempts == 2
+    assert seen_ceilings == [768, 1536]
+    assert notes[0]["summary"] == "分块要点"
+
+
+async def test_map_step_still_fails_when_the_retry_is_also_truncated() -> None:
+    from ai_engine.adapters.gpt_researcher import GptResearcherAdapter
+
+    async def call_llm(prompt: str, *, max_tokens: int) -> SimpleNamespace:
+        return SimpleNamespace(text='{"summary":"被截断', truncated=True, output_tokens=max_tokens)
+
+    chunks = [SimpleNamespace(index=1, section="第一节", text="正文片段一")]
+    adapter = object.__new__(GptResearcherAdapter)
+    with pytest.raises(Exception):
+        await adapter._map_brief_chunks(
+            call_llm,
+            topic="论文",
+            chunks=chunks,
+            untrusted_fragment=lambda value: str(value),
+        )
