@@ -24,6 +24,7 @@ from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 from ai_engine.text_chunking import count_text_tokens
 from ai_engine.llm.token_budget import (
     TokenBudgetError,
+    TokenBudgetExceeded,
     current_budget_task,
     estimate_call_tokens,
     release_llm_tokens,
@@ -232,6 +233,50 @@ def is_quota_error(exc: BaseException) -> bool:
             "credit balance",
         )
     )
+
+
+# Billing-exhaustion wording only. Generic "quota exceeded" text is avoided on
+# purpose: several providers use it for transient per-minute limits, and those
+# must keep the normal retry/fallback path instead of stopping a sync run.
+_QUOTA_EXHAUSTED_MARKERS = (
+    "insufficient_quota",
+    "exceeded your current quota",
+    "credit balance",
+    "insufficient balance",
+    "billing_hard_limit_reached",
+    "billing_not_active",
+)
+
+
+def _is_quota_exhausted_single(exc: BaseException) -> bool:
+    if getattr(exc, "status_code", None) == 402:
+        return True
+    # A local token cap cannot recover inside the same sync run either, so it
+    # stops the run the same way provider billing exhaustion does.
+    if isinstance(exc, TokenBudgetExceeded):
+        return True
+    detail = str(exc).lower()
+    return any(marker in detail for marker in _QUOTA_EXHAUSTED_MARKERS)
+
+
+def is_quota_exhausted_error(exc: BaseException) -> bool:
+    """Whether the account allowance is exhausted (billing), not a transient rate limit.
+
+    Unlike ``is_quota_error``, a plain HTTP 429 or ``rate limit`` text does not
+    match: those recover on their own and must not stop a sync run. The cause
+    chain is walked because gpt-researcher and the radar scorer wrap provider
+    errors.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(4):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if _is_quota_exhausted_single(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def is_provider_policy_error(exc: BaseException) -> bool:

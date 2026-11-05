@@ -169,6 +169,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     if (item.kind === 'failed') return 0;
     return {
       AI_ENGINE_UNAVAILABLE: 1,
+      MODEL_QUOTA_STOPPED: 1,
       CONTENT_FETCH_FAILED: 1,
       PENDING_SCORE: 2,
       DISTILLED_UNASSESSABLE: 3,

@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any, TypedDict
 
-_METADATA_TAG_PREFIXES = ("profile_", "tier_")
+_METADATA_TAG_PREFIXES = ("profile_", "tier_", "evidence_", "brief_")
 _METADATA_TAG_EXACT = frozenset({
     "github", "arxiv", "huggingface", "devto", "hackernews",
     "lobsters", "producthunt", "rss", "news", "trending",

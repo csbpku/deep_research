@@ -176,18 +176,6 @@ function ReaderPanel() {
             </div>
             <Paper component="div" id="persistent-composer" className="chat-composer persistent-composer hidden" aria-label={t("围绕当前原文提问")} variant="outlined" elevation={0} >
               <div id="composer-resize" className="composer-resize" role="separator" tabIndex={0} aria-label={t("调整输入区高度")} aria-orientation="horizontal" aria-valuemin={60} aria-valuemax={240} aria-valuenow={60} title={t("上下拖动调整输入区；方向键也可调整")}><span /></div>
-              <div className="composer-context-row">
-                <ReaderButton id="composer-size-toggle" type="button" control="icon" variant="text" aria-label={t("展开输入框")} aria-expanded="false" title={t("展开或收起输入框")}><ComposerIcon kind="expand" size={20} /></ReaderButton>
-            <div id="discussion-scope-options" className="discussion-scope-options" role="group" aria-label={t("回答依据")}>
-              <span className="discussion-scope-label">{t("基于")}</span>
-              <ReaderButton id="scope-page" className="scope-option" type="button" variant="text" control="scope">{t("整篇")}</ReaderButton>
-              <ReaderButton id="scope-selection" className="scope-option hidden" type="button" variant="text" control="scope">{t("选段")}</ReaderButton>
-              <ReaderButton id="scope-image" className="scope-option hidden" type="button" variant="text" control="scope">{t("图示")}</ReaderButton>
-            </div>
-                <span id="composer-scope-label" className="composer-scope-label">{t("整页正文")}</span><ReaderButton id="composer-model" className="composer-model" control="model" type="button" aria-expanded="false" aria-controls="composer-model-menu" title={t("模型与连接设置")} variant="text" endIcon={<ComposerIcon kind="chevron-down" size={20} />}><span id="composer-model-label">{t("配置模型")}</span></ReaderButton>
-                <span id="composer-context-status" className="composer-context-status">{t("正文状态：正在读取")}</span><span id="chat-scope-description" className="hidden">{t("基于整篇文章")}</span>
-              </div>
-              <Paper component="div" variant="outlined" id="composer-model-menu" className="composer-model-menu hidden" role="dialog" aria-label={t("切换模型")}><label htmlFor="composer-model-search">{t("选择模型")}</label><ReaderTextField id="composer-model-search" type="search" placeholder={t("搜索模型…")} autoComplete="off"  /><div id="composer-model-options" className="composer-model-options" role="listbox" aria-label={t("可用模型")} /><div id="composer-model-status" className="small" role="status" /><div className="composer-model-actions"><ReaderButton id="composer-model-refresh" type="button" variant="text">{t("刷新列表")}</ReaderButton><ReaderButton id="composer-model-settings" type="button" variant="text">{t("连接设置")}</ReaderButton></div></Paper>
               <Paper component="div" variant="outlined" id="chat-selection-card" className="chat-selection-card hidden" aria-label={t("当前选中的原文")}>
                 <div className="selection-preview-heading"><ReaderButton id="clear-chat-selection" type="button" aria-label={t("清除选段，基于整篇")} title={t("清除选段，基于整篇")} variant="text" control="icon" sx={{ width: 32, height: 32, minHeight: 32 }}><ComposerIcon kind="close" size={16} /></ReaderButton></div>
                 <blockquote id="chat-selection-quote" />
@@ -202,23 +190,40 @@ function ReaderPanel() {
                 <div className="selection-preview-actions"><ReaderButton id="explain-image" type="button" variant="text">{t("解读图示")}</ReaderButton><ReaderButton id="clear-image" type="button" variant="text">{t("移除图示")}</ReaderButton></div>
               </Paper>
               <label className="composer-question-label" htmlFor="question-input">{t("继续提问")}</label>
-              <InputBase id="question-input" className="reader-composer-field" multiline inputComponent="textarea" rows={1} placeholder={t("问问这篇文章…")} sx={{ display: 'flex', width: '100%', padding: 0, '& textarea': { boxSizing: 'border-box' } }} />
+              <div className="composer-input-row">
+                <InputBase id="question-input" className="reader-composer-field" multiline inputComponent="textarea" rows={1} placeholder={t("问问这篇文章…")} sx={{ display: 'flex', width: '100%', padding: 0, '& textarea': { boxSizing: 'border-box' } }} />
+                <ReaderButton id="composer-size-toggle" className="composer-size-toggle" type="button" control="icon" variant="text" aria-label={t("展开输入框")} aria-expanded="false" title={t("展开或收起输入框")}><ComposerIcon kind="expand" size={18} /></ReaderButton>
+              </div>
+              <span id="answer-task-status" className="composer-status small" role="status" aria-live="polite" />
+              <span id="web-search-state" className="composer-status small" role="status" aria-live="polite" />
               <div className="chat-composer-footer">
-                <div className="composer-tools">
-                  <ReaderButton id="chat-summary" type="button" title={t("总结当前整篇或选段")} variant="text" startIcon={<ComposerIcon kind="summary" />}>{t("总结")}</ReaderButton>
-                  <ReaderButton id="chat-translate" type="button" title={t("翻译当前整篇或选段")} variant="text" startIcon={<ComposerIcon kind="translate" />}>{t("翻译")}</ReaderButton>
-                  <TranslationLanguagePicker />
+                <div className="composer-scope-wrap">
+                  <ReaderButton id="composer-scope" className="composer-scope" type="button" control="scope-chip" variant="text" aria-haspopup="menu" aria-expanded="false" aria-controls="composer-scope-menu" title={t("回答依据")}>
+                    <ComposerIcon kind="scope" size={14} /><span id="composer-scope-label">{t("整篇")}</span><ComposerIcon kind="chevron-down" size={16} />
+                  </ReaderButton>
+                  <Paper component="div" variant="outlined" id="composer-scope-menu" className="composer-scope-menu hidden" role="menu" aria-label={t("回答依据")}>
+                    <div id="discussion-scope-options" className="discussion-scope-options" role="group" aria-label={t("回答依据")}>
+                      <ReaderButton id="scope-page" className="scope-option" type="button" role="menuitemradio" variant="text" control="scope">{t("整篇")}</ReaderButton>
+                      <ReaderButton id="scope-selection" className="scope-option hidden" type="button" role="menuitemradio" variant="text" control="scope">{t("选段")}</ReaderButton>
+                      <ReaderButton id="scope-image" className="scope-option hidden" type="button" role="menuitemradio" variant="text" control="scope">{t("图示")}</ReaderButton>
+                    </div>
+                  </Paper>
                 </div>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: space.sm, flex: '1 1 0', minWidth: 0 }}>
-                <ReaderButton id="web-search-toggle" type="button" variant="text" aria-pressed="false" title={t("按需搜索公开网络；仅发送必要关键词，翻译和总结不联网。")}
-                  sx={{ gap: space.xs, '&[aria-pressed="true"]': { bgcolor: 'action.selected', color: 'primary.main' } }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/></svg>
-                  {t("联网补充")}
-                </ReaderButton>
-                <Typography id="web-search-state" variant="caption" color="text.secondary" noWrap>{t("已关闭")}</Typography>
-              </Box>
-                <span id="answer-task-status" className="small" role="status" aria-live="polite" /><ReaderButton id="stop-answer" className="composer-submit hidden" type="button" title={t("停止回答")} aria-label={t("停止回答")} variant="contained" control="icon"><ComposerIcon kind="stop" /></ReaderButton>
-                <ReaderButton id="send-question" className="composer-submit" title={t("发送问题（⌘ / Ctrl + Enter）")} aria-label={t("发送问题")} variant="contained" control="icon"><ComposerIcon kind="send" /></ReaderButton>
+                <span className="composer-break" aria-hidden="true" />
+                <div className="composer-tools">
+                  <ReaderButton id="chat-summary" className="composer-tool" type="button" title={t("总结当前整篇或选段")} aria-label={t("总结")} variant="text" control="tool"><ComposerIcon kind="summary" size={18} /></ReaderButton>
+                  <ReaderButton id="chat-translate" className="composer-tool" type="button" title={t("翻译当前整篇或选段")} aria-label={t("翻译")} variant="text" control="tool"><ComposerIcon kind="translate" size={18} /></ReaderButton>
+                  <TranslationLanguagePicker compact />
+                  <ReaderButton id="web-search-toggle" className="composer-tool" type="button" variant="text" aria-pressed="false" aria-label={t("联网补充")} title={t("按需搜索公开网络；仅发送必要关键词，翻译和总结不联网。")} control="tool">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/></svg>
+                  </ReaderButton>
+                </div>
+                <div className="composer-model-wrap">
+                  <ReaderButton id="composer-model" className="composer-model" control="model" type="button" aria-expanded="false" aria-controls="composer-model-menu" title={t("模型与连接设置")} variant="text" endIcon={<ComposerIcon kind="chevron-down" size={20} />}><span id="composer-model-label">{t("配置模型")}</span></ReaderButton>
+                  <Paper component="div" variant="outlined" id="composer-model-menu" className="composer-model-menu hidden" role="dialog" aria-label={t("切换模型")}><label htmlFor="composer-model-search">{t("选择模型")}</label><ReaderTextField id="composer-model-search" type="search" placeholder={t("搜索模型…")} autoComplete="off"  /><div id="composer-model-options" className="composer-model-options" role="listbox" aria-label={t("可用模型")} /><div id="composer-model-status" className="small" role="status" /><div className="composer-model-actions"><ReaderButton id="composer-model-refresh" type="button" variant="text">{t("刷新列表")}</ReaderButton><ReaderButton id="composer-model-settings" type="button" variant="text">{t("连接设置")}</ReaderButton></div></Paper>
+                </div>
+                <ReaderButton id="stop-answer" className="composer-submit hidden" type="button" title={t("停止回答")} aria-label={t("停止回答")} variant="contained" control="submit"><ComposerIcon kind="stop" /></ReaderButton>
+                <ReaderButton id="send-question" className="composer-submit" title={t("发送问题（⌘ / Ctrl + Enter）")} aria-label={t("发送问题")} variant="contained" control="submit"><ComposerIcon kind="send" /></ReaderButton>
               </div>
             </Paper>
           </div>

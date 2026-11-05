@@ -76,9 +76,11 @@ import { AppDialog } from '@/components/material/AppDialog';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import { cleanResearchText } from '@/lib/research-markdown-cleanup';
 import { TopicProposalsTab } from '@/components/admin/TopicProposalsTab';
+import { RadarSourcePresets } from '@/components/admin/RadarSourcePresets';
 import { AdminTopicActions } from '@/components/topics/AdminTopicActions';
 import LlmUsageConsole from './llm-usage/LlmUsageConsole';
 import { summarizeAdminBulkResults } from './admin-bulk-results';
+import { consecutiveEmptyRuns } from './radar-run-health';
 
 export const ADMIN_TAB_KEYS = [
   'dashboard',
@@ -216,6 +218,10 @@ interface RadarRunStatus {
   candidateCount: number;
   scoredCount: number;
   pendingScoreCount: number;
+  sourcePendingScoreCount?: number;
+  fallbackCount?: number;
+  costStatus?: 'reported' | 'unavailable' | 'no_recorded_usage';
+  costUsd?: number;
   enrichedCount: number;
   pendingEnrichmentCount: number;
   elapsedMs: number | null;
@@ -229,6 +235,7 @@ interface DisplayRadarRun extends RadarRunStatus {
   attemptCount: number;
   historicalFailureCount: number;
   recovered: boolean;
+  emptyStreak: number;
 }
 
 interface RadarDiagnosticItem {
@@ -454,7 +461,7 @@ function DashboardTab() {
   const runsQ = useQuery<RadarRunStatus[]>({
     queryKey: ['admin-radar-runs', radarDate],
     queryFn: async () => {
-      const params = new URLSearchParams({ limit: '200', date: radarDate });
+      const params = new URLSearchParams({ limit: '1000', date: radarDate });
       const r = await fetch(`/api/admin/radar/runs?${params.toString()}`, { cache: 'no-store' });
       if (!r.ok) throw new Error('加载逐源同步状态失败');
       return r.json();
@@ -509,7 +516,7 @@ function DashboardTab() {
     failed: latestRuns.filter((run) => run.status === 'failed').length,
     running: latestRuns.filter((run) => run.status === 'running').length,
     totalNew: latestRuns.reduce((sum, run) => sum + run.totalNew, 0),
-    pendingScore: latestRuns.reduce((sum, run) => sum + run.pendingScoreCount, 0),
+    pendingScore: latestRuns.reduce((sum, run) => sum + (run.sourcePendingScoreCount ?? run.pendingScoreCount), 0),
     pendingEnrichment: latestRuns.reduce(
       (sum, run) => sum + run.pendingEnrichmentCount,
       0,
@@ -522,6 +529,7 @@ function DashboardTab() {
     }
     return totals;
   }, [runsQ.data]);
+  const emptyStreaks = useMemo(() => consecutiveEmptyRuns(runsQ.data ?? []), [runsQ.data]);
   const displayRuns = useMemo<DisplayRadarRun[]>(() => {
     const history = new Map<string, { attempts: number; failures: number }>();
     for (const run of runsQ.data ?? []) {
@@ -539,10 +547,11 @@ function DashboardTab() {
         totalNew: dailyNewBySource.get(run.sourceId) ?? 0,
         attemptCount: sourceHistory.attempts,
         historicalFailureCount: sourceHistory.failures,
-        recovered: run.status === 'completed' && sourceHistory.failures > 0,
+        recovered: run.status === 'completed' && run.totalFetched > 0 && sourceHistory.failures > 0,
+        emptyStreak: emptyStreaks.get(run.sourceId) ?? 0,
       };
     });
-  }, [dailyNewBySource, latestRuns, runsQ.data]);
+  }, [dailyNewBySource, emptyStreaks, latestRuns, runsQ.data]);
   const dailyNew = useMemo(
     () => (runsQ.data ?? []).reduce((sum, run) => sum + run.totalNew, 0),
     [runsQ.data],
@@ -562,12 +571,14 @@ function DashboardTab() {
   }, [displayRuns]);
   const visibleRuns = useMemo(() => sortedRuns.filter((run) => {
     if (runFilter === 'attention') {
-      return run.status === 'running' || run.status === 'partial' || run.status === 'failed';
+      return run.status === 'running' || run.status === 'partial' || run.status === 'failed' || run.emptyStreak >= 3;
     }
     if (runFilter === 'new') return run.totalNew > 0;
     return true;
   }), [runFilter, sortedRuns]);
-  const attentionCount = runSummary.running + runSummary.partial + runSummary.failed;
+  const attentionCount = displayRuns.filter((run) =>
+    run.status === 'running' || run.status === 'partial' || run.status === 'failed' || run.emptyStreak >= 3,
+  ).length;
   const recoveredCount = displayRuns.filter((run) => run.recovered).length;
 
   if (q.isLoading) {
@@ -665,11 +676,11 @@ function DashboardTab() {
           label={
             <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5}}>
               <Box component={DollarSign} sx={{"width":12,"height":12}} />
-              本月 AI 成本
+              本月调研已记录费用
             </Box>
           }
           value={`$${d.cost.monthUsd}`}
-          hint="用于观察成本异常，趋势见用量页"
+          hint="仅含调研任务已记录费用，不代表全部 AI 账单"
           variant="grid" density="compact" sx={{"gridColumn":"span 2 / span 2","@media (min-width:1280px)":{"gridColumn":"span 1 / span 1"}}}
         />
       </Box>
@@ -816,7 +827,7 @@ function DashboardTab() {
               <RadarMetric label="完成" value={runSummary.completed} tone="success" />
               <RadarMetric label="当前异常" value={attentionCount} tone={attentionCount > 0 ? 'danger' : 'default'} />
               <RadarMetric label="今日新增" value={`+${dailyNew}`} tone="success" />
-              <RadarMetric label="待评分" value={runSummary.pendingScore} tone={runSummary.pendingScore > 0 ? 'warning' : 'default'} />
+              <RadarMetric label="当前待评分" value={runSummary.pendingScore} tone={runSummary.pendingScore > 0 ? 'warning' : 'default'} />
               <RadarMetric label="待补全" value={runSummary.pendingEnrichment} tone={runSummary.pendingEnrichment > 0 ? 'warning' : 'default'} />
             </Box>
 
@@ -872,6 +883,11 @@ function DashboardTab() {
                       </Box>
                       <Box component="td" sx={{"px":1.5,"py":1.5}}>
                         <SyncStatusBadge status={run.status} />
+                        {run.emptyStreak >= 3 ? (
+                          <Box component="div" sx={{"mt":0.5,"color":"warning.main"}}>
+                            当日连续空结果 {run.emptyStreak} 次
+                          </Box>
+                        ) : null}
                         {run.recovered ? (
                           <Box component="div" sx={[{"mt":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)"}, {"color":"success.main"}]}>
                             已恢复 · 历史失败 {run.historicalFailureCount} 次
@@ -904,6 +920,12 @@ function DashboardTab() {
                           total={run.candidateCount}
                           pending={run.pendingScoreCount}
                         />
+                        {(run.sourcePendingScoreCount ?? 0) > 0 ? (
+                          <Box component="div" sx={{"color":"warning.main"}}>当前待评分 {run.sourcePendingScoreCount}</Box>
+                        ) : null}
+                        {(run.fallbackCount ?? 0) > 0 ? (
+                          <Box component="div" sx={{"color":"warning.main"}}>本次降级 {run.fallbackCount}</Box>
+                        ) : null}
                         <PipelineMetric
                           label="补全"
                           completed={run.enrichedCount}
@@ -913,6 +935,8 @@ function DashboardTab() {
                       </Box>
                       <Box component="td" sx={{"maxWidth":240,"px":2,"py":1.5,"color":"text.secondary"}}>
                         <Box component="div" sx={{"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>{formatElapsed(run.elapsedMs)}</Box>
+                        {run.costStatus === 'unavailable' ? <Box component="div">本次费用未记录</Box> : null}
+                        {run.costStatus === 'reported' ? <Box component="div">摘要已记录 ${run.costUsd?.toFixed(4)}</Box> : null}
                         {run.errorCode ? (
                           <Box component="div" sx={{"mt":0.5,"whiteSpace":"normal","overflowWrap":"anywhere","fontSize":"var(--dr-type-caption)","color":"error.main"}}>
                             <code>{run.errorCode}</code>
@@ -977,6 +1001,9 @@ function DashboardTab() {
                     </Box>
                     <Box component="div" sx={{"textAlign":"right"}}>
                       <SyncStatusBadge status={run.status} />
+                      {run.emptyStreak >= 3 ? (
+                        <Box component="div" sx={{"mt":0.5,"color":"warning.main"}}>当日连续空结果 {run.emptyStreak} 次</Box>
+                      ) : null}
                       {run.recovered ? (
                         <Box component="div" sx={[{"mt":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)"}, {"color":"success.main"}]}>
                           已恢复 · 失败 {run.historicalFailureCount} 次
@@ -984,6 +1011,14 @@ function DashboardTab() {
                       ) : null}
                     </Box>
                   </Box>
+                  {(run.sourcePendingScoreCount ?? 0) > 0 || (run.fallbackCount ?? 0) > 0 ? (
+                    <Box component="div" sx={{"mt":1,"color":"warning.main","fontSize":"var(--dr-type-caption)"}}>
+                      当前待评分 {run.sourcePendingScoreCount ?? 0} · 本次降级 {run.fallbackCount ?? 0}
+                    </Box>
+                  ) : null}
+                  {run.costStatus === 'unavailable' ? (
+                    <Box component="div" sx={{"mt":0.5,"color":"text.secondary","fontSize":"var(--dr-type-caption)"}}>本次费用未记录</Box>
+                  ) : null}
                   <Box component="div" sx={{"mt":1.5,"display":"grid","gridTemplateColumns":"repeat(3, minmax(0, 1fr))","gap":1.5,"fontSize":"var(--dr-type-caption)"}}>
                     <div>
                       <Box component="div" sx={{"color":"text.secondary"}}>同步</Box>
@@ -1479,6 +1514,7 @@ function RadarGovernanceTab() {
         title="雷达治理"
         description="查看不推荐、待评分和其他未进入雷达展示的内容，定位来源级失败，并把有价值的内容提升回雷达。"
       />
+      <RadarSourcePresets />
 
       <Box component="div" sx={{"display":"grid","gridTemplateColumns":"repeat(2, minmax(0, 1fr))","gap":1,"@media (min-width:1024px)":{"gridTemplateColumns":"repeat(5, minmax(0, 1fr))"}}}>
         <GovernanceMetric
@@ -1638,6 +1674,7 @@ function RadarGovernanceTab() {
                 <SelectItem value="CONTENT_FETCH_FAILED">抓取失败</SelectItem>
                 <SelectItem value="PENDING_SCORE">待评分</SelectItem>
                 <SelectItem value="AI_ENGINE_UNAVAILABLE">AI 不可用</SelectItem>
+                <SelectItem value="MODEL_QUOTA_STOPPED">模型额度暂停</SelectItem>
               </SelectContent>
             </Select>
             <Select value={sort} onValueChange={(value) => { setSort(value); setPage(1); }}>

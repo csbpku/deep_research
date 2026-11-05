@@ -10,7 +10,7 @@ import AccordionDetails from '@mui/material/AccordionDetails';
 import Typography from '@mui/material/Typography';
 import { ComposerIcon } from './reader-header';
 
-export type ReaderControl = 'default' | 'tonal' | 'navigation' | 'mode' | 'scope' | 'icon' | 'compact' | 'provider' | 'followup' | 'model';
+export type ReaderControl = 'default' | 'tonal' | 'navigation' | 'mode' | 'scope' | 'scope-chip' | 'icon' | 'tool' | 'submit' | 'compact' | 'provider' | 'followup' | 'model';
 export function ReaderButton({ control = 'default', ...props }: ButtonProps & { control?: ReaderControl }) {
   return <Button variant="text" {...props} data-reader-control={control} disableElevation disableRipple size="small" />;
 }

@@ -30,9 +30,10 @@ export function ReaderHeader({ history = false, children }: { history?: boolean;
   </header>;
 }
 
-export function ComposerIcon({ kind, size = 17 }: { kind: 'expand' | 'summary' | 'translate' | 'plus' | 'send' | 'stop' | 'eye' | 'chevron-down' | 'arrow-forward' | 'close' | 'check' | 'copy' | 'bookmark'; size?: number }) {
+export function ComposerIcon({ kind, size = 17 }: { kind: 'expand' | 'summary' | 'translate' | 'plus' | 'send' | 'stop' | 'eye' | 'chevron-down' | 'arrow-forward' | 'close' | 'check' | 'copy' | 'bookmark' | 'scope'; size?: number }) {
   const paths = {
-    expand: 'M8 3H3v5 M16 21h5v-5 M3 3l6 6 M21 21l-6-6',
+    expand: 'M9 4H4v5 M15 4h5v5 M20 15v5h-5 M4 15v5h5 M4 4l6 6 M20 20l-6-6',
+    scope: 'M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5',
     summary: 'M5 6h14 M5 12h14 M5 18h9',
     translate: 'M3 5h12 M9 3v2 M5 5c1 6 4 9 9 11 M13 5c-1 5-5 9-10 11 M14 21l4-11 4 11 M16 17h4',
     plus: 'M12 5v14 M5 12h14',

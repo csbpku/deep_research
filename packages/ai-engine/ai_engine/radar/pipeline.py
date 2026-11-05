@@ -19,6 +19,7 @@ from __future__ import annotations
 import re as _re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from ai_engine.ingestion.pipeline import canonicalize_url
 from ai_engine.radar.models import RadarCandidate, SourceType
@@ -143,10 +144,19 @@ class CandidateScore:
     reason: str
 
 
-def normalize_candidate(candidate: RadarCandidate) -> NormalizedCandidate:
+def normalize_candidate(
+    candidate: RadarCandidate, *, source_type: SourceType | None = None,
+) -> NormalizedCandidate:
     canonical = canonicalize_url(candidate.url)
     if not canonical:
         raise ValueError("candidate URL is not a valid HTTP(S) URL")
+    # Changelog sections are separate publications, even when they share a page.
+    if source_type == "vendor_changelog":
+        fragment = urlsplit(candidate.url.strip()).fragment
+        if fragment:
+            canonical = f"{canonical}#{fragment}"
+            if len(canonical) > 2048:
+                raise ValueError("changelog entry URL exceeds the identity limit")
     title = " ".join(candidate.title.split()).strip()[:300]
     if not title:
         title = "Untitled"

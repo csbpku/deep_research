@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -26,6 +27,7 @@ from ai_engine.radar.rss_fetcher import (
     _clean_hn_rss_description,
     _is_hn_rss_shell,
 )
+from ai_engine.ingestion.sources import _parse_via_feedparser, _parse_via_regex
 from ai_engine.radar.source_manager import fetch_source
 from ai_engine.radar.vendor_changelog_fetcher import fetch_vendor_changelog
 from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
@@ -91,6 +93,14 @@ def test_normalize_candidate_rejects_non_http() -> None:
         normalize_candidate(RadarCandidate(title="x", url="file:///tmp/x"))
 
 
+def test_vendor_changelog_identity_preserves_distinct_entry_anchors() -> None:
+    first = RadarCandidate(title="Release one", url="https://example.com/notes#first")
+    second = RadarCandidate(title="Release two", url="https://example.com/notes#second")
+    assert normalize_candidate(first, source_type="vendor_changelog").canonical_url == first.url
+    assert normalize_candidate(second, source_type="vendor_changelog").canonical_url == second.url
+    assert normalize_candidate(first, source_type="rss").canonical_url == "https://example.com/notes"
+
+
 def test_score_candidate_has_three_dimensions_and_reason() -> None:
     normalized = normalize_candidate(
         RadarCandidate(
@@ -138,6 +148,99 @@ async def test_rss_fetcher_calls_safe_fetch_and_parses_item() -> None:
     # fetch_rss_candidates returns parsed items; just verify kwargs were passed
     assert items[0].title == "Agent release"
     assert items[0].content_origin == "rss"
+
+
+@pytest.mark.parametrize("status,content", [
+    (403, b"<html><body>Access denied</body></html>"),
+    (200, b"<!doctype html><html><body>Try again later</body></html>"),
+])
+async def test_rss_fetcher_does_not_report_error_pages_as_empty_success(status: int, content: bytes) -> None:
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        from dataclasses import replace
+        return replace(_doc(content, url=url), status=status)
+
+    with pytest.raises(SafeFetchError) as exc:
+        await fetch_rss_candidates({"feedUrl": "https://feed.example/rss"}, fetcher=fake_fetch)
+    assert exc.value.code == "UPSTREAM_HTTP_ERROR"
+
+
+async def test_rss_fetcher_accepts_a_valid_empty_feed() -> None:
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(b'<rss version="2.0"><channel><title>Empty</title></channel></rss>', url=url)
+
+    assert await fetch_rss_candidates({"feedUrl": "https://feed.example/rss"}, fetcher=fake_fetch) == []
+
+
+@pytest.mark.parametrize("parser", [_parse_via_feedparser, _parse_via_regex])
+def test_realistic_feed_structure_keeps_summary_and_content_separate(parser: Any) -> None:
+    xml = (Path(__file__).parent / "fixtures/nvidia_cuda_feed_excerpt.xml").read_text()
+    items = parser(xml)
+    assert items and len(items) == 1
+    assert items[0]["description"] == "A short engineering summary..."
+    assert "Longer synthetic technical content" in items[0]["content"]
+    assert items[0]["link"] == "https://blog.example.test/articles/runtime-2"
+
+
+def test_regex_atom_fallback_rejects_non_text_content() -> None:
+    xml = '''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>Agent data</title><link href="https://example.com/a"/>
+      <content type="application/json">{"secret":"not prose"}</content>
+    </entry></feed>'''
+    item = _parse_via_regex(xml)[0]
+    assert "content" not in item
+    assert "description" not in item
+
+
+def test_atom_content_only_is_identified_as_synthesized_summary() -> None:
+    xml = '''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>Agent content</title><link href="https://example.com/a"/>
+      <content type="html">&lt;p&gt;Article body&lt;/p&gt;</content>
+    </entry></feed>'''
+    for parser in (_parse_via_feedparser, _parse_via_regex):
+        items = parser(xml)
+        assert items and items[0]["description_is_content"] == "1"
+
+
+async def test_rss_preserves_bounded_feed_content_without_replacing_summary() -> None:
+    text = "A real engineering mechanism, tradeoff, and measured result. " * 600
+    xml = f'''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>LLM engineering</title><link href="https://example.com/article"/>
+      <summary>Short AI summary.</summary>
+      <content type="html">&lt;p&gt;{text}&lt;/p&gt;&lt;script&gt;evil()&lt;/script&gt;</content>
+    </entry></feed>'''.encode()
+
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(xml, url=url)
+
+    candidates = await fetch_rss_candidates({"feedUrl": "https://feed.example/rss"}, fetcher=fake_fetch)
+    assert len(candidates) == 1
+    assert candidates[0].snippet == "Short AI summary."
+    assert 2000 < len(candidates[0].feed_excerpt) <= 18_000
+    assert "engineering mechanism" in candidates[0].feed_excerpt
+    assert "evil()" not in candidates[0].feed_excerpt
+    assert candidates[0].feed_excerpt not in repr(candidates[0])
+
+
+async def test_rss_summary_only_and_wewe_keep_existing_behavior() -> None:
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(RSS_XML, url=url)
+
+    normal = await fetch_rss_candidates({"feedUrl": "https://feed.example/rss"}, fetcher=fake_fetch)
+    assert normal[0].snippet == "LLM agent update"
+    assert normal[0].feed_excerpt == "LLM agent update"
+
+    async def fake_wewe(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(WEWE_RSS_XML, url=url)
+
+    async def no_refresh(config: Any) -> bool:
+        return True
+
+    wewe = await fetch_rss_candidates(
+        {"feedUrl": "http://localhost:4001/feeds/all.rss", "allowLocalhost": True},
+        fetcher=fake_wewe, wewe_refresher=no_refresh,
+    )
+    assert "公众号全文内容" in wewe[0].snippet
+    assert wewe[0].feed_excerpt == ""
 
 
 async def test_rss_ai_filter_applies_result_cap_after_filtering() -> None:
@@ -942,7 +1045,7 @@ async def test_vendor_changelog_extracts_h2_titles_and_dedupes(tmp_path, monkeyp
         assert len(items) == 3, items
         first_titles = [it.title for it in items]
         assert "gpt-5 model launch" in first_titles[0]
-        # Second call with the same fetch: statefile dedupes, returns 0.
+        # Discovery replays entries; durable ingestion owns deduplication.
         items_again = await fetch_vendor_changelog(
             {
                 "vendor": "openai",
@@ -952,7 +1055,17 @@ async def test_vendor_changelog_extracts_h2_titles_and_dedupes(tmp_path, monkeyp
             },
             client=client,
         )
-        assert items_again == []
+        assert [item.url for item in items_again] == [item.url for item in items]
+
+
+async def test_vendor_changelog_respects_bounded_max_entries() -> None:
+    html = "<body>" + "".join(f"<h2>Release number {i:03}</h2>" for i in range(70)) + "</body>"
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
+    async with httpx.AsyncClient(transport=transport) as client:
+        config = {"vendor": "example", "sources": ["https://example.com/changelog"]}
+        assert len(await fetch_vendor_changelog(config, client=client)) == 30
+        assert len(await fetch_vendor_changelog({**config, "max_entries": 50}, client=client)) == 50
+        assert len(await fetch_vendor_changelog({**config, "max_entries": 100}, client=client)) == 60
 
 
 async def test_vendor_changelog_applies_path_filter(tmp_path) -> None:
@@ -985,6 +1098,23 @@ async def test_vendor_changelog_applies_path_filter(tmp_path) -> None:
     # through without crashing; behavioural assertions live in
     # test_vendor_changelog_extracts_h2_titles_and_dedupes above.
     assert isinstance(items, list)
+
+
+async def test_changelog_replays_previously_seen_urls_until_database_confirms_them(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_file = tmp_path / "legacy.json"
+    state_file.write_text('{"anthropic": ["https://example.com/notes#update-one"]}')
+    monkeypatch.setenv("VENDOR_CHANGELOG_STATE_PATH", str(state_file))
+    html = '<h2><span id="update-one">Update one for agents</span></h2>'
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_vendor_changelog(
+            {"vendor": "anthropic", "sources": ["https://example.com/notes"]},
+            client=client,
+        )
+    assert [item.url for item in items] == ["https://example.com/notes#update-one"]
+    assert state_file.read_text() == '{"anthropic": ["https://example.com/notes#update-one"]}'
 
 
 async def test_vendor_changelog_anchor_extractor_handles_anthropic_html() -> None:
@@ -1056,6 +1186,7 @@ async def test_vendor_changelog_extracts_openai_structured_entries(
         )
     assert len(items) == 2
     assert "Agents API" in items[0].title
+    assert items[0].snippet == "Released the Agents API in public beta."
     assert "Solutions" not in "\n".join(item.title for item in items)
     assert all(item.url.startswith("https://developers.openai.com/api/docs/changelog#") for item in items)
     assert items[0].published_at == datetime(2026, 9, 10, tzinfo=timezone.utc)
@@ -1072,6 +1203,7 @@ async def test_vendor_changelog_extracts_anthropic_rss_entries(
       <title>Claude Platform release notes — September 10, 2026</title>
       <link>https://platform.claude.com/docs/en/release-notes/overview#september-10-2026</link>
       <pubDate>Thu, 10 Sep 2026 00:00:00 GMT</pubDate>
+      <description><![CDATA[<p>Verified release note with a concrete change.</p>]]></description>
     </item>
     </channel></rss>"""
 
@@ -1091,6 +1223,7 @@ async def test_vendor_changelog_extracts_anthropic_rss_entries(
     assert len(items) == 1
     assert items[0].url.endswith("#september-10-2026")
     assert items[0].published_at == datetime(2026, 9, 10, tzinfo=timezone.utc)
+    assert items[0].snippet == "Verified release note with a concrete change."
 
 
 async def test_vendor_changelog_card_parser_uses_release_note_links() -> None:

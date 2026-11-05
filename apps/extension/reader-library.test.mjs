@@ -129,7 +129,7 @@ test('the actual composer follows selection scope, resets to article and hides t
   const sandbox = { $, t, document: { querySelector: () => ({ dataset: { workspaceView: 'chat' } }) },
     activeDiscussionContext: () => ({ selection: { quote: 'Selected source' } }), updateTranslationLanguageUi() {},
     pageReadDescriptor: () => ({ label: 'Ready', detail: '' }), show: (element, visible) => { element.visible = visible; },
-    imageContext: { image: {} }, contextHasReadableBody: () => true, discussionScopeLabel: scope => scope,
+    imageContext: { image: {} }, contextHasReadableBody: () => true, discussionScopeLabel: scope => scope, discussionScopeShortLabel: scope => scope,
     fitComposerInput() {}, readingMode: 'local', provider: { model: 'test' }, updateSendAvailability() {}, discussionRunning: false };
   vm.createContext(sandbox);
   vm.runInContext(source.slice(source.indexOf('function renderPersistentComposer('), source.indexOf('function platformModeReady(')), sandbox);

@@ -76,12 +76,19 @@ export const readerTheme = createTheme({
       '.history-toast': { ...caption, background: appearance['color-surface-raised'], border: `1px solid ${outline}`, borderRadius: radius, boxShadow: 'var(--reader-elevation-2)' },
       '.track': { height: '4px', borderRadius: '4px', background: appearance['color-surface-container'] },
       '.bar': { background: primary }, '.bar.image': { background: appearance['color-success'] },
-      '.response-section': { border: `1px solid ${outline}`, borderRadius: token['radius-medium'], background: appearance['color-surface-container'], color: text, fontSize: token['type-body'], lineHeight: token['line-height-reading'] },
+      '.response-section': { border: `1px solid ${outline}`, borderRadius: token['radius-medium'], background: appearance['color-surface-container'], color: text, fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
       '.response-section-label': { fontSize: token['type-label'], fontWeight: token['weight-semibold'], color: primary },
+      // Each labelled section carries its own semantic fill, the same
+      // vocabulary the platform uses for evidence, context, inference and
+      // open questions.
+      '.response-section[data-answer-section="evidence"]': { background: appearance['color-evidence-container'] },
+      '.response-section[data-answer-section="background"]': { background: appearance['color-background-container'] },
+      '.response-section[data-answer-section="inference"]': { background: appearance['color-inference-container'] },
+      '.response-section[data-answer-section="limitations"]': { background: appearance['color-limitations-container'] },
       '.response-section[data-answer-section="background"] .response-section-label': { color: appearance['color-background-context'] },
       '.response-section[data-answer-section="inference"] .response-section-label': { color: appearance['color-inference'] },
       '.response-section[data-answer-section="limitations"] .response-section-label': { color: appearance['color-limitations'] },
-      '.response-section p,.response-section li': { fontSize: token['type-body'], lineHeight: token['line-height-reading'] },
+      '.response-section p,.response-section li': { fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
       ':is(button,a,[tabindex]):focus-visible': focus,
       '::selection': { background: appearance['color-primary-container'], color: text },
     } },
@@ -98,6 +105,21 @@ export const readerTheme = createTheme({
       '&[data-reader-control="mode"]': { position: 'relative', justifyContent: 'flex-start', alignItems: 'flex-start', minHeight: '88px', padding: token['space-3'], textAlign: 'left', whiteSpace: 'normal', width: '100%', color: text,
         '&[aria-pressed="true"]': { borderColor: primary, background: appearance['color-primary-container'], '& .mode-option-check': { visibility: 'visible' } } },
       '&[data-reader-control="scope"]': { padding: '4px 8px', minHeight: '32px', color: muted, '&[aria-pressed="true"]': { color: primary, background: appearance['color-primary-container'] } },
+      // Icon-only composer tools. The label lives in the tooltip and the
+      // accessible name, so the toolbar can stay a dense strip of glyphs.
+      '&[data-reader-control="tool"]': { width: '32px', height: '32px', minHeight: '32px', padding: 0, flexShrink: 0, color: appearance['color-text-secondary'],
+        '& svg': { fontSize: '18px', width: '18px', height: '18px' },
+        '&:hover': { background: appearance['color-surface-container'], color: text },
+        '&[aria-pressed="true"]': { color: primary, background: appearance['color-primary-container'] } },
+      // One chip states what the answer will be based on; the menu below it
+      // carries the alternatives.
+      '&[data-reader-control="scope-chip"]': { display: 'inline-flex', alignItems: 'center', gap: '4px', minHeight: '32px', padding: '2px 6px 2px 8px', border: `1px solid ${fieldOutline}`, borderRadius: token['radius-medium'], color: appearance['color-text-secondary'],
+        '& svg': { fontSize: '14px', width: '14px', height: '14px', flexShrink: 0 },
+        '& #composer-scope-label': { fontSize: token['type-label'], lineHeight: token['line-height-control'], whiteSpace: 'nowrap' },
+        '&[aria-expanded="true"]': { borderColor: primary, color: primary, background: appearance['color-primary-container'] },
+        '&[disabled]': { color: muted, opacity: 1, cursor: 'default' } },
+      // The send affordance is the one filled shape in the composer.
+      '&[data-reader-control="submit"]': { width: '34px', height: '34px', minHeight: '34px', padding: 0, borderRadius: '50%', flexShrink: 0, '& svg': { fontSize: '18px', width: '18px', height: '18px' } },
       '&[data-reader-control="icon"]': { width: '40px', height: '40px', minHeight: '40px', padding: 0, flexShrink: 0 },
       '&[data-reader-control="compact"]': { minHeight: '32px', padding: '4px 8px' },
       '&[data-reader-control="provider"]': { display: 'flex', justifyContent: 'flex-start', textAlign: 'left', gap: '12px', width: '100%', minHeight: '64px', padding: '12px', border: `1px solid ${fieldOutline}`, color: text,

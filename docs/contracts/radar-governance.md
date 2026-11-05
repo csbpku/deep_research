@@ -62,6 +62,17 @@ deterministic oversized/missing-source failures for the same publication identit
 (source, canonical URL, normalized title and publication timestamp),
 sync stops automatic attempts. A new publication identity permits new attempts.
 Noise and unassessable results retain different reasons.
+Account-level model quota exhaustion (`AI_QUOTA_EXCEEDED` from the brief path or a
+scorer fallback that reports billing exhaustion, not a transient 429) is a run-scoped
+stop. Once it trips, the remaining candidates of that run record a `filtered`
+`MODEL_QUOTA_STOPPED` diagnostic without a summary row, source retries and the missing-score
+backfill/enrichment stages are skipped, and the run is `partial` with error code
+`AI_QUOTA_EXCEEDED`. These candidates are neither confirmed noise nor deterministic
+failures, so they do not create receipts, cannot be directly promoted to summary rows,
+do not count toward the three-failure stop, and
+do not change the source's consecutive-failure counter. The next sync picks them up again.
+A candidate whose brief was already paid for but whose scorer reports quota exhaustion keeps
+its existing `PENDING_SCORE` row; only the remaining work is deferred.
 The scheduled loop does not consume a source's polling window when a live-run
 guard skips work; the next tick checks again and reaps any lease that expired
 in the meantime. A stale run then records `STALE_RUN_REAPED` before normal retry.
@@ -344,3 +355,12 @@ noise is archived with `reference_only_noise`, preserving direct citations.
 Deletion retains historical diagnostics, and restore checks their later versions.
 Unverified sources or model failures remain explicit unresolved items; the
 migration does not grant a review pass or manufacture a score.
+
+
+### 同步诊断与官方更新日志
+
+官方更新日志以页面 URL 加条目 fragment 作为条目身份；已有旧记录仅在原始 URL 与条目一致时去重。部分来源的 fragment 是内部生成的稳定身份，不保证能在原网页定位。条目摘要使用来源提供的单条正文，正文缺失时记录诊断，不以整页替代。
+
+默认每次发现最近 30 条；来源配置 `max_entries` 可设为 1–60，超过 60 按 60 处理。重放依靠数据库去重，扩大窗口可能增加模型调用，且不能保证补回窗口以外历史；历史补收应先核对来源可提供的范围和成本，不能将窗口重放视为完整补收。
+
+RSS 的非成功 HTTP 响应或 HTML 错误页记为错误；合法空 feed 仍可成功，连续空结果仅作为排查提示。运行明细分别显示本次待评分与来源当前积压。本次有 token 但无费用记录时展示费用未记录；已记录金额不代表完整账单，不能据此推算实际费用。

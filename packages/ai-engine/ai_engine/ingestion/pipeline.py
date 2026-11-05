@@ -62,6 +62,16 @@ def canonicalize_url(value: str) -> str:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
 
 
+# Mirrors ai_engine.radar.brief_kind.TYPED_BRIEF_QUESTIONS. Importing the radar
+# package from here would be circular (radar.sync_runner imports this module).
+_TYPED_BRIEF_KINDS = frozenset({"paper", "engineering", "project", "change"})
+
+
+def _brief_kind_from_item(item: dict[str, Any]) -> str | None:
+    kind = item.get("brief_kind")
+    return kind if isinstance(kind, str) and kind in _TYPED_BRIEF_KINDS else None
+
+
 async def _generate_brief(
     adapter: ResearchEngineAdapter,
     item: dict[str, Any],
@@ -81,9 +91,13 @@ async def _generate_brief(
         context=context or None,
         report_type="summary_brief",
         source_policy="only_user_sources",
-        source_refs=({"type": "url", "value": canonical_url},),
+        source_refs=() if item.get("context_is_source_snapshot") is True else (
+            {"type": "url", "value": canonical_url},
+        ),
         timeout_seconds=max(1, int(timeout_seconds)),
         context_max_chars=context_max_chars,
+        context_is_source_excerpt=item.get("context_is_source_excerpt") is True,
+        brief_kind=_brief_kind_from_item(item),
     )
     await adapter.submit(request)
     deadline = time.monotonic() + timeout_seconds

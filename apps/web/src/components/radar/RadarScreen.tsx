@@ -28,6 +28,7 @@ import {
   RotateCcw,
   Search,
   SlidersHorizontal,
+  Sparkles,
 } from 'lucide-react';
 
 import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
@@ -48,6 +49,7 @@ import type { DistilledScore } from '@deep-research/shared/schemas';
 import { useCurrentUser } from '@/lib/auth/client';
 import { SOURCE_TYPE_FILTER_OPTIONS } from '@/lib/radar/source-labels';
 import { radarSourceAppearance } from '@/lib/radar/source-appearance';
+import { HIGHLIGHT_LIMIT, HIGHLIGHT_POOL_SIZE, selectRadarHighlights } from '@/lib/radar/highlights';
 import styles from './radar-screen.module.css';
 
 interface RadarCandidateListItem {
@@ -108,7 +110,11 @@ const QUALITY_OPTIONS = [
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 'all'] as const;
 type QualityValue = (typeof QUALITY_OPTIONS)[number]['value'];
 type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
-type RadarView = 'source' | 'ranked';
+type RadarView = 'source' | 'ranked' | 'highlights';
+
+function parseRadarView(value: string | null): RadarView {
+  return value === 'source' || value === 'highlights' ? value : 'ranked';
+}
 
 interface RadarUrlState {
   q: string;
@@ -309,7 +315,7 @@ export default function RadarScreen() {
     return [20, 50, 100].includes(Number(value)) ? Number(value) as PageSize : 20;
   });
   const [view, setView] = useState<RadarView>(
-    () => searchParams.get('view') === 'source' ? 'source' : 'ranked',
+    () => parseRadarView(searchParams.get('view')),
   );
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
@@ -330,11 +336,11 @@ export default function RadarScreen() {
     setPerPage(nextPerPage === 'all'
       ? 'all'
       : [20, 50, 100].includes(Number(nextPerPage)) ? Number(nextPerPage) as PageSize : 20);
-    setView(searchParams.get('view') === 'source' ? 'source' : 'ranked');
+    setView(parseRadarView(searchParams.get('view')));
   }, [searchParams]);
 
   const query = useQuery<RadarListResponse>({
-    queryKey: ['radar', q, sourceTypes.join(','), quality.join(','), dateRange, page, perPage],
+    queryKey: ['radar', view, q, sourceTypes.join(','), quality.join(','), dateRange, page, perPage],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
@@ -342,11 +348,11 @@ export default function RadarScreen() {
       quality.forEach((value) => params.append('quality', value));
       const dateFrom = dateFromForRange(dateRange);
       if (dateFrom) params.set('dateFrom', dateFrom);
-      params.set('page', String(page));
-      params.set('per_page', perPage === 'all' ? 'all' : String(perPage));
+      params.set('page', view === 'highlights' ? '1' : String(page));
+      params.set('per_page', view === 'highlights' ? String(HIGHLIGHT_POOL_SIZE) : perPage === 'all' ? 'all' : String(perPage));
       return fetchRadar(params);
     },
-    enabled: view === 'ranked',
+    enabled: view !== 'source',
   });
 
   const groupedQueries = useQueries({
@@ -383,15 +389,18 @@ export default function RadarScreen() {
     (total, { query }) => total + (query.data?.total ?? 0),
     0,
   );
-  const resultCountLabel = view === 'ranked'
-    ? query.isFetching ? '加载中…' : query.data ? `共 ${query.data.total} 条` : null
-    : groupedIsFetching ? '加载中…' : `共 ${groupedTotal} 条`;
-  const items = query.data?.items ?? [];
+  const poolItems = query.data?.items ?? [];
+  const items = view === 'highlights' ? selectRadarHighlights(poolItems) : poolItems;
+  const resultCountLabel = view === 'source'
+    ? groupedIsFetching ? '加载中…' : `共 ${groupedTotal} 条`
+    : query.isFetching ? '加载中…' : query.data
+      ? view === 'highlights' ? `精选 ${items.length} 条` : `共 ${query.data.total} 条`
+      : null;
   const selectedId = searchParams.get('open');
   // A direct ?open= entry must not open a modal during desktop hydration.
   // MUI keeps the server snapshot stable, then subscribes to the real viewport.
   const isDesktop = useMediaQuery('(min-width: 1024px)', { defaultMatches: true });
-  const availableItems = view === 'ranked'
+  const availableItems = view !== 'source'
     ? items
     : visibleGroupEntries.flatMap(({ items: groupItems }) => groupItems);
   const selectedItem = selectedId
@@ -536,12 +545,24 @@ export default function RadarScreen() {
             <div className={styles.viewSwitch} aria-label="雷达展示方式">
               <Button
                 type="button"
+                variant={view === 'highlights' ? 'contained' : 'text'}
+                size="small"
+                title="从当前筛选结果中选择有限内容，优先兼顾不同类型和来源"
+                aria-label="本次精选"
+                aria-pressed={view === 'highlights'}
+                onClick={() => { setView('highlights'); setPage(1); replaceUrlState({ view: 'highlights', page: 1 }); }}
+              >
+                <Sparkles className={styles.icon} />
+                本次精选
+              </Button>
+              <Button
+                type="button"
                 variant={view === 'ranked' ? 'contained' : 'text'}
                 size="small"
                 title="按分层评分从高到低排序；阅读等级表示当前可直接阅读的内容深度"
                 aria-label="推荐排序"
                 aria-pressed={view === 'ranked'}
-                onClick={() => { setView('ranked'); replaceUrlState({ view: 'ranked', page: 1 }); }}
+                onClick={() => { setView('ranked'); setPage(1); replaceUrlState({ view: 'ranked', page: 1 }); }}
               >
                 <ListOrdered className={styles.icon} />
                 推荐排序
@@ -553,7 +574,7 @@ export default function RadarScreen() {
                 title="按来源浏览内容"
                 aria-label="按来源浏览"
                 aria-pressed={view === 'source'}
-                onClick={() => { setView('source'); replaceUrlState({ view: 'source', page: 1 }); }}
+                onClick={() => { setView('source'); setPage(1); replaceUrlState({ view: 'source', page: 1 }); }}
               >
                 <Layers3 className={styles.icon} />
                 按来源浏览
@@ -712,6 +733,11 @@ export default function RadarScreen() {
 
       <div className={[styles.content, selectedId ? styles.withPreview : undefined].filter(Boolean).join(' ')}>
         <div className={styles.minWidth}>
+        {view === 'highlights' ? (
+          <Typography component="p" variant="metadata" color="text.secondary" sx={{ marginBottom: space.md }}>
+            从符合筛选条件的前 {HIGHLIGHT_POOL_SIZE} 条中优先兼顾不同类型和来源，最多展示 {HIGHLIGHT_LIMIT} 条。
+          </Typography>
+        ) : null}
         {view === 'source' ? (
         <div className={styles.groups}>
           {visibleGroupEntries.map(({ group, query: groupQuery, items: groupItems }) => {

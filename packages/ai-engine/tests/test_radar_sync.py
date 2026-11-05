@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -38,6 +39,8 @@ from ai_engine.radar.sync_runner import (
     run_radar_pipeline,
     _retryable_latest_source_ids,
     _record_sync_diagnostic,
+    _usable_feed_excerpt,
+    _feed_excerpt_allowed_after_fetch_error,
     run_radar_sync,
 )
 from ai_engine.contracts.states import AI_JOB_STATUS
@@ -83,6 +86,7 @@ class _Connection:
         self.sources = sources
         self.executions: list[tuple[str, tuple[Any, ...]]] = []
         self.canonical_urls: set[str] = set()
+        self.legacy_urls: set[str] = set()
 
     @asynccontextmanager
     async def transaction(self):  # type: ignore[no-untyped-def]
@@ -114,7 +118,10 @@ class _Connection:
             return _Cursor(rows=self.sources)
         if 'FROM "summaries"' in sql and '"canonicalUrl"' in sql and 'SELECT' in sql:
             canonical = str(params[0])
-            return _Cursor({"id": "existing"} if canonical in self.canonical_urls else None)
+            exists = canonical in self.canonical_urls
+            if len(params) == 3:
+                exists = exists or (str(params[1]) in self.canonical_urls and str(params[2]) in self.legacy_urls)
+            return _Cursor({"id": "existing"} if exists else None)
         if 'INSERT INTO "summaries"' in sql:
             canonical = str(params[4])
             if canonical in self.canonical_urls:
@@ -156,6 +163,243 @@ def _candidate(url: str = "https://example.com/item") -> RadarCandidate:
         content_origin="rss",
         tags=("ai",),
     )
+
+
+@pytest.mark.parametrize("reading_mode", ["browser", "enriched"])
+async def test_content_only_feed_never_persists_through_diagnostic_shell(
+    monkeypatch: pytest.MonkeyPatch, reading_mode: str,
+) -> None:
+    monkeypatch.setenv("RADAR_READING_MODE", reading_mode)
+    pool = _Pool([])
+    excerpt = "Private feed content " * 100
+    candidate = RadarCandidate(title="Title", url="https://example.com/item",
+                               snippet=excerpt, feed_excerpt=excerpt, feed_snippet_from_content=True)
+    await _record_sync_diagnostic(
+        pool, source=RadarSource("source-1", "RSS", "rss", {}), run_id="run-1",
+        candidate=candidate, canonical_url=candidate.url, kind="filtered",
+        reason_code="PENDING_SCORE", body=excerpt, markdown="unusable page shell",
+    )
+    inserts = [params for sql, params in pool.connection_value.executions
+               if 'INSERT INTO "radar_sync_diagnostics"' in sql]
+    assert len(inserts) == 1
+    assert inserts[0][7] == "" and inserts[0][8] is None
+    assert excerpt[:100] not in str(pool.connection_value.executions)
+
+
+@pytest.mark.parametrize("reading_mode", ["browser", "enriched"])
+async def test_rss_excerpt_survives_timeout_without_persisting_original(
+    monkeypatch: pytest.MonkeyPatch, reading_mode: str,
+) -> None:
+    monkeypatch.setenv("RADAR_READING_MODE", reading_mode)
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    source = _source()
+    source["config"] = {"feedUrl": "https://example.com/feed"}
+    pool = _Pool([source])
+    feed_text = ("An agent implementation explains measured tradeoffs and latency. " * 120)
+    candidate = RadarCandidate(
+        title="LLM agent pipeline",
+        url="https://example.com/article",
+        snippet="A short article summary about agent pipelines.",
+        content_origin="rss",
+        feed_excerpt=feed_text,
+        feed_source_host="example.com",
+    )
+    seen: dict[str, Any] = {}
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def timeout(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError("URL_FETCH_TIMEOUT", "timeout", host="example.com")
+
+    async def brief(adapter: Any, item: dict[str, Any], url: str, **kwargs: Any) -> Any:
+        seen["brief"] = item
+        return type("Brief", (), {
+            "status": AI_JOB_STATUS["SUCCEEDED"],
+            "output_text": "文章描述了代理实现中的工程权衡、延迟和可验证的测量结果。" * 3,
+            "cost": type("Cost", (), {
+                "token_input_total": 1, "token_output_total": 1, "cost_cents": 0,
+            })(),
+        })()
+
+    async def scorer(title: str, content: str, **kwargs: Any) -> Any:
+        seen["scorer_content"] = content
+        seen["scorer_kwargs"] = kwargs
+        return compute_score({
+            "信息增量": 2, "分析深度": 2, "可行动性": 2, "事实可信度": 2,
+            "时效性": 2, "表达质量": 2, "综合信号": 2,
+            "direct_relevance": 2, "scope_breadth": 1,
+        }, source_type="rss")
+
+    result = await run_radar_sync(
+        pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+        document_fetcher=timeout, generate_brief=brief, distilled_scorer=scorer,
+    )
+    assert result.runs[0].total_new == 1
+    assert seen["brief"]["context_is_source_excerpt"] is True
+    assert seen["brief"]["snippet"] == feed_text.strip()
+    assert "measured tradeoffs" in seen["scorer_content"]
+    assert seen["scorer_kwargs"]["content_is_source_excerpt"] is True
+    inserts = [entry for entry in pool.connection_value.executions if 'INSERT INTO "summaries"' in entry[0]]
+    assert len(inserts) == 1
+    params = inserts[0][1]
+    assert params[15].startswith("RSS 来源片段初筛")
+    assert params[23] is None
+    assert "evidence_feed_excerpt" in params[10]
+    assert feed_text not in str(pool.connection_value.executions)
+    assert feed_text[:120] not in str(pool.connection_value.executions)
+    diagnostics = [params for sql, params in pool.connection_value.executions
+                   if 'INSERT INTO "radar_sync_diagnostics"' in sql]
+    assert any(params[13] == "SOURCE_FEED_EXCERPT" for params in diagnostics)
+    assert all(params[7] == "" and params[8] is None for params in diagnostics)
+
+
+@pytest.mark.parametrize(("feed_host", "response_host", "article_url", "valid"), [
+    ("example.com", "www.example.com", "https://www.example.com/a", True),
+    ("example.com", "example.com", "https://evil-example.com/a", False),
+    ("example.com", "elsewhere.com", "https://example.com/a", False),
+    ("medium.com", "medium.com", "https://medium.com/other-author/a", False),
+    ("a.example.com", "a.example.com", "https://b.example.com/a", False),
+])
+def test_feed_evidence_requires_non_shared_exact_publisher_host(
+    feed_host: str, response_host: str, article_url: str, valid: bool,
+) -> None:
+    source = RadarSource(id="s", name="rss", source_type="rss", config={"feedUrl": f"https://{feed_host}/feed"})
+    candidate = RadarCandidate(title="An AI engine update", url=article_url, content_origin="rss",
+                               feed_source_host=response_host, feed_excerpt="Relevant engineering evidence. " * 30)
+    assert bool(_usable_feed_excerpt(source, candidate)) is valid
+
+
+def test_feed_evidence_requires_reliable_title() -> None:
+    source = RadarSource(id="s", name="rss", source_type="rss", config={"feedUrl": "https://example.com/feed"})
+    for title in ("", "Untitled", "No title"):
+        candidate = RadarCandidate(title=title, url="https://example.com/a", content_origin="rss",
+                                   feed_source_host="example.com", feed_excerpt="Evidence " * 100)
+        assert _usable_feed_excerpt(source, candidate) == ""
+
+
+def test_wrapped_rate_limit_cannot_use_feed_evidence() -> None:
+    original = SafeFetchError("UPSTREAM_RATE_LIMITED", "rate limited")
+    wrapper = RuntimeError("wrapper")
+    wrapper.__cause__ = original
+    assert not _feed_excerpt_allowed_after_fetch_error(wrapper)
+
+
+@pytest.mark.parametrize("code", ["URL_FETCH_BLOCKED", "UPSTREAM_RATE_LIMITED", "CONTENT_TYPE_REJECTED"])
+async def test_cross_site_content_only_feed_cannot_bypass_rejection(
+    monkeypatch: pytest.MonkeyPatch, code: str,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    source = _source()
+    source["config"] = {"feedUrl": "https://aggregator.example/feed"}
+    pool = _Pool([source])
+    excerpt = "Feed source commentary mistakenly linked to another publication. " * 40
+    candidate = RadarCandidate(title="LLM agent update", url="https://publisher.example/a", content_origin="rss",
+                               snippet=excerpt[:2000], feed_excerpt=excerpt,
+                               feed_source_host="aggregator.example", feed_snippet_from_content=True)
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def rejected(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError(code, "rejected", host="publisher.example")
+
+    async def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("Unrelated feed evidence must not be scored as the article")
+
+    await run_radar_sync(pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+                         document_fetcher=rejected, generate_brief=unexpected,
+                         distilled_scorer=unexpected)
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
+    assert excerpt[:100] not in str(pool.connection_value.executions)
+
+
+@pytest.mark.parametrize("code", ["URL_FETCH_BLOCKED", "UPSTREAM_RATE_LIMITED", "CONTENT_TYPE_REJECTED"])
+async def test_rss_feed_excerpt_cannot_bypass_safety_or_rate_limit(
+    monkeypatch: pytest.MonkeyPatch, code: str,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    source = _source()
+    source["config"] = {"feedUrl": "https://example.com/feed"}
+    pool = _Pool([source])
+    candidate = RadarCandidate(
+        title="LLM agent update", url="https://example.com/item", content_origin="rss",
+        snippet="Useful abstract that must not bypass a blocked URL.",
+        feed_excerpt="An agent paper with useful engineering details. " * 30,
+        feed_source_host="example.com",
+    )
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def rejected(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError(code, "rejected", host="example.com")
+
+    async def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("A blocked original URL must not enter model processing")
+
+    await run_radar_sync(
+        pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+        document_fetcher=rejected, generate_brief=unexpected, distilled_scorer=unexpected,
+    )
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
+
+
+@pytest.mark.parametrize("challenge", ["prove your humanity", "complete the challenge"])
+async def test_fetched_challenge_never_uses_feed_fallback(
+    monkeypatch: pytest.MonkeyPatch, challenge: str,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    source = _source()
+    source["config"] = {"feedUrl": "https://example.com/feed"}
+    pool = _Pool([source])
+    candidate = RadarCandidate(
+        title="LLM agent update", url="https://example.com/item", content_origin="rss",
+        snippet="A useful but limited feed summary about LLM agents.",
+        feed_excerpt="Longer article feed excerpt with engineering detail. " * 30,
+        feed_source_host="example.com",
+    )
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def blocked(url: str, **kwargs: Any) -> FetchedDocument:
+        return FetchedDocument(url=url, final_ip="93.184.216.34", status=200, headers={},
+                               content=challenge.encode(), content_type="text/html", elapsed_ms=1)
+
+    async def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("A verification shell cannot be scored")
+
+    result = await run_radar_sync(pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+                                  document_fetcher=blocked, generate_brief=unexpected, distilled_scorer=unexpected)
+    assert result.runs[0].total_failed == 1
+    assert result.runs[0].error_code == "URL_FETCH_BLOCKED"
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
+
+
+async def test_verification_shell_in_feed_never_becomes_source_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    pool = _Pool([_source()])
+    candidate = RadarCandidate(
+        title="LLM agent update", url="https://example.com/item", content_origin="rss",
+        snippet="short", feed_excerpt="Checking your browser before accessing the site. " * 50,
+    )
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def timeout(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError("URL_FETCH_TIMEOUT", "timeout", host="example.com")
+
+    async def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("A verification shell cannot be scored")
+
+    await run_radar_sync(pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+                         document_fetcher=timeout, generate_brief=unexpected,
+                         distilled_scorer=unexpected)
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
 
 
 def _document(url: str = "https://example.com/item") -> FetchedDocument:
@@ -205,6 +449,164 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert params[5] == "rss"
     assert params[14] == "1.2"
     assert "仅用于排序，不自动发布" in params[15]
+
+
+async def test_vendor_changelog_distinct_entries_survive_legacy_page_identity_and_repeat() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+    pool.connection_value.canonical_urls.add("https://example.com/notes")
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url=f"https://example.com/notes#{part}",
+                               snippet="A specific release note. " * 20) for part in ("first", "second")]
+
+    options = dict(triggered_by="admin", adapter=FakeAdapter(),
+                   fetchers={"vendor_changelog": fetcher}, document_fetcher=_safe_fetch)
+    first = await run_radar_sync(pool, **options)
+    second = await run_radar_sync(pool, **options)
+    assert first.runs[0].total_new == 2
+    assert second.runs[0].total_new == 0
+    assert second.runs[0].skipped_existing == 2
+
+
+async def test_vendor_changelog_preserves_existing_legacy_entry_without_duplication() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+    pool.connection_value.canonical_urls.add("https://example.com/notes")
+    pool.connection_value.legacy_urls.add("https://example.com/notes#first")
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url=f"https://example.com/notes#{part}",
+                               snippet="A specific release note. " * 20) for part in ("first", "second")]
+
+    run = await run_radar_sync(pool, triggered_by="admin", adapter=FakeAdapter(),
+                               fetchers={"vendor_changelog": fetcher}, document_fetcher=_safe_fetch)
+    assert run.runs[0].total_new == 1
+    assert run.runs[0].skipped_existing == 1
+
+
+async def test_changelog_scores_and_summarizes_only_the_selected_entry() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+    entry = "This release adds a concrete API behavior. " * 12
+    seen: list[dict[str, Any]] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url="https://example.com/notes#entry", snippet=entry)]
+
+    async def document_fetcher(url: str, **kwargs: Any) -> FetchedDocument:
+        raise AssertionError("the whole changelog page must not be used")
+
+    async def brief(adapter: Any, item: dict[str, Any], url: str, **kwargs: Any) -> Any:
+        seen.append(item)
+        return type("Brief", (), {"status": AI_JOB_STATUS["SUCCEEDED"],
+                                  "output_text": "A grounded summary of the release note. " * 5,
+                                  "cost": type("Cost", (), {"token_input_total": 1,
+                                             "token_output_total": 1, "cost_cents": 0})()})()
+
+    run = await run_radar_sync(pool, triggered_by="admin", adapter=FakeAdapter(),
+                               fetchers={"vendor_changelog": fetcher},
+                               document_fetcher=document_fetcher, generate_brief=brief)
+    assert run.runs[0].total_new == 1
+    assert seen[0]["snippet"] == entry.strip()
+    assert seen[0]["context_is_source_snapshot"] is True
+    assert seen[0]["context_is_source_excerpt"] is True
+    assert seen[0]["brief_kind"] == "change"
+
+
+async def test_changelog_short_entry_is_kept_without_inventing_page_content() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+    entry = "This release adds a new API option."
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url="https://example.com/notes#entry", snippet=entry)]
+
+    async def no_brief(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("short entries must not trigger a model summary")
+
+    run = await run_radar_sync(pool, triggered_by="admin", adapter=FakeAdapter(),
+                               fetchers={"vendor_changelog": fetcher}, generate_brief=no_brief)
+    assert run.runs[0].total_new == 1
+    insert = next(item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0])
+    assert entry in insert[1]
+
+
+async def test_changelog_missing_entry_content_is_diagnosed_without_fetching_whole_page() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url="https://example.com/notes#entry")]
+
+    async def no_fetch(*args: Any, **kwargs: Any) -> FetchedDocument:
+        raise AssertionError("unrelated page content must not replace missing entry content")
+
+    run = await run_radar_sync(pool, triggered_by="admin", adapter=FakeAdapter(),
+                               fetchers={"vendor_changelog": fetcher}, document_fetcher=no_fetch)
+    assert run.runs[0].total_new == 0
+    assert run.runs[0].total_skipped == 1
+    assert any("CHANGELOG_ENTRY_BODY_UNAVAILABLE" in str(params)
+               for _, params in pool.connection_value.executions)
+
+
+@pytest.mark.parametrize(
+    ("source_type", "url", "expected_profile", "expected_source_type"),
+    [
+        ("rss", "https://platform.openai.com/docs/guides/agents", "engineering", "rss"),
+        ("vendor_news", "https://docs.anthropic.com/en/docs/agents", "engineering", "vendor_news"),
+        ("rss", "https://openai.com/index/agents", "news", "rss"),
+        ("github", "https://github.com/openai/codex", "engineering", "github"),
+        ("arxiv", "https://arxiv.org/abs/2401.00001", "paper", "arxiv"),
+    ],
+)
+async def test_sync_routes_each_new_score_by_source_and_document_url(
+    source_type: str, url: str, expected_profile: str, expected_source_type: str,
+) -> None:
+    """New sync decisions agree with repair while existing scores are retained."""
+    pool = _Pool([_source(source_type=source_type)])
+    seen: list[tuple[str, str, str]] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate(url)]
+
+    async def score(title: str, content: str, **kwargs: Any) -> Any:
+        profile = kwargs["profile"]
+        seen.append((profile.id, kwargs["source_type"], kwargs["url"]))
+        return compute_score(
+            {
+                "信息增量": 3,
+                "分析深度": 3,
+                "可行动性": 3,
+                "事实可信度": 3,
+                "时效性": 3,
+                "表达质量": 3,
+                "综合信号": 3,
+                "direct_relevance": 3,
+                "relevance_evidence": "substantive source",
+            },
+            profile=profile,
+            source_type=kwargs["source_type"],
+        )
+
+    kwargs = {
+        "adapter": FakeAdapter(),
+        "fetchers": {source_type: fetcher},
+        "document_fetcher": _safe_fetch,
+        "distilled_scorer": score,
+    }
+    first = await run_radar_sync(pool, **kwargs)
+    second = await run_radar_sync(pool, **kwargs)
+
+    assert first.runs[0].total_new == 1
+    assert seen == [(expected_profile, expected_source_type, url)]
+    _, params = next(
+        entry for entry in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in entry[0]
+    )
+    assert params[20] == expected_profile
+    assert second.runs[0].skipped_existing == 1
+    assert len(seen) == 1
 
 
 async def test_sync_keeps_discovery_url_when_article_mentions_github_repo() -> None:
@@ -1795,3 +2197,318 @@ def test_finish_run_partial_without_error_does_not_touch_health() -> None:
         assert not any('"lastErrorCode"' in sql for sql in updates), updates
 
     asyncio.run(_scenario())
+
+
+def test_changelog_fragments_are_not_enriched_as_full_web_pages() -> None:
+    from ai_engine.radar.enrichment_worker import DEFAULT_ENRICHMENT_KINDS
+    from ai_engine.radar.sync_runner import _classify_original_kind
+
+    kind = _classify_original_kind("vendor_changelog", "https://example.com/changes#entry")
+    assert kind == "vendor_changelog_entry"
+    assert kind not in DEFAULT_ENRICHMENT_KINDS
+    assert _classify_original_kind("vendor_changelog", "https://example.com/entry") == "web_share"
+
+
+class _QuotaExhaustedError(Exception):
+    """Provider billing error shaped like an exhausted account allowance."""
+
+    status_code = 402
+
+
+async def test_brief_quota_exhaustion_defers_remaining_candidates_without_retry() -> None:
+    """An exhausted allowance stops model calls for the whole run, not per candidate."""
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [
+            _candidate("https://example.com/one"),
+            _candidate("https://example.com/two"),
+        ]
+
+    calls = 0
+
+    async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise _QuotaExhaustedError("insufficient_quota: credit balance is empty")
+
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=generate,
+        candidate_concurrency=1,
+    )
+
+    run = result.runs[0]
+    assert calls == 1  # the quota error is not retried, and the next candidate never calls the model
+    assert result.quota_stopped is True
+    assert run.status == "partial"
+    assert run.error_code == "AI_QUOTA_EXCEEDED"
+    assert run.total_failed == 0
+    assert run.total_skipped == 2
+    assert pool.connection_value.canonical_urls == set()
+
+
+async def test_scorer_quota_exhaustion_keeps_row_and_defers_later_candidates() -> None:
+    """A scorer quota fallback keeps the candidate it already paid for, then stops."""
+    from dataclasses import replace
+
+    from ai_engine.ingestion.pipeline import _generate_brief
+    from ai_engine.radar.distilled_scorer import default_score
+
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [
+            _candidate("https://example.com/one"),
+            _candidate("https://example.com/two"),
+        ]
+
+    brief_calls = 0
+
+    async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        nonlocal brief_calls
+        brief_calls += 1
+        return await _generate_brief(adapter, item, canonical, **kwargs)
+
+    score_calls = 0
+
+    async def scorer(title: str, content: str, **kwargs: Any) -> Any:
+        nonlocal score_calls
+        score_calls += 1
+        return replace(default_score(kwargs["profile"]), quota_exhausted=True)
+
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=generate,
+        distilled_scorer=scorer,
+        candidate_concurrency=1,
+    )
+
+    run = result.runs[0]
+    assert score_calls == 1
+    assert brief_calls == 1  # the second candidate is deferred before any model call
+    assert result.quota_stopped is True
+    assert run.error_code == "AI_QUOTA_EXCEEDED"
+    assert run.total_skipped == 1
+    assert pool.connection_value.canonical_urls == {"https://example.com/one"}
+
+
+async def test_pipeline_does_not_retry_sources_after_quota_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_SOURCE_RETRIES", 2)
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_SOURCE_RETRY_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_RATE_LIMIT_RETRY_BACKOFF_SECONDS", 0.0)
+    pool = _Pool([_source()])
+    fetch_calls = 0
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        nonlocal fetch_calls
+        fetch_calls += 1
+        return [_candidate("https://example.com/one")]
+
+    async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        raise _QuotaExhaustedError("insufficient_quota")
+
+    result = await run_radar_pipeline(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=generate,
+        candidate_concurrency=1,
+    )
+
+    assert fetch_calls == 1  # no source retry rounds once the allowance is gone
+    assert result.quota_stopped is True
+    assert result.enriched_count == 0
+
+
+@pytest.mark.parametrize("reading_mode", ["browser", "enriched"])
+@pytest.mark.parametrize("retry_count", [1, 2])
+async def test_pipeline_preserves_quota_stop_from_source_retry(
+    monkeypatch: pytest.MonkeyPatch, reading_mode: str, retry_count: int,
+) -> None:
+    from dataclasses import replace
+
+    from ai_engine.radar import candidate_postprocessor, enrichment_worker, sync_runner
+
+    monkeypatch.setenv("RADAR_READING_MODE", reading_mode)
+    monkeypatch.setattr(sync_runner, "RADAR_SOURCE_RETRIES", retry_count)
+    monkeypatch.setattr(sync_runner, "RADAR_SOURCE_RETRY_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(sync_runner, "RADAR_RATE_LIMIT_RETRY_BACKOFF_SECONDS", 0)
+    failed = SourceRunResult(
+        run_id="initial-run", source_id="source-1", status="failed",
+        total_fetched=0, total_new=0, total_skipped=0, total_failed=1,
+        token_input_total=0, token_output_total=0, cost_usd=0,
+        error_code="URL_FETCH_TIMEOUT",
+    )
+    stopped = replace(
+        failed, run_id="quota-retry", status="partial", total_fetched=1,
+        total_skipped=1, total_failed=0, error_code="AI_QUOTA_EXCEEDED",
+    )
+    sync = AsyncMock(side_effect=[
+        RadarSyncResult("initial-batch", (failed,)),
+        RadarSyncResult("retry-batch", (stopped,), quota_stopped=True),
+    ])
+    score = AsyncMock(return_value=0)
+    enrich = AsyncMock(return_value=0)
+    monkeypatch.setattr(sync_runner, "run_radar_sync", sync)
+    monkeypatch.setattr(candidate_postprocessor, "score_missing_candidates", score)
+    monkeypatch.setattr(enrichment_worker, "run_enrichment_for_pending", enrich)
+
+    result = await run_radar_pipeline(object())
+
+    assert sync.await_count == 2  # no later source round after the quota retry
+    assert result.quota_stopped is True  # remains visible to operator alerts
+    assert result.sync.batch_id == "initial-batch"
+    assert result.sync.runs == (failed, stopped)
+    assert result.enriched_count == 0
+    score.assert_not_awaited()
+    enrich.assert_not_awaited()
+
+
+def test_rate_limit_text_is_not_treated_as_quota_exhaustion() -> None:
+    from ai_engine.radar.sync_runner import _is_quota_exhausted_brief, _is_retryable_brief_failure
+
+    rate_limited = RuntimeError("429 too many requests, rate limit reached")
+    assert _is_quota_exhausted_brief(exc=rate_limited) is False
+    assert _is_retryable_brief_failure(exc=rate_limited) is True
+
+
+def test_quota_brief_failure_is_never_retried_even_with_rate_limit_wording() -> None:
+    from types import SimpleNamespace
+
+    from ai_engine.radar.sync_runner import _is_retryable_brief_failure
+
+    brief = SimpleNamespace(error_code="AI_QUOTA_EXCEEDED", error_message="429 rate limit exceeded")
+    assert _is_retryable_brief_failure(brief=brief) is False
+
+
+@pytest.mark.parametrize(
+    ("source_type", "url", "expected_kind", "expect_tag"),
+    [
+        ("devto", "https://dev.to/author/post", "engineering", True),
+        ("rss", "https://example.com/essay", None, False),
+    ],
+)
+async def test_typed_brief_kind_reaches_brief_and_is_tagged_only_when_persisted(
+    source_type: str, url: str, expected_kind: str | None, expect_tag: bool,
+) -> None:
+    pool = _Pool([_source(source_type=source_type)])
+    seen: list[dict[str, Any]] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate(url)]
+
+    async def brief(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        seen.append(item)
+        return type("Brief", (), {
+            "status": AI_JOB_STATUS["SUCCEEDED"],
+            "output_text": "文章解释了工程约束、关键机制和取舍，并说明了适用场景与局限。" * 3,
+            "cost": type("Cost", (), {
+                "token_input_total": 1, "token_output_total": 1, "cost_cents": 0,
+            })(),
+        })()
+
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={source_type: fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=brief,
+    )
+
+    assert result.runs[0].total_new == 1
+    assert seen[0]["brief_kind"] == expected_kind
+    summary_params = [
+        params for sql, params in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in sql
+    ]
+    assert len(summary_params) == 1
+    assert ("brief_typed_v1" in str(summary_params[0])) is expect_tag
+
+
+async def test_auto_pause_alerts_once_when_the_threshold_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.radar import sync_runner
+
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        sync_runner,
+        "emit_admin_alert",
+        lambda key, title, lines, **kwargs: emitted.append(key),
+    )
+    monkeypatch.setattr(sync_runner, "RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES", 5)
+    counts = iter([4, 5, 6])
+
+    class _Conn:
+        async def execute(self, sql: str, params: Any = None) -> _Cursor:
+            if 'RETURNING "name"' in sql:
+                return _Cursor({"name": "rss source", "consecutiveFailures": next(counts)})
+            return _Cursor()
+
+        async def commit(self) -> None:
+            return None
+
+    class _Pool:
+        @asynccontextmanager
+        async def connection(self):  # type: ignore[no-untyped-def]
+            yield _Conn()
+
+    run = dict(
+        run_id="run-1", status="failed", total_fetched=0, total_new=0, total_skipped=0,
+        total_failed=1, fallback_count=0, skipped_existing=0, skipped_rule_noise=0,
+        skipped_distilled_noise=0, skipped_conflict=0, token_input_total=0,
+        token_output_total=0, cost_usd=0.0, elapsed_ms=1,
+        error_code="URL_FETCH_TIMEOUT", error_message="timeout",
+    )
+    # Below the threshold there is no alert yet.
+    await sync_runner._finish_run(_Pool(), **run)
+    assert emitted == []
+    await sync_runner._finish_run(_Pool(), **run)
+    assert emitted == ["radar.auto_paused:rss source"]
+    # Later failures of the paused source alert too; admin dedup limits repeats.
+    await sync_runner._finish_run(_Pool(), **run)
+    assert emitted == ["radar.auto_paused:rss source", "radar.auto_paused:rss source"]
+
+
+async def test_healthy_empty_source_is_not_marked_partial_by_another_sources_quota_stop() -> None:
+    """A source that deferred nothing keeps its clean status when another source trips the circuit."""
+    quota_source = _source("quota-source", "rss")
+    quota_source["config"] = {"route": "quota"}
+    empty_source = _source("empty-source", "rss")
+    empty_source["config"] = {"route": "empty"}
+    pool = _Pool([quota_source, empty_source])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        if config.get("route") == "quota":
+            return [_candidate("https://example.com/quota")]
+        return []
+
+    async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        raise _QuotaExhaustedError("insufficient_quota")
+
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=generate,
+        source_concurrency=1,
+        candidate_concurrency=1,
+    )
+
+    by_source = {run.source_id: run for run in result.runs}
+    assert result.quota_stopped is True
+    assert by_source["quota-source"].status == "partial"
+    assert by_source["quota-source"].error_code == "AI_QUOTA_EXCEEDED"
+    assert by_source["empty-source"].status == "completed"
+    assert by_source["empty-source"].error_code is None

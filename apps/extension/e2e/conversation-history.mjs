@@ -4,6 +4,12 @@ import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
 import { join } from 'node:path';
+
+// The answer scope lives in one chip now. Open its menu before choosing.
+async function openScopeMenu(page) {
+  await page.locator('#composer-scope').click();
+  await page.locator('#composer-scope-menu').waitFor({ state: 'visible' });
+}
 import { tempDir, tempPath } from './temp-paths.mjs';
 import { configureProvider } from './panel-actions.mjs';
 
@@ -145,15 +151,17 @@ try {
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
   // The chat panel stays open; a selection adds a scope chip and the
   // selection card instead of replacing the transcript.
-  if (!(await panel.locator('#scope-selection').isVisible())) {
+  if (!(await panel.locator('#composer-scope:not([disabled])').isVisible())) {
     throw new Error('选段讨论没有显示“当前选段”范围切换');
   }
   await panel.locator('#chat-summary').click();
   await panel.locator('#conversation-list .conversation-message.assistant').waitFor({ state: 'visible', timeout: 10_000 });
+  await openScopeMenu(panel);
   await panel.locator('#scope-page').click();
   if ((await panel.locator('#discussion-context').innerText()) !== '整页正文 · 提问') {
     throw new Error('范围切换到整页后上下文标签不正确');
   }
+  await openScopeMenu(panel);
   await panel.locator('#scope-selection').click();
   if ((await panel.locator('#discussion-context').innerText()) !== '当前选段 · 提问') {
     throw new Error('范围切换回选段后上下文标签不正确');
@@ -264,9 +272,10 @@ try {
   await history.waitForURL(new RegExp(`chrome-extension://${extensionId}/sidepanel\\.html`));
   await history.locator('#discussion-section').waitFor({ state: 'visible', timeout: 10_000 });
 
-  if (!(await history.locator('#scope-selection').isVisible())) {
+  if (!(await history.locator('#composer-scope:not([disabled])').isVisible())) {
     throw new Error('resumed chat lost the selection scope');
   }
+  await openScopeMenu(history);
   await history.locator('#scope-selection').click();
   await article.evaluate(() => {
     const paragraph = document.querySelector('#target');

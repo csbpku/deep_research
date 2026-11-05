@@ -31,6 +31,7 @@ from ai_engine.radar.sync_runner import (
 )
 from ai_engine.radar.sync_runner import retry_radar_run, run_radar_pipeline
 from ai_engine.radar.distilled_scorer import ScoringMonitor, score_with_llm
+from ai_engine.radar.admin_alerts import emit_admin_alert
 
 router = APIRouter(prefix="/api/radar", tags=["radar"])
 
@@ -74,6 +75,8 @@ class RadarRunView(BaseModel):
     tokenInputTotal: int
     tokenOutputTotal: int
     costUsd: float
+    costStatus: Literal["reported", "unavailable", "no_recorded_usage"] = "no_recorded_usage"
+    fallbackCount: int = 0
     elapsedMs: int | None
     errorCode: str | None
     errorMessage: str | None
@@ -82,6 +85,7 @@ class RadarRunView(BaseModel):
     candidateCount: int
     scoredCount: int
     pendingScoreCount: int
+    sourcePendingScoreCount: int = 0
     enrichedCount: int
     pendingEnrichmentCount: int
     skippedExisting: int
@@ -299,6 +303,52 @@ async def enqueue_radar_enrichment(
     }
 
 
+# Alert when at least this share of the latest per-source runs failed outright.
+_SOURCE_FAILURE_ALERT_RATIO = 0.5
+
+
+def _emit_scoring_alerts(monitor_alerts: list[str], context: str) -> None:
+    for text in monitor_alerts:
+        # The first token is the stable rule name; the rest carries live rates.
+        rule = text.split(" ", 1)[0]
+        emit_admin_alert(f"radar.scoring:{rule}", "雷达评分质量告警", [text, context])
+
+
+def _emit_run_alerts(
+    pipeline_result: Any,
+    monitor_alerts: list[str],
+    *,
+    batch_id: str,
+    triggered_by: str,
+) -> None:
+    """Operator alerts for one finished sync. Best effort; never affects the result."""
+    context = f"批次 {batch_id}，触发 {triggered_by}"
+    latest: dict[str, Any] = {}
+    for run in pipeline_result.sync.runs:
+        # Retry rounds append later results for the same source; keep the newest.
+        latest[run.source_id] = run
+    failed = [run for run in latest.values() if run.status == "failed"]
+    if latest and len(failed) / len(latest) >= _SOURCE_FAILURE_ALERT_RATIO:
+        emit_admin_alert(
+            "radar.sources_failed",
+            "雷达同步：多数来源失败",
+            [f"失败来源 {len(failed)}/{len(latest)}", context],
+        )
+    if pipeline_result.quota_stopped:
+        emit_admin_alert(
+            "radar.model_quota_stopped",
+            "雷达模型额度耗尽",
+            ["本轮已停止后续模型调用，未处理条目会在下一轮重试。", context],
+        )
+    if pipeline_result.enrichment_error:
+        emit_admin_alert(
+            "radar.enrichment_failed",
+            "雷达增强阶段失败",
+            [str(pipeline_result.enrichment_error)[:300], context],
+        )
+    _emit_scoring_alerts(monitor_alerts, context)
+
+
 def _enrichment_allowed() -> bool:
     from ai_engine.radar.runtime_flags import radar_enrichment_enabled
 
@@ -335,6 +385,20 @@ async def _run_background(
                 pipeline_result, monitor = await _run()
         result = pipeline_result.sync
         alerts = monitor.evaluate()
+        try:
+            _emit_run_alerts(
+                pipeline_result,
+                alerts,
+                batch_id=result.batch_id,
+                triggered_by=triggered_by,
+            )
+        except Exception as alert_exc:
+            # Alerting must never turn a finished sync into a reported crash.
+            log.warning(
+                "ai-engine.radar.alert_emit_failed",
+                request_id=request_id,
+                error_type=type(alert_exc).__name__,
+            )
         log.info(
             "ai-engine.radar.sync_done",
             request_id=request_id,
@@ -375,6 +439,11 @@ async def _run_background(
             "ai-engine.radar.sync_unhandled",
             request_id=request_id,
             error_type=type(exc).__name__,
+        )
+        emit_admin_alert(
+            "radar.sync_unhandled",
+            "雷达同步异常中断",
+            [f"错误类型 {type(exc).__name__}", f"请求 {request_id}"],
         )
 
 
@@ -441,7 +510,7 @@ async def list_radar_runs(
     limit: int = 50,
     run_date: date | None = Query(default=None, alias="date"),
 ) -> list[RadarRunView]:
-    bounded_limit = min(max(limit, 1), 200)
+    bounded_limit = min(max(limit, 1), 1000)
     params: list[Any] = []
     where_clause = ""
     if run_date is not None:
@@ -486,7 +555,7 @@ async def list_radar_runs(
                 'SELECT r."id", r."sourceId", s."name" AS "sourceName", '
                 's."sourceType", r."triggeredBy", r."status", r."totalFetched", '
                 'r."totalNew", r."totalSkipped", r."totalFailed", r."tokenInputTotal", '
-                'r."tokenOutputTotal", r."costUsd", r."elapsedMs", r."errorCode", r."errorMessage", '
+                'r."tokenOutputTotal", r."costUsd", r."fallbackCount", r."elapsedMs", r."errorCode", r."errorMessage", '
                 'r."skippedExisting", r."skippedRuleNoise", r."skippedDistilledNoise", r."skippedConflict", '
                 'r."createdAt", r."completedAt", '
                 'COUNT(c."id")::int AS "candidateCount", '
@@ -504,6 +573,21 @@ async def list_radar_runs(
                 tuple(params),
             )
         ).fetchall()
+        backlog_rows: list[Any] = []
+        if rows:
+            source_ids = list({str(dict(row)["sourceId"]) for row in rows})
+            backlog_rows = await (
+                await conn.execute(
+                    'SELECT previous."sourceId", count(*)::int AS pending '
+                    'FROM "summaries" candidate '
+                    'JOIN "radar_sync_runs" previous ON previous."id" = candidate."syncRunId" '
+                    'WHERE previous."sourceId" = ANY(%s::uuid[]) '
+                    'AND candidate."source" = \'daily\' AND candidate."status" = \'candidate\' '
+                    'AND candidate."distilledScore" IS NULL GROUP BY previous."sourceId"',
+                    (source_ids,),
+                )
+            ).fetchall()
+    backlog = {str(dict(row)["sourceId"]): int(dict(row)["pending"]) for row in backlog_rows}
     result: list[RadarRunView] = []
     for raw in rows:
         row = dict(raw)
@@ -514,6 +598,12 @@ async def list_radar_runs(
                     "id": str(row["id"]),
                     "sourceId": str(row["sourceId"]),
                     "status": str(row["status"]),
+                    "sourcePendingScoreCount": backlog.get(str(row["sourceId"]), 0),
+                    "costStatus": (
+                        "reported" if float(row.get("costUsd") or 0) > 0 else
+                        "unavailable" if (row.get("tokenInputTotal") or row.get("tokenOutputTotal")) else
+                        "no_recorded_usage"
+                    ),
                     "createdAt": row["createdAt"].isoformat(),
                     "completedAt": (
                         row["completedAt"].isoformat() if row.get("completedAt") else None
@@ -562,6 +652,7 @@ async def retry_sync(
                 distilled_scorer=score_with_llm,
                 monitor=monitor,
             )
+            _emit_scoring_alerts(monitor.evaluate(), f"重试运行 {run_id}")
         except Exception as exc:
             structlog.get_logger("ai_engine.radar").error(
                 "ai-engine.radar.retry_unhandled",

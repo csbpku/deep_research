@@ -9,7 +9,7 @@ import { ComposerIcon } from './reader-header';
 import { t, getUiLanguage } from '../i18n.js';
 import { TRANSLATION_LANGUAGES, resolveTranslationLanguage } from '../translation-language.js';
 
-export function TranslationLanguagePicker() {
+export function TranslationLanguagePicker({ compact = false }: { compact?: boolean }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [state, setState] = useState({ value: 'interface', disabled: false, visible: true });
   useEffect(() => {
@@ -25,7 +25,7 @@ export function TranslationLanguagePicker() {
   };
   if (!state.visible) return null;
   return <>
-    <ReaderButton id="translation-language-button" control="compact" disabled={state.disabled} aria-label={t('翻译目标语言：{0}', target.label)} title={t('翻译目标语言：{0}', target.label)} aria-haspopup="menu" aria-expanded={Boolean(anchor)} aria-controls={anchor ? 'translation-language-menu' : undefined} onClick={event => setAnchor(event.currentTarget)} endIcon={<ComposerIcon kind="chevron-down" size={20} />} sx={{ whiteSpace: 'nowrap', minWidth: 44, px: 0.5 }}>{target.short}</ReaderButton>
+    <ReaderButton id="translation-language-button" control="compact" disabled={state.disabled} aria-label={t('翻译目标语言：{0}', target.label)} title={t('翻译目标语言：{0}', target.label)} aria-haspopup="menu" aria-expanded={Boolean(anchor)} aria-controls={anchor ? 'translation-language-menu' : undefined} onClick={event => setAnchor(event.currentTarget)} endIcon={<ComposerIcon kind="chevron-down" size={20} />} sx={{ whiteSpace: 'nowrap', minWidth: 44, px: 0.5 }}>{compact ? target.code : target.short}</ReaderButton>
     <Menu id="translation-language-menu" anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)} slotProps={{ list: { 'aria-label': t('翻译目标语言'), subheader: <ListSubheader component="div">{t('翻译目标语言')}</ListSubheader> }, paper: { sx: { maxHeight: 'min(440px, 75dvh)', width: 240 } } }}>
       <MenuItem selected={state.value === 'interface'} onClick={() => choose('interface')}>{t('跟随界面语言')}</MenuItem>
       <Divider />
