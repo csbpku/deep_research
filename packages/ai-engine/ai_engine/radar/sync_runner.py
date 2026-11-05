@@ -32,6 +32,7 @@ from ai_engine.radar.diagnostic_policy import (
     publication_identity,
 )
 from ai_engine.radar.noise_policy import confirmed_noise
+from ai_engine.radar.admin_alerts import emit_admin_alert
 from ai_engine.radar.brief_kind import TYPED_BRIEF_TAG, radar_brief_kind
 from ai_engine.radar.brief_quality import is_unavailable_brief
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
@@ -801,6 +802,7 @@ async def _finish_run(
     error_code: str | None,
     error_message: str | None,
 ) -> None:
+    newly_paused: tuple[str, str] | None = None
     async with pool.connection() as conn:
         await conn.execute(
             'UPDATE "radar_sync_runs" SET "status" = %s, "totalFetched" = %s, '
@@ -856,7 +858,7 @@ async def _finish_run(
                 (run_id,),
             )
         elif error_code and (status == "failed" or (status == "partial" and total_fetched == 0)):
-            await conn.execute(
+            cursor = await conn.execute(
                 'UPDATE "radar_sources" SET '
                 '"consecutiveFailures" = "consecutiveFailures" + 1, '
                 '"lastErrorCode" = %s, '
@@ -869,7 +871,8 @@ async def _finish_run(
                 f'{RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES} THEN COALESCE("autoPauseReason", %s) '
                 'ELSE "autoPauseReason" END, '
                 '"updatedAt" = now() '
-                'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
+                'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s) '
+                'RETURNING "name", "consecutiveFailures"',
                 (
                     error_code,
                     error_message[:500] if error_message else None,
@@ -877,6 +880,11 @@ async def _finish_run(
                     run_id,
                 ),
             )
+            pause_row = await cursor.fetchone()
+            if pause_row and int(pause_row["consecutiveFailures"]) == RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES:
+                # Only the update that reaches the threshold alerts; later
+                # failures of the same paused source stay silent.
+                newly_paused = (str(pause_row["name"]), error_code)
         elif error_code and status == "partial":
             # Preserve the last observed candidate-level error for diagnosis,
             # but do not change the source-level failure streak.
@@ -888,6 +896,17 @@ async def _finish_run(
                 (error_code, error_message[:500] if error_message else None, run_id),
             )
         await conn.commit()
+    if newly_paused is not None:
+        source_name, last_code = newly_paused
+        emit_admin_alert(
+            f"radar.auto_paused:{source_name}",
+            "雷达来源已自动暂停",
+            [
+                f"来源 {source_name} 连续失败 {RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES} 次，已暂停自动同步。",
+                f"最近错误码：{last_code}",
+                f"运行：{run_id}",
+            ],
+        )
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:

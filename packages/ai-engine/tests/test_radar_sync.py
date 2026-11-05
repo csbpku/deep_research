@@ -2275,3 +2275,45 @@ async def test_typed_brief_kind_reaches_brief_and_is_tagged_only_when_persisted(
     ]
     assert len(summary_params) == 1
     assert ("brief_typed_v1" in str(summary_params[0])) is expect_tag
+
+
+async def test_auto_pause_alerts_once_when_the_threshold_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.radar import sync_runner
+
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        sync_runner,
+        "emit_admin_alert",
+        lambda key, title, lines, **kwargs: emitted.append(key),
+    )
+    monkeypatch.setattr(sync_runner, "RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES", 5)
+    counts = iter([5, 6])
+
+    class _Conn:
+        async def execute(self, sql: str, params: Any = None) -> _Cursor:
+            if 'RETURNING "name"' in sql:
+                return _Cursor({"name": "rss source", "consecutiveFailures": next(counts)})
+            return _Cursor()
+
+        async def commit(self) -> None:
+            return None
+
+    class _Pool:
+        @asynccontextmanager
+        async def connection(self):  # type: ignore[no-untyped-def]
+            yield _Conn()
+
+    run = dict(
+        run_id="run-1", status="failed", total_fetched=0, total_new=0, total_skipped=0,
+        total_failed=1, fallback_count=0, skipped_existing=0, skipped_rule_noise=0,
+        skipped_distilled_noise=0, skipped_conflict=0, token_input_total=0,
+        token_output_total=0, cost_usd=0.0, elapsed_ms=1,
+        error_code="URL_FETCH_TIMEOUT", error_message="timeout",
+    )
+    await sync_runner._finish_run(_Pool(), **run)
+    assert emitted == ["radar.auto_paused:rss source"]
+    # The sixth consecutive failure of an already paused source stays silent.
+    await sync_runner._finish_run(_Pool(), **run)
+    assert emitted == ["radar.auto_paused:rss source"]
