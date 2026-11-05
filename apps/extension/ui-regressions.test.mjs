@@ -237,6 +237,46 @@ test('new background answer snapshots omit model instructions and retain only di
   }
 });
 
+test('a fast failed answer is not reported as interrupted while its final state is being saved', async () => {
+  const source = readFileSync(new URL('./answer-worker.js', import.meta.url), 'utf8');
+  let releaseWrite;
+  let writeStarted;
+  const writing = new Promise(resolve => { writeStarted = resolve; });
+  let stored = { id: 'job', status: 'running' };
+  const sandbox = {
+    setInterval, clearInterval, AbortController,
+    chrome: {
+      runtime: { sendMessage: async () => {}, getPlatformInfo: async () => {} },
+      storage: { session: {
+        get: async () => ({ 'readerAnswer:job': stored }),
+        set: async value => {
+          writeStarted();
+          await new Promise(resolve => { releaseWrite = resolve; });
+          stored = value['readerAnswer:job'];
+        },
+      } },
+    },
+    requestPlatformAnswer: async () => { throw new Error('selection validation failed'); },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(source, 'const tasks = new Map();', 'chrome.runtime.onMessage.addListener('), sandbox);
+  const result = vm.runInContext(`(() => {
+    const task = { id: 'job', status: 'running', streamed: '' };
+    const controller = new AbortController();
+    tasks.set(task.id, { task, controller });
+    return execute({ mode: 'platform', scope: 'selection', context: {}, history: [] }, task, controller);
+  })()`, sandbox);
+  await writing;
+  const duringWrite = await vm.runInContext("snapshot('job')", sandbox);
+  assert.equal(duringWrite.status, 'failed');
+  assert.equal(duringWrite.error, 'selection validation failed');
+  releaseWrite();
+  await result;
+  const afterWrite = await vm.runInContext("snapshot('job')", sandbox);
+  assert.equal(afterWrite.status, 'failed');
+  assert.equal(afterWrite.error, 'selection validation failed');
+});
+
 test('translation progress counts confirmed page translations instead of processed model blocks', () => {
   const nodes = new Map();
   const $ = id => {
