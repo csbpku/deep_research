@@ -1268,10 +1268,10 @@
     return { target: candidates[0], range };
   }
 
-  async function focusAnchor(anchor) {
+  async function focusAnchor(anchor, { silent = false } = {}) {
     const resolved = await resolveAnchorRange(anchor);
     if (resolved.error) {
-      send({ type: 'deep-research:anchor-unresolved', reason: resolved.error });
+      if (!silent) send({ type: 'deep-research:anchor-unresolved', reason: resolved.error });
       return;
     }
     const translated = resolved.target.nextElementSibling;
@@ -1289,7 +1289,7 @@
       target.style.outline = previousOutline;
       target.style.outlineOffset = previousOffset;
     }, 1800);
-    send({ type: 'deep-research:anchor-resolved' });
+    if (!silent) send({ type: 'deep-research:anchor-resolved' });
   }
 
   function removeAnnotationHighlight(id) {
@@ -1835,7 +1835,7 @@
     if (message?.type === 'deep-research:restore-progress') {
       const scrollY = Number(message.scrollY);
       if (Number.isFinite(scrollY) && scrollY > 0) window.scrollTo({ top: Math.max(0, scrollY), behavior: 'auto' });
-      if (message.anchor?.quote) window.setTimeout(() => void focusAnchor(message.anchor), 180);
+      if (message.anchor?.quote) window.setTimeout(() => void focusAnchor(message.anchor, { silent: true }), 180);
     }
     if (message?.type === 'deep-research:apply-translations') {
       const translations = Array.isArray(message.translations) ? message.translations : [];

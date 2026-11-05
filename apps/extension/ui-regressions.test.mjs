@@ -277,6 +277,37 @@ test('a fast failed answer is not reported as interrupted while its final state 
   assert.equal(afterWrite.error, 'selection validation failed');
 });
 
+test('automatic reading-position restoration cannot replace an unrelated answer error', async () => {
+  const messages = [];
+  const sandbox = { resolveAnchorRange: async () => ({ error: '原文已变化，无法准确定位' }), send: message => messages.push(message) };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(content, 'async function focusAnchor(', 'function removeAnnotationHighlight('), sandbox);
+  await vm.runInContext("focusAnchor({}, { silent: true })", sandbox);
+  assert.equal(messages.length, 0);
+  await vm.runInContext('focusAnchor({})', sandbox);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'deep-research:anchor-unresolved');
+  assert.match(content, /focusAnchor\(message\.anchor, \{ silent: true \}\)/u);
+});
+
+test('background annotation failures preserve a current notice or answer', () => {
+  const notice = { textContent: '' };
+  const sandbox = { message: { type: 'deep-research:annotation-unresolved', id: 'saved', reason: '定位失败' },
+    pendingAnnotationHighlightId: null, discussionRunning: false, $: () => notice, setNotice: value => { notice.textContent = value; } };
+  vm.createContext(sandbox);
+  const handler = extract(panel, "if (message.type === 'deep-research:annotation-unresolved')", "if (message.type === 'deep-research:annotation-resolved'");
+  notice.textContent = '回答失败';
+  vm.runInContext(handler, sandbox);
+  assert.equal(notice.textContent, '回答失败');
+  notice.textContent = '';
+  sandbox.discussionRunning = true;
+  vm.runInContext(handler, sandbox);
+  assert.equal(notice.textContent, '');
+  sandbox.discussionRunning = false;
+  vm.runInContext(handler, sandbox);
+  assert.equal(notice.textContent, '定位失败');
+});
+
 test('translation progress counts confirmed page translations instead of processed model blocks', () => {
   const nodes = new Map();
   const $ = id => {
