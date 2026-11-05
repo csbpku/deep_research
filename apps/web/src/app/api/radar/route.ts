@@ -255,6 +255,9 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
     { distilledTotal: { sort: 'desc', nulls: 'last' } },
     { createdAt: 'desc' },
+    // A unique tie-breaker keeps bounded selection and pagination stable when
+    // a sync inserts several equally scored rows at the same timestamp.
+    { id: 'asc' },
   ];
 
   // The score-validity query only needs to inspect rows that can survive the
