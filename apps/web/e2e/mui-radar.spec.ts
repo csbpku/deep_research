@@ -22,6 +22,30 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
   test.beforeEach(async ({ page }) => { await fixture(page); });
 
   for (const width of [1440, 320]) {
+    test(`${width}px: the reading preview discloses limited feed evidence`, async ({ page }) => {
+      const limited = {
+        ...candidate,
+        tags: ['rss', 'external_reading', 'evidence_feed_excerpt', 'agent'],
+        scoreReason: 'RSS 来源片段初筛：未核实完整原文，评分仅供发现排序；请打开原文复核。',
+      };
+      await page.route('**/api/radar?*', route => route.fulfill({
+        json: { page: 1, perPage: 20, total: 1, totalPages: 1, items: [limited] },
+      }));
+      await page.route(`**/api/radar/${id}?*`, route => route.fulfill({ json: limited }));
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/radar?date=all');
+      await page.getByRole('link', { name: candidate.title, exact: true }).click();
+      const preview = page.locator('aside[aria-label="文章概览"]:visible');
+      await expect(preview).toBeVisible();
+      await expect(preview.getByText('该文章曾使用 RSS 来源片段生成摘要或评分；原文覆盖情况请打开原文核实。')).toBeVisible();
+      await expect(preview.getByText('#agent')).toBeVisible();
+      await expect(preview.getByText('#evidence_feed_excerpt')).toHaveCount(0);
+      await expect(preview.getByText('同步时临时读取原文生成摘要和评分', { exact: false })).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    });
+  }
+
+  for (const width of [1440, 320]) {
     test(`${width}px: highlights use one bounded filtered pool and the full list remains available`, async ({ page }) => {
       const seenQueries: URLSearchParams[] = [];
       const ranked = Array.from({ length: 12 }, (_, index) => ({

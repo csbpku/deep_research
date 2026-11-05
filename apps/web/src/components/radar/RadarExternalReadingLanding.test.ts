@@ -74,7 +74,7 @@ describe('RadarExternalReadingLanding', () => {
     {
       tags: ['evidence_feed_excerpt', 'ai'],
       scoreReason: null,
-      message: '摘要与评分基于 RSS 来源片段，原文尚未核实；请打开原文复核。',
+      message: '该文章曾使用 RSS 来源片段生成摘要或评分；原文覆盖情况请打开原文核实。',
     },
     {
       tags: ['ai'],
