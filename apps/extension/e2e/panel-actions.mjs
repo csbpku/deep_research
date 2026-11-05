@@ -25,9 +25,11 @@ export async function configureProvider(panel, { url, model, key }) {
  * assertions below would measure the wrong scope. Choose "整篇" first.
  */
 export async function translateWholeArticle(panel) {
-  const scopePage = panel.locator('#scope-page');
-  if (await scopePage.count() && await scopePage.isVisible()) {
-    await scopePage.click();
+  const scopeChip = panel.locator('#composer-scope:not([disabled])');
+  if (await scopeChip.count() && await scopeChip.isVisible()) {
+    await scopeChip.click();
+    await panel.locator('#composer-scope-menu').waitFor({ state: 'visible' });
+    await panel.locator('#scope-page').click();
   }
   await panel.locator('#chat-translate').click();
 }

@@ -1,4 +1,10 @@
 import assert from 'node:assert/strict';
+
+// The answer scope lives in one chip now. Open its menu before choosing.
+async function openScopeMenu(page) {
+  await page.locator('#composer-scope').click();
+  await page.locator('#composer-scope-menu').waitFor({ state: 'visible' });
+}
 import { selectSettingsModel } from './settings-model-picker.mjs';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -69,8 +75,9 @@ try {
   assert.ok(await panel.locator('#stop-answer').isVisible(), 'switching the next model does not stop a running answer');
   // A real selection event used to abort this request.
   await fixture.evaluate(() => { const p = document.querySelectorAll('p')[1]; const range = document.createRange(); range.selectNodeContents(p); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); p.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); });
-  await panel.locator('#scope-selection').waitFor({ state: 'visible' });
+  await panel.locator('#composer-scope:not([disabled])').waitFor({ state: 'visible' });
   assert.ok(await panel.locator('#stop-answer').isVisible());
+  await openScopeMenu(panel);
   await panel.locator('#scope-page').click();
   await panel.locator('#chat-translate').click();
   await fixture.locator('[data-deep-research-translation-for]').first().waitFor();
@@ -82,7 +89,7 @@ try {
   await worker.evaluate(async () => { const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' }); });
   await panel.locator('#conversation-list').filter({ hasText: 'Queues protect memory' }).waitFor();
   assert.equal(await panel.locator('#answer-more').getAttribute('open'), null, 'supplementary parts start collapsed');
-  await panel.locator('#answer-more > summary').click();
+  await panel.locator('#answer-more button').first().click();
   await panel.locator('#answer-background-text').waitFor({state:'visible'});
   assert.equal(await panel.locator('#answer-background-text .reader-citation-ref').getAttribute('href'), 'http://127.0.0.1:8879/article');
   const responseType = await panel.locator('#conversation-list .assistant .conversation-message-body').first().evaluate(el => { const c = getComputedStyle(el); return [c.fontFamily,c.fontSize,c.lineHeight]; });
@@ -91,8 +98,9 @@ try {
   const sectionColors = await panel.locator('.response-section').evaluateAll(sections => sections.map(el => ({kind:el.dataset.answerSection, fill:getComputedStyle(el).backgroundColor, label:getComputedStyle(el.querySelector('.response-section-label')).color})));
   assert.equal(new Set(sectionColors.map(s => s.fill)).size, 4, 'each labeled section has a distinct semantic fill');
   assert.equal(new Set(sectionColors.map(s => s.label)).size, 4, 'each labeled section has a distinct heading color');
-  await panel.locator('#answer-more > summary').click();
-  assert.equal(await panel.locator('#answer-background-text').isVisible(), false);
+  await panel.locator('#answer-more button').first().click();
+  // The details collapse with a transition, so wait for it to settle.
+  await panel.locator('#answer-background-text').waitFor({ state: 'hidden' });
   assert.equal(await panel.locator('#answer-evidence').isVisible(), true, 'verified evidence stays visible when details are collapsed');
 
   const answerRequests = requests.filter(r => r.stream);
@@ -164,9 +172,11 @@ try {
   await panel.locator('#copy-chat-selection').click();
   assert.equal(await panel.evaluate(() => window.copiedSelection), 'Tasks should continue when a reader selects another paragraph.');
   await panel.locator('#copy-chat-selection').filter({hasText:'已复制'}).waitFor();
+  await openScopeMenu(panel);
   await panel.locator('#scope-page').click();
   assert.equal(await panel.locator('#copy-chat-selection').isVisible(), false);
   assert.equal(await panel.locator('#chat-selection-card').isVisible(), false);
+  await openScopeMenu(panel);
   await panel.locator('#scope-selection').click();
   await panel.locator('#copy-chat-selection').waitFor({state:'visible'});
   await panel.locator('#question-input').click();
@@ -218,10 +228,11 @@ try {
     // The source preview and its actions need space in selection mode.
     assert.ok(measured.transcript.height >= viewport.height * .4, JSON.stringify(measured));
     assert.ok(measured.composer.bottom <= viewport.height, JSON.stringify(measured));
-    assert.equal(measured.header.height, 48);
+    // A short viewport collapses the header to its compact height.
+    assert.equal(measured.header.height, viewport.height <= 560 ? 48 : 52);
     measurements.push(measured);
     assert.equal(await panel.locator('#chat-tools-menu').count(), 0);
-    assert.deepEqual(await panel.locator('.composer-tools > button').allTextContents(), ['总结', '翻译']);
+    assert.deepEqual(await panel.locator('.composer-tools > button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['总结', '翻译', '翻译目标语言：简体中文', '联网补充']);
     await panel.screenshot({path: root+`/chat-${viewport.width}.png`});
   }
   await panel.setViewportSize({width:380,height:860});
@@ -237,7 +248,7 @@ try {
   await record.getByRole('button', {name:'查看对话',exact:true}).click();
   await panel.locator('#history-detail').filter({hasText:'Queues protect memory'}).waitFor();
   assert.equal(await panel.locator('#history-detail-more').getAttribute('open'), null);
-  await panel.locator('#history-detail-more > summary').click();
+  await panel.locator('#history-detail-more button').first().click();
   const historyType = await panel.locator('.history-detail-message-body').first().evaluate(el => { const c = getComputedStyle(el); return [c.fontFamily,c.fontSize,c.lineHeight]; });
   assert.deepEqual(historyType, responseType, 'history and live response use the same typography');
   const historySectionColors = await panel.locator('.response-section').evaluateAll(sections => sections.map(el => ({kind:el.dataset.answerSection, fill:getComputedStyle(el).backgroundColor, label:getComputedStyle(el.querySelector('.response-section-label')).color})));
@@ -279,7 +290,7 @@ try {
   await panel.setViewportSize({width:380,height:1100});
   await panel.locator('#question-input').click();
   await panel.screenshot({path:root+'/chat-structure.png'});
-  await panel.locator('#answer-more > summary').click();
+  await panel.locator('#answer-more button').first().click();
   await panel.screenshot({path:root+'/chat-structure-expanded.png'});
   console.log(JSON.stringify({ pass: true, inferenceCallsOnSave: 0, answerCallsAfterSelectionTranslationAndPanelReopen: answerRequests.length, paragraphToggle: true, deferredSelectionAction: true, explicitStop: true, artifact: root+'/chat.png' }));
 } catch (error) { for (const page of context.pages()) if (page.url().includes('sidepanel')) { await page.screenshot({ path: root+'/failure.png' }); console.error('Screenshot:', root+'/failure.png'); console.error(error); if (await page.locator('#notice').count()) console.error((await page.locator('#notice').textContent()) || ''); } throw error; } finally { await context.close(); server.close(); }

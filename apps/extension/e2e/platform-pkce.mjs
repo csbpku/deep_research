@@ -4,6 +4,12 @@ import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
 import { join } from 'node:path';
+
+// The answer scope lives in one chip now. Open its menu before choosing.
+async function openScopeMenu(page) {
+  await page.locator('#composer-scope').click();
+  await page.locator('#composer-scope-menu').waitFor({ state: 'visible' });
+}
 import { tempDir, tempPath } from './temp-paths.mjs';
 
 // Platform mode is optional: the same package remains usable as an independent
@@ -428,7 +434,7 @@ try {
     selection?.addRange(range);
     node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
-  await panel.locator('#scope-selection').waitFor({ state: 'visible', timeout: 10_000 });
+  await panel.locator('#composer-scope:not([disabled])').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#chat-tools-menu > summary').click();
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#explain-selection').click();
@@ -469,7 +475,7 @@ try {
     null,
     { timeout: 10_000 },
   );
-  await panel.locator('#scope-selection').waitFor({ state: 'visible', timeout: 10_000 });
+  await panel.locator('#composer-scope:not([disabled])').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#chat-tools-menu > summary').click();
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
   const saveActionState = await panel.locator('#save-selection').evaluate((node) => {

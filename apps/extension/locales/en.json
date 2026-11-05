@@ -94,6 +94,7 @@
   "调整输入区高度": "Resize message input",
   "上下拖动调整输入区；方向键也可调整": "Drag vertically or use arrow keys to resize",
   "回答依据": "Answer context",
+  "回答依据：{0}": "Answer context: {0}",
   "基于": "Use",
   "整篇": "Article",
   "选段": "Selection",

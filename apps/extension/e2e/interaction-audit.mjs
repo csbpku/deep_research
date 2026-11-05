@@ -1,4 +1,10 @@
 import assert from 'node:assert/strict';
+
+// The answer scope lives in one chip now. Open its menu before choosing.
+async function openScopeMenu(page) {
+  await page.locator('#composer-scope').click();
+  await page.locator('#composer-scope-menu').waitFor({ state: 'visible' });
+}
 import { selectSettingsModel } from './settings-model-picker.mjs';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -262,11 +268,16 @@ try {
   for (const width of [320, 360, 705]) {
     await page.setViewportSize({ width, height: 720 });
     const geometry = await page.locator('#composer-model').evaluate(el => {
-      const row = el.closest('.composer-context-row').getBoundingClientRect(); const button = el.getBoundingClientRect();
+      const button = el.getBoundingClientRect();
       const label = el.querySelector('#composer-model-label').getBoundingClientRect(); const icon = el.querySelector('svg').getBoundingClientRect();
-      return { iconSize: icon.width, centered: Math.abs(label.y + label.height / 2 - icon.y - icon.height / 2), rightGap: row.right - button.right, fits: icon.right <= button.right && icon.x >= label.right };
+      const submit = document.querySelector('#send-question')?.getBoundingClientRect();
+      // Below 480px the model and the send button sit on separate lines, so
+      // only compare them when they actually share a row.
+      const sameRow = Boolean(submit) && Math.abs(submit.top - button.top) < 40;
+      return { iconSize: icon.width, centered: Math.abs(label.y + label.height / 2 - icon.y - icon.height / 2), labelWidth: label.width, sameRow, gapToSubmit: sameRow ? submit.left - button.right : 0, fits: icon.right <= button.right && icon.x >= label.right };
     });
-    assert.equal(geometry.iconSize, 20); assert.ok(geometry.centered < 1 && geometry.fits && Math.abs(geometry.rightGap) < 1, 'model selector stays at the right with a centered, reserved arrow');
+    assert.equal(geometry.iconSize, 20);
+    assert.ok(geometry.centered < 1 && geometry.fits && geometry.labelWidth >= 60 && (!geometry.sameRow || (geometry.gapToSubmit >= 0 && geometry.gapToSubmit < 12)), 'model selector keeps a centred, reserved arrow, a readable name and a clear gap before the send button');
   }
   await page.setViewportSize({ width: 360, height: 720 });
   await page.locator('#composer-model').click();
@@ -286,7 +297,7 @@ try {
   assert.equal(await page.locator('#composer-model svg').count(), 1, 'model refreshes keep the SVG indicator');
   checks.push('模型选择箭头在320–705px居中且保留独立空间，菜单展开/收起后仍保留');
   const menuAction = async selector => {
-    if (selector === '#chat-translate') await page.locator('#scope-page').click();
+    if (selector === '#chat-translate') { await openScopeMenu(page); await page.locator('#scope-page').click(); }
     await page.locator(selector).click();
   };
   const selection = async () => {
@@ -295,7 +306,7 @@ try {
       const s = getSelection(); s.removeAllRanges(); s.addRange(range);
       el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     });
-    await page.locator('#scope-selection').waitFor({ state: 'visible' });
+    await page.locator('#composer-scope:not([disabled])').waitFor({ state: 'visible' });
   };
   const data = () => worker.evaluate(async () => {
     const db = await new Promise((resolve, reject) => {
@@ -353,7 +364,7 @@ try {
   assert.notEqual(quoteStyle.color, 'rgb(255, 255, 255)', '选段预览文字应使用可读的深色');
   assert.notEqual(quoteStyle.background, 'rgb(49, 89, 201)', '选段预览不应使用遮字的纯蓝底色');
   assert.equal(await page.locator('#chat-tools-menu').count(), 0, '预设问题不再包装为工具菜单');
-  assert.deepEqual(await page.locator('.composer-tools > button').allTextContents(), ['总结', '翻译', '中文']);
+  assert.deepEqual(await page.locator('.composer-tools > button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['总结', '翻译', '翻译目标语言：简体中文', '联网补充']);
   for (const selector of ['#copy-chat-selection', '#save-selection']) {
     assert.equal(await page.locator(selector).isVisible(), true, '选段操作应直接出现在原文预览旁');
   }
@@ -373,7 +384,7 @@ try {
   assert.equal(await page.locator('#send-question').isVisible(), false, '生成期间同位置显示停止按钮');
   assert.equal(await page.locator('#stop-answer svg').count(), 1);
   const stopBox = await page.locator('#stop-answer').boundingBox();
-  assert.equal(stopBox.width, 40); assert.equal(stopBox.height, 40);
+  assert.equal(stopBox.width, 34); assert.equal(stopBox.height, 34);
   assert.equal(await page.locator('#pending-turn').isVisible(), true, '首段回答流出时，处理中对话行应保持可见');
   assert.equal(await page.locator('#answer-progress-text').innerText(), '正在生成回答…');
   await page.screenshot({ path: `${artifacts}/selection-streaming-answer.png` });
@@ -471,6 +482,7 @@ try {
   checks.push('无效导入反馈、重复选文件、导出、取消清空和导入恢复');
 
   await page.locator('#close-settings').click();
+  await openScopeMenu(page);
   await page.locator('#scope-page').click();
   const translationsBeforePause = translationRequestCount();
   const releasePausedTranslation = holdTranslationResponses();
@@ -688,7 +700,7 @@ try {
   await checkModeCardLayout('en');
   await page.screenshot({ path: `${artifacts}/settings-en-360.png` });
   await page.locator('#close-settings').click();
-  assert.deepEqual(await page.locator('.composer-tools > button').allTextContents(), ['Summarize', 'Translate', 'EN']);
+  assert.deepEqual(await page.locator('.composer-tools > button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Summarize', 'Translate', 'Translate to: English', 'Web search']);
   assert.equal(await page.locator('#conversation-list > article').count(), 6, '切换界面语言不改变历史内容');
   await page.setViewportSize({ width: 320, height: 720 });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);

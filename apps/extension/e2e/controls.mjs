@@ -4,6 +4,12 @@ import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { tempDir, tempPath } from './temp-paths.mjs';
 
+// The answer scope lives in one chip now. Open its menu before choosing.
+async function openScopeMenu(page) {
+  await page.locator('#composer-scope').click();
+  await page.locator('#composer-scope-menu').waitFor({ state: 'visible' });
+}
+
 const extensionPath = `${await mkdtemp(tempPath('reader-controls-extension-'))}/extension`;
 await cp(new URL('../.output/chrome-mv3', import.meta.url), extensionPath, { recursive: true });
 const manifestPath = `${extensionPath}/manifest.json`;
@@ -122,8 +128,11 @@ try {
   // scope switcher only renders when a selection or image alternative
   // exists, so it stays untouched when the page scope is already active.
   const translateWholePage = async () => {
-    const scopePage = panel.locator('#scope-page');
-    if (await scopePage.isVisible()) await scopePage.click();
+    const scopeChip = panel.locator('#composer-scope:not([disabled])');
+    if (await scopeChip.isVisible()) {
+      await openScopeMenu(panel);
+      await panel.locator('#scope-page').click();
+    }
     await panel.locator('#chat-translate').click();
   };
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');

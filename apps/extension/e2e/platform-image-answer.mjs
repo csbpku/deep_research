@@ -1,4 +1,10 @@
 import assert from 'node:assert/strict';
+
+// The answer scope lives in one chip now. Open its menu before choosing.
+async function openScopeMenu(page) {
+  await page.locator('#composer-scope').click();
+  await page.locator('#composer-scope-menu').waitFor({ state: 'visible' });
+}
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
@@ -58,7 +64,9 @@ try {
   await panel.locator('#page-view').waitFor({ state: 'visible' });
   await worker.evaluate(({ tabId, src }) => chrome.tabs.sendMessage(tabId, { type: 'deep-research:select-image', src }), { tabId, src: `${origin}/diagram.svg` });
   await panel.locator('#image-section').waitFor({ state: 'visible' });
+  await openScopeMenu(panel);
   await panel.locator('#scope-page').click();
+  await openScopeMenu(panel);
   await panel.locator('#scope-image').click();
   await panel.locator('#scope-image').focus();
   assert.equal(await panel.locator('#discussion-scope-options button[aria-pressed="true"]').count(), 1, 'only one source scope remains selected after focus');
@@ -79,7 +87,8 @@ try {
   await panel.setViewportSize({ width: 320, height: 480 });
   await panel.locator('#composer-size-toggle').click();
   const composerGeometry = await panel.locator('#send-question').evaluate(el => el.getBoundingClientRect().toJSON());
-  assert.ok(composerGeometry.bottom <= 480, 'image context plus expanded input keeps Send inside a short viewport');
+  const composerBox = await panel.locator('#persistent-composer').evaluate(el => ({ top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom, height: el.getBoundingClientRect().height, scrollHeight: el.scrollHeight, maxHeight: getComputedStyle(el).maxHeight, children: [...el.children].map(child => ({ cls: (child.className || child.id || '').toString().slice(0, 26), height: Math.round(child.getBoundingClientRect().height), shrink: getComputedStyle(child).flexShrink })) }));
+  assert.ok(composerGeometry.bottom <= 480, `image context plus expanded input keeps Send inside a short viewport: ${JSON.stringify({ composerGeometry, composerBox })}`);
   await panel.setViewportSize({ width: 420, height: 780 });
   const messages = await panel.locator('#conversation-list > article').count();
   await panel.locator('#clear-image').click();

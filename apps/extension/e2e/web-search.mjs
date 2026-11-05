@@ -126,7 +126,7 @@ try {
   const mui = await toggle.getAttribute('class'); assert.match(mui, /MuiButton/u);
   await panel.evaluate(() => chrome.storage.local.set({ readerUiLanguage: 'zh-CN' }));
   await panel.reload(); await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true'); await readArticle();
-  assert.match(await toggle.innerText(), /联网补充/u);
+  assert.equal(await toggle.getAttribute('aria-label'), '联网补充');
   await panel.locator('.answer-web-sources').last().scrollIntoViewIfNeeded();
   await panel.screenshot({ path: `${root}/web-search-zh.png`, fullPage: true });
   await panel.evaluate(async origin => {

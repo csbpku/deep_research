@@ -69,28 +69,40 @@ h1, h2, h3, p { margin:0 }
 .image-context-card .image-preview { margin-top:0 }
 .image-context-card .image-preview-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 @media (max-height: 600px) { .chat-selection-card { padding-block:var(--reader-space-1); margin-block:0px var(--reader-space-1) } .chat-selection-card:not(.expanded) blockquote { -webkit-line-clamp:1; max-height:18px } }
-.chat-composer { position:relative; display:flex; flex-direction:column; flex:none; max-height:calc(100% - 60px - var(--reader-space-3)); z-index:2; margin:0 var(--reader-space-3) var(--reader-space-3); padding:var(--reader-space-2) var(--reader-space-4) var(--reader-space-2) }
+.chat-composer { position:relative; display:flex; flex-direction:column; flex:none; max-height:calc(100% - 60px - var(--reader-space-3)); z-index:2; margin:0 var(--reader-space-3) var(--reader-space-3); padding:var(--reader-space-2) var(--reader-space-3) var(--reader-space-2) }
 .chat-composer > .chat-selection-card, .chat-composer > .image-context-card { flex:0 1 auto; min-height:32px; overflow:auto; overscroll-behavior:contain }
-.chat-composer > .composer-context-row, .chat-composer > .reader-composer-field, .chat-composer > .chat-composer-footer { flex-shrink:0 }
+/* Only the context cards give way when the panel is short. The input and the
+   toolbar keep their height, so Send never leaves the viewport. */
+.chat-composer > .composer-input-row, .chat-composer > .chat-composer-footer, .chat-composer > .composer-status { flex-shrink:0 }
 .composer-resize { position:absolute; top:-14px; left:24px; right:0; height:24px; display:flex; justify-content:center; align-items:center; cursor:ns-resize; touch-action:none }
 .composer-resize span { width:40px; height:4px }
 .reader-composer-field textarea { overflow-y:auto !important; resize:none }
-.composer-context-row { display:flex; align-items:center; min-height:22px; gap:8px; margin-bottom:var(--reader-space-1) }
-.composer-context-status { display:none }
 .composer-question-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%) }
-.composer-model { margin-left:auto; min-width:0; max-width:65% }
+/* The input keeps a narrow gutter for the expand control instead of letting
+   an absolutely positioned button cover the first line of typed text. */
+.composer-input-row { display:flex; align-items:flex-start; gap:var(--reader-space-1) }
+.composer-input-row > .reader-composer-field { flex:1 1 auto; width:auto; min-width:0 }
+.composer-size-toggle { flex:none; width:32px; height:32px; min-height:32px; margin-top:var(--reader-space-1) }
+.composer-status { display:block; margin-top:var(--reader-space-1) }
+.composer-status:empty { display:none }
+/* One toolbar row: a scope chip, a dense strip of tool glyphs, the model and
+   the send button. `order` lets a narrow panel move the model onto the first
+   line without splitting the tools across two rows. */
+.chat-composer-footer { display:flex; flex-wrap:wrap; align-items:center; gap:var(--reader-space-1); margin-top:var(--reader-space-1); min-height:34px }
+.composer-scope-wrap { position:relative; order:1; flex:none; display:flex }
+.composer-tools { order:2; flex:none; display:flex; align-items:center; gap:2px }
+.composer-model-wrap { order:3; position:relative; display:flex; flex:0 1 auto; min-width:0; margin-left:auto }
+.composer-submit { order:4; flex:none }
+.composer-break { display:none }
+.chat-composer-footer .composer-model-wrap .composer-model { margin-left:0; min-width:0 }
 .composer-model:disabled { cursor:default }
-.composer-model-menu { position:absolute; right:0; bottom:calc(100% + 8px); width:min(320px,100%); max-height:min(58dvh,calc(100dvh - 180px)); overflow:auto; padding:var(--reader-space-3); z-index:11 }
+.composer-model-menu { position:absolute; right:0; bottom:calc(100% + 8px); width:min(280px, calc(100vw - 32px)); max-height:min(58dvh,calc(100dvh - 180px)); overflow:auto; padding:var(--reader-space-3); z-index:11 }
 .composer-model-menu > label { display:block; margin-bottom:var(--reader-space-2) }
 .composer-model-actions { display:flex; justify-content:space-between; margin-top:var(--reader-space-2); padding-top:var(--reader-space-2) }
 #composer-model-status { margin-top:var(--reader-space-2) }
-.composer-context-row:has(.discussion-scope-options:not(.hidden)) .composer-scope-label { display:none }
-.discussion-scope-options { display:flex; flex:none; align-items:center; gap:4px }
-.discussion-scope-label { white-space:nowrap }
-.chat-composer-footer { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:var(--reader-space-1) }
-.composer-tools { display:flex; flex-basis:100%; min-width:0; align-items:center; gap:0px; margin-right:auto }
-#answer-task-status { order:5; width:100% }
-#answer-task-status:empty { display:none }
+.composer-scope-menu { position:absolute; left:0; bottom:calc(100% + 8px); min-width:112px; padding:var(--reader-space-1); z-index:11 }
+.discussion-scope-options { display:flex; flex-direction:column; align-items:stretch; gap:2px }
+.composer-scope-menu .scope-option { justify-content:flex-start; width:100% }
 .translation-task { margin:var(--reader-space-2) 0 var(--reader-space-2); padding:var(--reader-space-2) var(--reader-space-2) }
 .translation-task-heading { display:flex; flex-wrap:wrap; align-items:center; gap:0px 8px }
 #translation-summary-text { flex:1 1 120px }
@@ -186,12 +198,17 @@ h1, h2, h3, p { margin:0 }
 .row-main { flex:1; min-width:0 }
 .row-meta { margin-top:var(--reader-space-1) }
 .footer { display:none }
-/* Keep the model readable when localized scope labels fill a narrow panel. */
-@media (max-width: 399px) {
-  .composer-context-row:has(.discussion-scope-options:not(.hidden)) { display:grid; grid-template-columns:var(--reader-space-8) minmax(0,1fr); gap:var(--reader-space-1) var(--reader-space-2) }
-  .composer-context-row:has(.discussion-scope-options:not(.hidden)) #composer-size-toggle { grid-column:1; grid-row:1; width:var(--reader-space-8); height:var(--reader-space-8); min-height:var(--reader-space-8) }
-  .composer-context-row:has(.discussion-scope-options:not(.hidden)) .composer-model { grid-column:2; grid-row:1; justify-self:end; max-width:100% }
-  .composer-context-row:has(.discussion-scope-options:not(.hidden)) .discussion-scope-options { grid-column:1 / -1; grid-row:2; flex-wrap:wrap }
+/* A narrow panel cannot hold the scope chip, the tool strip, the model name
+   and the send button on one line without truncating the model. The model
+   moves up beside the scope chip and the tools keep their own line, so the
+   tool strip is never split in half. */
+@media (max-width: 479px) {
+  .composer-model-wrap { order:2 }
+  .composer-break { display:block; order:3; flex-basis:100%; height:0; margin:0 }
+  /* The tool strip grows so the send button settles at the right edge.
+     A margin on the button itself would not survive MUI's button reset. */
+  .composer-tools { order:4; flex:1 1 auto }
+  .composer-submit { order:5 }
   .selection-preview-actions { gap:var(--reader-space-1) }
 }
 @media (min-width: 600px) { .chat-transcript { padding-inline:var(--reader-space-6) } .chat-composer { margin-inline:var(--reader-space-5) } .setting-panel { padding-inline:var(--reader-space-6) } }
