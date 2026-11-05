@@ -76,6 +76,7 @@ import { AppDialog } from '@/components/material/AppDialog';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import { cleanResearchText } from '@/lib/research-markdown-cleanup';
 import { TopicProposalsTab } from '@/components/admin/TopicProposalsTab';
+import { RadarSourcePresets } from '@/components/admin/RadarSourcePresets';
 import { AdminTopicActions } from '@/components/topics/AdminTopicActions';
 import LlmUsageConsole from './llm-usage/LlmUsageConsole';
 import { summarizeAdminBulkResults } from './admin-bulk-results';
@@ -1479,6 +1480,7 @@ function RadarGovernanceTab() {
         title="雷达治理"
         description="查看不推荐、待评分和其他未进入雷达展示的内容，定位来源级失败，并把有价值的内容提升回雷达。"
       />
+      <RadarSourcePresets />
 
       <Box component="div" sx={{"display":"grid","gridTemplateColumns":"repeat(2, minmax(0, 1fr))","gap":1,"@media (min-width:1024px)":{"gridTemplateColumns":"repeat(5, minmax(0, 1fr))"}}}>
         <GovernanceMetric
