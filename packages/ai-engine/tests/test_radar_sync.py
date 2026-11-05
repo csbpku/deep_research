@@ -2231,3 +2231,47 @@ def test_quota_brief_failure_is_never_retried_even_with_rate_limit_wording() -> 
 
     brief = SimpleNamespace(error_code="AI_QUOTA_EXCEEDED", error_message="429 rate limit exceeded")
     assert _is_retryable_brief_failure(brief=brief) is False
+
+
+@pytest.mark.parametrize(
+    ("source_type", "url", "expected_kind", "expect_tag"),
+    [
+        ("devto", "https://dev.to/author/post", "engineering", True),
+        ("rss", "https://example.com/essay", None, False),
+    ],
+)
+async def test_typed_brief_kind_reaches_brief_and_is_tagged_only_when_persisted(
+    source_type: str, url: str, expected_kind: str | None, expect_tag: bool,
+) -> None:
+    pool = _Pool([_source(source_type=source_type)])
+    seen: list[dict[str, Any]] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate(url)]
+
+    async def brief(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        seen.append(item)
+        return type("Brief", (), {
+            "status": AI_JOB_STATUS["SUCCEEDED"],
+            "output_text": "文章解释了工程约束、关键机制和取舍，并说明了适用场景与局限。" * 3,
+            "cost": type("Cost", (), {
+                "token_input_total": 1, "token_output_total": 1, "cost_cents": 0,
+            })(),
+        })()
+
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={source_type: fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=brief,
+    )
+
+    assert result.runs[0].total_new == 1
+    assert seen[0]["brief_kind"] == expected_kind
+    summary_params = [
+        params for sql, params in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in sql
+    ]
+    assert len(summary_params) == 1
+    assert ("brief_typed_v1" in str(summary_params[0])) is expect_tag

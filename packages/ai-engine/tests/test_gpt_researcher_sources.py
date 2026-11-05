@@ -1952,3 +1952,77 @@ def test_strip_overlap_drops_repeated_tail_sentence() -> None:
     previous = "最后一句话"
     chunk = "最后一句话\n\n## 结论\n\n完整。"
     assert _strip_overlap(previous, chunk) == "## 结论\n\n完整。"
+
+
+@pytest.mark.parametrize("brief_kind", [None, "engineering", "paper", "project", "change"])
+async def test_summary_brief_focus_is_typed_only_when_kind_is_known(
+    monkeypatch: pytest.MonkeyPatch, brief_kind: str | None,
+) -> None:
+    from ai_engine.radar.brief_kind import TYPED_BRIEF_QUESTIONS
+
+    seen: dict[str, object] = {}
+
+    async def fake_generate_text(**kwargs: object) -> SimpleNamespace:
+        seen.update(kwargs)
+        return SimpleNamespace(text="这是基于来源正文生成的有效雷达摘要。" * 12, input_tokens=1, output_tokens=1)
+
+    monkeypatch.setattr("ai_engine.llm.client.generate_text", fake_generate_text)
+    request = ResearchRequest(
+        job_id=f"radar-brief-kind-{brief_kind}",
+        request_id=f"radar-brief-kind-{brief_kind}",
+        topic="类型化导读",
+        context="正文内容。" * 40,
+        report_type="summary_brief",
+        source_policy=SOURCE_POLICY["ONLY_USER_SOURCES"],  # type: ignore[arg-type]
+        source_refs=({"type": "url", "value": "https://example.com/post"},),
+        brief_kind=brief_kind,
+    )
+    job = _Job(request)
+    adapter = object.__new__(GptResearcherAdapter)
+    adapter._brief_llm = "openai:test"
+
+    await adapter._run_brief(job)
+
+    prompt = str(seen["user_prompt"])
+    assert "4-7 句 AI 摘要" in prompt
+    assert "250-500 个中文字符" in prompt
+    if brief_kind is None:
+        assert "优先覆盖文章要解决的问题" in prompt
+        assert "优先回答：" not in prompt
+    else:
+        assert "优先覆盖文章要解决的问题" not in prompt
+        assert "优先回答：" + TYPED_BRIEF_QUESTIONS[brief_kind][0] in prompt
+        assert "不使用标题、列表或 Markdown" in prompt
+
+
+async def test_map_step_carries_typed_focus_questions() -> None:
+    from ai_engine.radar.brief_kind import TYPED_BRIEF_QUESTIONS
+
+    prompts: list[str] = []
+
+    async def call_llm(prompt: str, **kwargs: object) -> SimpleNamespace:
+        prompts.append(prompt)
+        return SimpleNamespace(text='{"summary":"分块要点","key_facts":[],"limitations":[],"quotes":[]}')
+
+    chunks = [SimpleNamespace(index=1, section="第一节", text="正文片段一")]
+    adapter = object.__new__(GptResearcherAdapter)
+    questions = TYPED_BRIEF_QUESTIONS["paper"]
+    await adapter._map_brief_chunks(
+        call_llm,
+        topic="论文",
+        chunks=chunks,
+        untrusted_fragment=lambda value: str(value),
+        focus_questions=questions,
+    )
+    assert len(prompts) == 1
+    assert "重点关注这些问题" in prompts[0]
+    assert questions[0] in prompts[0]
+
+    prompts.clear()
+    await adapter._map_brief_chunks(
+        call_llm,
+        topic="论文",
+        chunks=chunks,
+        untrusted_fragment=lambda value: str(value),
+    )
+    assert "重点关注这些问题" not in prompts[0]

@@ -32,6 +32,7 @@ from ai_engine.radar.diagnostic_policy import (
     publication_identity,
 )
 from ai_engine.radar.noise_policy import confirmed_noise
+from ai_engine.radar.brief_kind import TYPED_BRIEF_TAG, radar_brief_kind
 from ai_engine.radar.brief_quality import is_unavailable_brief
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.errors import ERROR_CODES
@@ -2249,10 +2250,17 @@ async def _run_source(
                             body=normalized.snippet,
                         )
                         return
+                    brief_kind = radar_brief_kind(
+                        scoring_source_type,
+                        persisted_candidate_url,
+                        github_repo_candidate=github_repo_candidate,
+                    )
+                    brief_generated = False
                     item = {
                         "title": normalized.title,
                         "snippet": brief_context,
                         "context_is_source_excerpt": metadata_only_fallback,
+                        "brief_kind": brief_kind,
                     }
                     # 低质量 fallback（snippet 路径）已直接用 snippet 作 interpretation，跳过 LLM
                     if not low_quality:
@@ -2282,6 +2290,7 @@ async def _run_source(
                                     brief_message,
                                 )
                             interpretation = _strip_reasoning_markup(brief.output_text)
+                            brief_generated = True
                             if len(interpretation) < MIN_JUDGEMENT_OUTPUT_CHARS:
                                 logger.warning(
                                     "ai-engine.radar.brief_output_short",
@@ -2444,6 +2453,9 @@ async def _run_source(
                         extra_tags_list.append("external_reading")
                     if feed_excerpt_fallback:
                         extra_tags_list.append("evidence_feed_excerpt")
+                    if brief_kind is not None and brief_generated and interpretation:
+                        # Records which prompt shape produced the persisted 导读.
+                        extra_tags_list.append(TYPED_BRIEF_TAG)
                     if metadata_only_fallback and not browser_reading_mode_enabled():
                         extra_tags_list.append("content_pending")
                         if source.source_type in {"github", "github_trending"}:

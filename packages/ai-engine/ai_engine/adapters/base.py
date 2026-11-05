@@ -61,6 +61,9 @@ class ResearchRequest:
     context_max_chars: int | None = None
     # The caller supplied only bounded source evidence, not verified full text.
     context_is_source_excerpt: bool = False
+    # Publication shape for radar brief prompting (see ai_engine.radar.brief_kind).
+    # None keeps the generic brief prompt unchanged.
+    brief_kind: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

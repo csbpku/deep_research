@@ -156,6 +156,7 @@ describe('RadarExternalReadingLanding', () => {
 
   it('does not show the external-reading implementation tag to users', () => {
     expect(cleanRadarTags(['evidence_feed_excerpt', 'external_reading', 'tier_deep_read', 'ai'])).toEqual(['ai']);
+    expect(cleanRadarTags(['brief_typed_v1', 'ai'])).toEqual(['ai']);
   });
 
   it('derives a Zread URL only for a GitHub repository root', () => {
