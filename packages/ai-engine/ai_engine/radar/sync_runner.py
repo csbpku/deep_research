@@ -36,6 +36,7 @@ from ai_engine.radar.brief_quality import is_unavailable_brief
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.errors import ERROR_CODES
 from ai_engine.contracts.states import AI_JOB_STATUS
+from ai_engine.llm.client import is_quota_exhausted_error
 from ai_engine.fetcher.safe_fetch import (
     FetchedDocument,
     SafeFetchError,
@@ -230,6 +231,7 @@ class SourceRunResult:
 class RadarSyncResult:
     batch_id: str
     runs: tuple[SourceRunResult, ...]
+    quota_stopped: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -240,6 +242,10 @@ class RadarPipelineResult:
     enriched_count: int
     enrichment_elapsed_ms: int
     enrichment_error: str | None = None
+
+    @property
+    def quota_stopped(self) -> bool:
+        return self.sync.quota_stopped
 
 
 def _host(value: str) -> str:
@@ -1591,6 +1597,38 @@ def _is_rate_limited_brief(brief: Any | None = None, exc: BaseException | None =
     )
 
 
+_QUOTA_EXHAUSTED_CODE = "AI_QUOTA_EXCEEDED"
+_MODEL_QUOTA_STOPPED_CODE = "MODEL_QUOTA_STOPPED"
+_MODEL_QUOTA_STOPPED_MESSAGE = "模型额度已耗尽，本轮停止后续模型调用；该条目未处理，下一轮自动重试。"
+
+
+class _ModelQuotaCircuit:
+    """Run-wide stop switch for account-level model quota exhaustion.
+
+    A transient rate limit is retried by the LLM client. An exhausted allowance
+    will not recover inside the run, so once tripped every remaining candidate
+    is deferred instead of spending more failing calls.
+    """
+
+    def __init__(self) -> None:
+        self.tripped = False
+
+    def trip(self) -> None:
+        self.tripped = True
+
+
+def _is_quota_exhausted_brief(
+    *,
+    brief: Any | None = None,
+    exc: BaseException | None = None,
+) -> bool:
+    if exc is not None:
+        if getattr(exc, "error_code", None) == _QUOTA_EXHAUSTED_CODE:
+            return True
+        return is_quota_exhausted_error(exc)
+    return getattr(brief, "error_code", None) == _QUOTA_EXHAUSTED_CODE
+
+
 async def _generate_brief_with_retry(
     generate_brief: BriefGenerator,
     adapter: ResearchEngineAdapter,
@@ -1655,6 +1693,8 @@ def _is_retryable_brief_failure(
     brief: Any | None = None,
     exc: BaseException | None = None,
 ) -> bool:
+    if _is_quota_exhausted_brief(brief=brief, exc=exc):
+        return False
     text = str(exc) if exc is not None else " ".join(
         str(getattr(brief, key, "") or "")
         for key in ("error_code", "error_message")
@@ -1831,7 +1871,9 @@ async def _run_source(
     monitor: Any | None = None,
     embedding_scorer: EmbeddingScorerFn | None = None,
     candidate_concurrency: int | None = None,
+    quota_circuit: _ModelQuotaCircuit | None = None,
 ) -> SourceRunResult:
+    quota_circuit = quota_circuit or _ModelQuotaCircuit()
     run_id = await _create_run(pool, source, triggered_by)
     started = time.monotonic()
     total_fetched = total_new = total_skipped = total_failed = 0
@@ -1895,7 +1937,11 @@ async def _run_source(
                         # old candidate that still has a pending enrichment
                         # state must not cause the new sync to fetch its body
                         # as a side effect of merely rediscovering it.
-                        if not browser_reading_mode_enabled() and _needs_content_retry(existing):
+                        if (
+                            not browser_reading_mode_enabled()
+                            and _needs_content_retry(existing)
+                            and not quota_circuit.tripped
+                        ):
                             await _retry_existing_summary_content(
                                 pool,
                                 summary_id=existing_id,
@@ -2189,6 +2235,20 @@ async def _run_source(
                     scoring_source_type = (
                         "github" if github_repo_candidate else source.source_type
                     )
+                    if quota_circuit.tripped:
+                        total_skipped += 1
+                        await _record_sync_diagnostic(
+                            pool,
+                            source=source,
+                            run_id=run_id,
+                            candidate=raw_candidate,
+                            canonical_url=persisted_candidate_url,
+                            kind="filtered",
+                            reason_code=_MODEL_QUOTA_STOPPED_CODE,
+                            reason_message=_MODEL_QUOTA_STOPPED_MESSAGE,
+                            body=normalized.snippet,
+                        )
+                        return
                     item = {
                         "title": normalized.title,
                         "snippet": brief_context,
@@ -2237,6 +2297,22 @@ async def _run_source(
                                 # let the captured article become the visible body.
                                 interpretation = ""
                         except Exception as brief_exc:
+                            if _is_quota_exhausted_brief(exc=brief_exc):
+                                quota_circuit.trip()
+                            if quota_circuit.tripped:
+                                total_skipped += 1
+                                await _record_sync_diagnostic(
+                                    pool,
+                                    source=source,
+                                    run_id=run_id,
+                                    candidate=raw_candidate,
+                                    canonical_url=persisted_candidate_url,
+                                    kind="filtered",
+                                    reason_code=_MODEL_QUOTA_STOPPED_CODE,
+                                    reason_message=_MODEL_QUOTA_STOPPED_MESSAGE,
+                                    body=normalized.snippet,
+                                )
+                                return
                             if not (
                                 _can_use_snippet_fallback(source, raw_candidate)
                                 or _can_use_candidate_metadata_fallback(
@@ -2274,6 +2350,20 @@ async def _run_source(
                     # evidence, so skip the generic brief but do not skip the
                     # tier decision.
                     if distilled_scorer is not None:
+                        if quota_circuit.tripped:
+                            total_skipped += 1
+                            await _record_sync_diagnostic(
+                                pool,
+                                source=source,
+                                run_id=run_id,
+                                candidate=raw_candidate,
+                                canonical_url=persisted_candidate_url,
+                                kind="filtered",
+                                reason_code=_MODEL_QUOTA_STOPPED_CODE,
+                                reason_message=_MODEL_QUOTA_STOPPED_MESSAGE,
+                                body=normalized.snippet,
+                            )
+                            return
                         from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
                         # Use the same source-and-URL routing as later scoring
@@ -2327,6 +2417,8 @@ async def _run_source(
                         else:
                             from ai_engine.radar.distilled_scorer import default_score
                             distilled_result = default_score(profile)
+                        if getattr(distilled_result, "quota_exhausted", False):
+                            quota_circuit.trip()
                         if distilled_result.is_default:
                             fallback_count += 1
                         if monitor is not None:
@@ -2531,6 +2623,16 @@ async def _run_source(
             if total_failed
             else None
         )
+        if quota_circuit.tripped:
+            # Deferred candidates are not failures, but the run is incomplete.
+            # "partial" neither resets nor extends the source failure streak.
+            run_status = "partial"
+            first_error_code = first_error_code or _QUOTA_EXHAUSTED_CODE
+            error_message = (
+                f"{error_message}; {_MODEL_QUOTA_STOPPED_MESSAGE}"
+                if error_message
+                else _MODEL_QUOTA_STOPPED_MESSAGE
+            )
         if source_diagnostic is not None:
             diagnostic_code, diagnostic_message = source_diagnostic
             first_error_code = first_error_code or diagnostic_code
@@ -2631,6 +2733,7 @@ async def run_radar_sync(
     engine = adapter or build_adapter()
     batch_id = str(uuid.uuid4())
     source_semaphore = asyncio.Semaphore(max(1, source_concurrency or RADAR_SOURCE_CONCURRENCY))
+    quota_circuit = _ModelQuotaCircuit()
 
     async def _run_bounded(source: RadarSource) -> SourceRunResult:
         async with source_semaphore:
@@ -2647,12 +2750,17 @@ async def run_radar_sync(
                 monitor=monitor,
                 embedding_scorer=embedding_scorer,
                 candidate_concurrency=candidate_concurrency,
+                quota_circuit=quota_circuit,
             )
 
     results = await asyncio.gather(
         *(_run_bounded(source) for source in sources)
     )
-    return RadarSyncResult(batch_id=batch_id, runs=tuple(results))
+    return RadarSyncResult(
+        batch_id=batch_id,
+        runs=tuple(results),
+        quota_stopped=quota_circuit.tripped,
+    )
 
 
 async def run_radar_pipeline(
@@ -2668,6 +2776,20 @@ async def run_radar_pipeline(
     stages; they are returned for reporting and can be retried independently.
     """
     sync_result = await run_radar_sync(pool, **sync_kwargs)
+    if sync_result.quota_stopped:
+        # The model allowance is gone for this run. Retries, missing-score
+        # backfill and enrichment would only spend the same exhausted allowance;
+        # deferred candidates are picked up by the next sync.
+        logger.warning(
+            "ai-engine.radar.model_quota_stopped",
+            extra={"batch_id": sync_result.batch_id},
+        )
+        return RadarPipelineResult(
+            sync=sync_result,
+            enriched_count=0,
+            enrichment_elapsed_ms=0,
+            enrichment_error=None,
+        )
     all_runs = list(sync_result.runs)
     triggered_by = str(sync_kwargs.get("triggered_by", "cron"))
     # Retry only the sources that failed or were partial. Successful sources

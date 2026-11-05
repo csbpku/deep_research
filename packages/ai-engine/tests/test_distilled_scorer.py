@@ -1642,3 +1642,31 @@ def test_scoring_monitor_risk_rate_alert() -> None:
         ))
     alerts = monitor.evaluate()
     assert any("risk_rate" in a for a in alerts)
+
+
+class _BillingError(Exception):
+    status_code = 402
+
+
+@pytest.mark.asyncio
+async def test_scorer_fallback_flags_quota_exhaustion(monkeypatch):
+    monkeypatch.setattr(distilled_scorer, "_LLM_RETRY_DELAY", 0.0)
+
+    async def exhausted(title: str, content: str) -> str:
+        raise _BillingError("insufficient_quota")
+
+    result = await score_with_llm("title", "content", scorer=exhausted)
+    assert result.is_default is True
+    assert result.quota_exhausted is True
+
+
+@pytest.mark.asyncio
+async def test_scorer_fallback_does_not_flag_transient_failures(monkeypatch):
+    monkeypatch.setattr(distilled_scorer, "_LLM_RETRY_DELAY", 0.0)
+
+    async def flaky(title: str, content: str) -> str:
+        raise RuntimeError("upstream 503 service unavailable")
+
+    result = await score_with_llm("title", "content", scorer=flaky)
+    assert result.is_default is True
+    assert result.quota_exhausted is False

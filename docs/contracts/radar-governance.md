@@ -62,6 +62,16 @@ deterministic oversized/missing-source failures for the same publication identit
 (source, canonical URL, normalized title and publication timestamp),
 sync stops automatic attempts. A new publication identity permits new attempts.
 Noise and unassessable results retain different reasons.
+Account-level model quota exhaustion (`AI_QUOTA_EXCEEDED` from the brief path or a
+scorer fallback that reports billing exhaustion, not a transient 429) is a run-scoped
+stop. Once it trips, the remaining candidates of that run record a `filtered`
+`MODEL_QUOTA_STOPPED` diagnostic without a summary row, source retries and the missing-score
+backfill/enrichment stages are skipped, and the run is `partial` with error code
+`AI_QUOTA_EXCEEDED`. These candidates are neither confirmed noise nor deterministic
+failures, so they do not create receipts, do not count toward the three-failure stop, and
+do not change the source's consecutive-failure counter. The next sync picks them up again.
+A candidate whose brief was already paid for but whose scorer reports quota exhaustion keeps
+its existing `PENDING_SCORE` row; only the remaining work is deferred.
 The scheduled loop does not consume a source's polling window when a live-run
 guard skips work; the next tick checks again and reaps any lease that expired
 in the meantime. A stale run then records `STALE_RUN_REAPED` before normal retry.

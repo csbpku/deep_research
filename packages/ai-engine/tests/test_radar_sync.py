@@ -2093,3 +2093,141 @@ def test_finish_run_partial_without_error_does_not_touch_health() -> None:
         assert not any('"lastErrorCode"' in sql for sql in updates), updates
 
     asyncio.run(_scenario())
+
+
+class _QuotaExhaustedError(Exception):
+    """Provider billing error shaped like an exhausted account allowance."""
+
+    status_code = 402
+
+
+async def test_brief_quota_exhaustion_defers_remaining_candidates_without_retry() -> None:
+    """An exhausted allowance stops model calls for the whole run, not per candidate."""
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [
+            _candidate("https://example.com/one"),
+            _candidate("https://example.com/two"),
+        ]
+
+    calls = 0
+
+    async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise _QuotaExhaustedError("insufficient_quota: credit balance is empty")
+
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=generate,
+        candidate_concurrency=1,
+    )
+
+    run = result.runs[0]
+    assert calls == 1  # the quota error is not retried, and the next candidate never calls the model
+    assert result.quota_stopped is True
+    assert run.status == "partial"
+    assert run.error_code == "AI_QUOTA_EXCEEDED"
+    assert run.total_failed == 0
+    assert run.total_skipped == 2
+    assert pool.connection_value.canonical_urls == set()
+
+
+async def test_scorer_quota_exhaustion_keeps_row_and_defers_later_candidates() -> None:
+    """A scorer quota fallback keeps the candidate it already paid for, then stops."""
+    from dataclasses import replace
+
+    from ai_engine.ingestion.pipeline import _generate_brief
+    from ai_engine.radar.distilled_scorer import default_score
+
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [
+            _candidate("https://example.com/one"),
+            _candidate("https://example.com/two"),
+        ]
+
+    brief_calls = 0
+
+    async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        nonlocal brief_calls
+        brief_calls += 1
+        return await _generate_brief(adapter, item, canonical, **kwargs)
+
+    score_calls = 0
+
+    async def scorer(title: str, content: str, **kwargs: Any) -> Any:
+        nonlocal score_calls
+        score_calls += 1
+        return replace(default_score(kwargs["profile"]), quota_exhausted=True)
+
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=generate,
+        distilled_scorer=scorer,
+        candidate_concurrency=1,
+    )
+
+    run = result.runs[0]
+    assert score_calls == 1
+    assert brief_calls == 1  # the second candidate is deferred before any model call
+    assert result.quota_stopped is True
+    assert run.error_code == "AI_QUOTA_EXCEEDED"
+    assert run.total_skipped == 1
+    assert pool.connection_value.canonical_urls == {"https://example.com/one"}
+
+
+async def test_pipeline_does_not_retry_sources_after_quota_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_SOURCE_RETRIES", 2)
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_SOURCE_RETRY_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_RATE_LIMIT_RETRY_BACKOFF_SECONDS", 0.0)
+    pool = _Pool([_source()])
+    fetch_calls = 0
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        nonlocal fetch_calls
+        fetch_calls += 1
+        return [_candidate("https://example.com/one")]
+
+    async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        raise _QuotaExhaustedError("insufficient_quota")
+
+    result = await run_radar_pipeline(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=generate,
+        candidate_concurrency=1,
+    )
+
+    assert fetch_calls == 1  # no source retry rounds once the allowance is gone
+    assert result.quota_stopped is True
+    assert result.enriched_count == 0
+
+
+def test_rate_limit_text_is_not_treated_as_quota_exhaustion() -> None:
+    from ai_engine.radar.sync_runner import _is_quota_exhausted_brief, _is_retryable_brief_failure
+
+    rate_limited = RuntimeError("429 too many requests, rate limit reached")
+    assert _is_quota_exhausted_brief(exc=rate_limited) is False
+    assert _is_retryable_brief_failure(exc=rate_limited) is True
+
+
+def test_quota_brief_failure_is_never_retried_even_with_rate_limit_wording() -> None:
+    from types import SimpleNamespace
+
+    from ai_engine.radar.sync_runner import _is_retryable_brief_failure
+
+    brief = SimpleNamespace(error_code="AI_QUOTA_EXCEEDED", error_message="429 rate limit exceeded")
+    assert _is_retryable_brief_failure(brief=brief) is False

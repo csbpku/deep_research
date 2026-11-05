@@ -1640,6 +1640,7 @@ function RadarGovernanceTab() {
                 <SelectItem value="CONTENT_FETCH_FAILED">抓取失败</SelectItem>
                 <SelectItem value="PENDING_SCORE">待评分</SelectItem>
                 <SelectItem value="AI_ENGINE_UNAVAILABLE">AI 不可用</SelectItem>
+                <SelectItem value="MODEL_QUOTA_STOPPED">模型额度暂停</SelectItem>
               </SelectContent>
             </Select>
             <Select value={sort} onValueChange={(value) => { setSort(value); setPage(1); }}>

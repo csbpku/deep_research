@@ -795,3 +795,37 @@ async def test_generate_text_waits_before_retrying_a_retryable_failure(
     assert result.text == "ok"
     assert calls == 2
     assert attempts[1] - attempts[0] >= 0.1
+
+
+class _StatusError(Exception):
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def test_quota_exhausted_detects_billing_errors_and_cause_chains() -> None:
+    from ai_engine.llm.client import is_quota_exhausted_error
+
+    assert is_quota_exhausted_error(_StatusError("payment required", status_code=402))
+    assert is_quota_exhausted_error(_StatusError("error: insufficient_quota"))
+    assert is_quota_exhausted_error(_StatusError("Your credit balance is too low"))
+
+    wrapped = RuntimeError("brief LLM call failed")
+    try:
+        try:
+            raise _StatusError("insufficient_quota")
+        except _StatusError as inner:
+            raise wrapped from inner
+    except RuntimeError as outer:
+        assert is_quota_exhausted_error(outer)
+
+
+def test_quota_exhausted_ignores_transient_rate_limits() -> None:
+    from ai_engine.llm.client import is_quota_error, is_quota_exhausted_error
+
+    transient = _StatusError("rate limit reached, retry shortly", status_code=429)
+    # The retry classifier still treats 429 as quota-shaped for fallback routing...
+    assert is_quota_error(transient)
+    # ...but it must not stop a whole sync run.
+    assert not is_quota_exhausted_error(transient)
+    assert not is_quota_exhausted_error(_StatusError("upstream 503 service unavailable"))

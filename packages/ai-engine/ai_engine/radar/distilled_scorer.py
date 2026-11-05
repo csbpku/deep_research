@@ -265,6 +265,9 @@ class DistilledScore:
     repo_signal_bonus: float = 0.0        # bounded GitHub evidence calibration
     repo_signals: dict[str, Any] = field(default_factory=dict)
     version: str = DISTILLED_VERSION
+    # True when the fallback was caused by an exhausted provider allowance.
+    # Sync uses it to stop further model calls in the same run.
+    quota_exhausted: bool = False
 
     @property
     def risk_flags(self) -> tuple[str, ...]:
@@ -2034,7 +2037,11 @@ def compute_score(
     )
 
 
-def default_score(profile: ScoringProfile | None = None) -> DistilledScore:
+def default_score(
+    profile: ScoringProfile | None = None,
+    *,
+    quota_exhausted: bool = False,
+) -> DistilledScore:
     """Return a default (all-zero) DistilledScore for fallback/no-LLM path."""
     profile = profile or active_profile()
     return DistilledScore(
@@ -2054,6 +2061,7 @@ def default_score(profile: ScoringProfile | None = None) -> DistilledScore:
         has_risk_signal=False,
         profile_id=profile.id,
         is_default=True,
+        quota_exhausted=quota_exhausted,
     )
 
 
@@ -2176,6 +2184,7 @@ async def score_with_llm(
     # Do not wrap that complete route in another production retry loop.
     outer_retry_enabled = scorer is not None
     attempt = 0
+    quota_exhausted = False
     while True:
         try:
             async with _score_semaphore():
@@ -2247,6 +2256,9 @@ async def score_with_llm(
                 return await reject_empty_verified_score(corrected_result)
             return await reject_empty_verified_score(result)
         except Exception as exc:
+            from ai_engine.llm.client import is_quota_exhausted_error
+
+            quota_exhausted = is_quota_exhausted_error(exc)
             if raise_on_error:
                 stage = getattr(exc, "scoring_stage", None)
                 reason = (
@@ -2275,7 +2287,7 @@ async def score_with_llm(
                     reason="llm_failed_after_unified_route",
                     error_kind=error_kind,
                 )
-                return default_score(profile)
+                return default_score(profile, quota_exhausted=quota_exhausted)
             max_retries = (
                 _LLM_RATE_LIMIT_MAX_RETRIES if rate_limited else _LLM_MAX_RETRIES
             )
@@ -2312,7 +2324,7 @@ async def score_with_llm(
             )
             await asyncio.sleep(delay)
             attempt += 1
-    return default_score(profile)
+    return default_score(profile, quota_exhausted=quota_exhausted)
 
 
 # ── Monitoring helpers ────────────────────────────────────────────

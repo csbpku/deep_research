@@ -69,6 +69,7 @@ from ai_engine.llm.client import (
     _credentials,
     _parse_spec,
     is_quota_error,
+    is_quota_exhausted_error,
     is_retryable_llm_error,
     sanitize_llm_error,
 )
@@ -5346,6 +5347,13 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     job,
                     "AI_ENGINE_UNAVAILABLE",
                     "额度核验暂不可用，本轮已暂停；请稍后重试。",
+                )
+                return
+            if is_quota_exhausted_error(exc):
+                await self._mark_failed(
+                    job,
+                    "AI_QUOTA_EXCEEDED",
+                    f"brief LLM quota exhausted: {sanitize_llm_error(exc)}",
                 )
                 return
             await self._mark_failed(
