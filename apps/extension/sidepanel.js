@@ -80,7 +80,10 @@ let readingMode = 'local';
 let webSearchEnabled = false;
 function renderWebSearchToggle() {
   $('web-search-toggle')?.setAttribute('aria-pressed', String(webSearchEnabled));
-  if ($('web-search-state')) $('web-search-state').textContent = webSearchEnabled ? t('按需搜索') : /最新|现在|还在维护|替代|比较|核实|latest|current|maintain|alternative|compar|verify/iu.test($('question-input')?.value || '') ? t('可联网核实最新信息') : t('已关闭');
+  // The toggle states itself: its glyph is filled while the network search is
+  // on. A caption next to it only repeated that state, so the composer now
+  // speaks up only when the question would actually benefit from the web.
+  if ($('web-search-state')) $('web-search-state').textContent = webSearchEnabled ? '' : /最新|现在|还在维护|替代|比较|核实|latest|current|maintain|alternative|compar|verify/iu.test($('question-input')?.value || '') ? t('可联网核实最新信息') : '';
 }
 async function syncSearchPermissions() {
   if (readingMode === 'platform' || !webSearchEnabled) return;
@@ -141,6 +144,23 @@ function closeComposerModelMenu({ restoreFocus = false } = {}) {
   show($('composer-model-menu'), false);
   $('composer-model')?.setAttribute('aria-expanded', 'false');
   if (restoreFocus) $('composer-model')?.focus();
+}
+function closeComposerScopeMenu({ restoreFocus = false } = {}) {
+  show($('composer-scope-menu'), false);
+  $('composer-scope')?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) $('composer-scope')?.focus();
+}
+function visibleScopeOptions() {
+  return ['scope-page', 'scope-selection', 'scope-image'].map($).filter(button => button && !button.classList.contains('hidden'));
+}
+function toggleComposerScopeMenu() {
+  const chip = $('composer-scope');
+  if (!chip || chip.disabled) return;
+  if (!$('composer-scope-menu').classList.contains('hidden')) { closeComposerScopeMenu({ restoreFocus: true }); return; }
+  show($('composer-scope-menu'), true);
+  chip.setAttribute('aria-expanded', 'true');
+  const options = visibleScopeOptions();
+  (options.find(button => button.getAttribute('aria-checked') === 'true') || options[0])?.focus();
 }
 function renderComposerModelOptions() {
   const search = $('composer-model-search').value.trim().toLocaleLowerCase();
@@ -270,6 +290,7 @@ function setupWorkspaceLayout() {
   });
   document.addEventListener('pointerdown', event => {
     if (!$('composer-model-menu')?.contains(event.target) && !$('composer-model')?.contains(event.target)) closeComposerModelMenu();
+    if (!$('composer-scope-menu')?.contains(event.target) && !$('composer-scope')?.contains(event.target)) closeComposerScopeMenu();
   });
   $('composer-model-search')?.addEventListener('input', renderComposerModelOptions);
   $('composer-model-refresh')?.addEventListener('click', () => void refreshComposerModels());
@@ -497,8 +518,7 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
     : scope === 'selection'
       ? Boolean(pageReady && selectionReady)
       : Boolean(imageContext?.image && pageReady);
-  if ($('composer-scope-label')) $('composer-scope-label').textContent = discussionScopeLabel(scope);
-  if ($('composer-context-status')) $('composer-context-status').textContent = t("正文状态：{0}", descriptor.label);
+  if ($('composer-scope-label')) $('composer-scope-label').textContent = discussionScopeShortLabel(scope);
   const question = $('question-input');
   if (question) {
     question.placeholder = scope === 'selection'
@@ -1040,6 +1060,12 @@ function discussionScopeLabel(scope = discussionScope) {
   if (scope === 'image') return t("当前图示");
   return t("当前选段");
 }
+/** The chip is narrow, so it names the scope in the shortest honest way. */
+function discussionScopeShortLabel(scope = discussionScope) {
+  if (scope === 'image') return t("图示");
+  if (scope === 'selection') return t("选段");
+  return t("整篇");
+}
 
 function discussionLabel(scope = discussionScope, intent = discussionIntent) {
   return `${discussionScopeLabel(scope)} · ${discussionIntentLabel(intent)}`;
@@ -1064,9 +1090,21 @@ function renderDiscussionScopeControls(scope = discussionScope) {
         : imageAvailable;
     show(button, available);
     button.setAttribute('aria-pressed', String(scope === optionScope));
+    button.setAttribute('aria-checked', String(scope === optionScope));
     button.classList.toggle('active', scope === optionScope);
   });
   show($('discussion-scope-options'), hasAlternative);
+  // The chip states the current scope. With no alternative in reach it is
+  // inert, because there would be nothing to switch to.
+  const chip = $('composer-scope');
+  if (chip) {
+    const value = $('composer-scope-label');
+    if (value) value.textContent = discussionScopeShortLabel(scope);
+    chip.disabled = !hasAlternative;
+    chip.setAttribute('aria-label', t("回答依据：{0}", discussionScopeLabel(scope)));
+    chip.title = t("回答依据：{0}", discussionScopeLabel(scope));
+    if (!hasAlternative) closeComposerScopeMenu();
+  }
 }
 
 function activeDiscussionScope() {
@@ -3817,9 +3855,20 @@ async function init() {
     if (event.key === 'Escape') setChatExpanded(false);
   });
   $('open-history-inline')?.addEventListener('click', () => void openHistoryPage());
-  $('scope-page')?.addEventListener('click', () => setDiscussionScope('page'));
-  $('scope-selection')?.addEventListener('click', () => setDiscussionScope('selection'));
-  $('scope-image')?.addEventListener('click', () => setDiscussionScope('image'));
+  $('composer-scope')?.addEventListener('click', () => toggleComposerScopeMenu());
+  $('composer-scope-menu')?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); closeComposerScopeMenu({ restoreFocus: true }); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const options = visibleScopeOptions();
+    if (!options.length) return;
+    event.preventDefault();
+    const current = options.indexOf(document.activeElement);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : event.key === 'ArrowUp' ? (current <= 0 ? options.length - 1 : current - 1) : (current + 1) % options.length;
+    options[index].focus();
+  });
+  $('scope-page')?.addEventListener('click', () => { setDiscussionScope('page'); closeComposerScopeMenu(); });
+  $('scope-selection')?.addEventListener('click', () => { setDiscussionScope('selection'); closeComposerScopeMenu(); });
+  $('scope-image')?.addEventListener('click', () => { setDiscussionScope('image'); closeComposerScopeMenu(); });
   $('explain-image').addEventListener('click', () => void explainOrAsk('', 'image', 'explain'));
   $('clear-image').addEventListener('click', () => {
     imageContext = null;
