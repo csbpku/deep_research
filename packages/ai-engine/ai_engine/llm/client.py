@@ -24,6 +24,7 @@ from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 from ai_engine.text_chunking import count_text_tokens
 from ai_engine.llm.token_budget import (
     TokenBudgetError,
+    TokenBudgetExceeded,
     current_budget_task,
     estimate_call_tokens,
     release_llm_tokens,
@@ -234,18 +235,25 @@ def is_quota_error(exc: BaseException) -> bool:
     )
 
 
+# Billing-exhaustion wording only. Generic "quota exceeded" text is avoided on
+# purpose: several providers use it for transient per-minute limits, and those
+# must keep the normal retry/fallback path instead of stopping a sync run.
 _QUOTA_EXHAUSTED_MARKERS = (
     "insufficient_quota",
     "exceeded your current quota",
-    "quota exceeded",
     "credit balance",
     "insufficient balance",
-    "billing",
+    "billing_hard_limit_reached",
+    "billing_not_active",
 )
 
 
 def _is_quota_exhausted_single(exc: BaseException) -> bool:
     if getattr(exc, "status_code", None) == 402:
+        return True
+    # A local token cap cannot recover inside the same sync run either, so it
+    # stops the run the same way provider billing exhaustion does.
+    if isinstance(exc, TokenBudgetExceeded):
         return True
     detail = str(exc).lower()
     return any(marker in detail for marker in _QUOTA_EXHAUSTED_MARKERS)

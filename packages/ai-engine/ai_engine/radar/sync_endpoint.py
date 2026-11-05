@@ -382,12 +382,20 @@ async def _run_background(
                 pipeline_result, monitor = await _run()
         result = pipeline_result.sync
         alerts = monitor.evaluate()
-        _emit_run_alerts(
-            pipeline_result,
-            alerts,
-            batch_id=result.batch_id,
-            triggered_by=triggered_by,
-        )
+        try:
+            _emit_run_alerts(
+                pipeline_result,
+                alerts,
+                batch_id=result.batch_id,
+                triggered_by=triggered_by,
+            )
+        except Exception as alert_exc:
+            # Alerting must never turn a finished sync into a reported crash.
+            log.warning(
+                "ai-engine.radar.alert_emit_failed",
+                request_id=request_id,
+                error_type=type(alert_exc).__name__,
+            )
         log.info(
             "ai-engine.radar.sync_done",
             request_id=request_id,

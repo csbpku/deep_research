@@ -857,7 +857,10 @@ async def _finish_run(
                 'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
                 (run_id,),
             )
-        elif error_code and (status == "failed" or (status == "partial" and total_fetched == 0)):
+        elif error_code and (
+            status == "failed"
+            or (status == "partial" and total_fetched == 0 and error_code != "AI_QUOTA_EXCEEDED")
+        ):
             cursor = await conn.execute(
                 'UPDATE "radar_sources" SET '
                 '"consecutiveFailures" = "consecutiveFailures" + 1, '
@@ -881,9 +884,10 @@ async def _finish_run(
                 ),
             )
             pause_row = await cursor.fetchone()
-            if pause_row and int(pause_row["consecutiveFailures"]) == RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES:
-                # Only the update that reaches the threshold alerts; later
-                # failures of the same paused source stay silent.
+            if pause_row and int(pause_row["consecutiveFailures"]) >= RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES:
+                # Alerts from the threshold onward. A source re-enabled without a
+                # counter reset would otherwise never alert again; repeats are
+                # limited by the admin alert dedup window.
                 newly_paused = (str(pause_row["name"]), error_code)
         elif error_code and status == "partial":
             # Preserve the last observed candidate-level error for diagnosis,
@@ -1902,6 +1906,8 @@ async def _run_source(
     skipped_rule_noise = 0
     skipped_distilled_noise = 0
     skipped_conflict = 0
+    quota_deferred = 0
+    quota_tripped_here = False
     token_in = token_out = 0
     cost_usd = 0.0
     first_error_code: str | None = None
@@ -1937,6 +1943,7 @@ async def _run_source(
             nonlocal total_new, total_skipped, total_failed
             nonlocal fallback_count, skipped_existing, skipped_rule_noise
             nonlocal skipped_distilled_noise, skipped_conflict
+            nonlocal quota_deferred, quota_tripped_here
             nonlocal token_in, token_out, cost_usd, first_error_code
 
             feed_excerpt_fallback = False
@@ -2257,6 +2264,7 @@ async def _run_source(
                     )
                     if quota_circuit.tripped:
                         total_skipped += 1
+                        quota_deferred += 1
                         await _record_sync_diagnostic(
                             pool,
                             source=source,
@@ -2326,9 +2334,11 @@ async def _run_source(
                                 interpretation = ""
                         except Exception as brief_exc:
                             if _is_quota_exhausted_brief(exc=brief_exc):
+                                quota_tripped_here = True
                                 quota_circuit.trip()
                             if quota_circuit.tripped:
                                 total_skipped += 1
+                                quota_deferred += 1
                                 await _record_sync_diagnostic(
                                     pool,
                                     source=source,
@@ -2380,6 +2390,7 @@ async def _run_source(
                     if distilled_scorer is not None:
                         if quota_circuit.tripped:
                             total_skipped += 1
+                            quota_deferred += 1
                             await _record_sync_diagnostic(
                                 pool,
                                 source=source,
@@ -2446,6 +2457,7 @@ async def _run_source(
                             from ai_engine.radar.distilled_scorer import default_score
                             distilled_result = default_score(profile)
                         if getattr(distilled_result, "quota_exhausted", False):
+                            quota_tripped_here = True
                             quota_circuit.trip()
                         if distilled_result.is_default:
                             fallback_count += 1
@@ -2654,8 +2666,9 @@ async def _run_source(
             if total_failed
             else None
         )
-        if quota_circuit.tripped:
-            # Deferred candidates are not failures, but the run is incomplete.
+        if quota_tripped_here or quota_deferred:
+            # Only a source that deferred work or tripped the circuit is incomplete.
+            # A healthy source that merely ran while another source tripped stays clean.
             # "partial" neither resets nor extends the source failure streak.
             run_status = "partial"
             first_error_code = first_error_code or _QUOTA_EXHAUSTED_CODE

@@ -2289,7 +2289,7 @@ async def test_auto_pause_alerts_once_when_the_threshold_is_reached(
         lambda key, title, lines, **kwargs: emitted.append(key),
     )
     monkeypatch.setattr(sync_runner, "RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES", 5)
-    counts = iter([5, 6])
+    counts = iter([4, 5, 6])
 
     class _Conn:
         async def execute(self, sql: str, params: Any = None) -> _Cursor:
@@ -2312,8 +2312,45 @@ async def test_auto_pause_alerts_once_when_the_threshold_is_reached(
         token_output_total=0, cost_usd=0.0, elapsed_ms=1,
         error_code="URL_FETCH_TIMEOUT", error_message="timeout",
     )
+    # Below the threshold there is no alert yet.
+    await sync_runner._finish_run(_Pool(), **run)
+    assert emitted == []
     await sync_runner._finish_run(_Pool(), **run)
     assert emitted == ["radar.auto_paused:rss source"]
-    # The sixth consecutive failure of an already paused source stays silent.
+    # Later failures of the paused source alert too; admin dedup limits repeats.
     await sync_runner._finish_run(_Pool(), **run)
-    assert emitted == ["radar.auto_paused:rss source"]
+    assert emitted == ["radar.auto_paused:rss source", "radar.auto_paused:rss source"]
+
+
+async def test_healthy_empty_source_is_not_marked_partial_by_another_sources_quota_stop() -> None:
+    """A source that deferred nothing keeps its clean status when another source trips the circuit."""
+    quota_source = _source("quota-source", "rss")
+    quota_source["config"] = {"route": "quota"}
+    empty_source = _source("empty-source", "rss")
+    empty_source["config"] = {"route": "empty"}
+    pool = _Pool([quota_source, empty_source])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        if config.get("route") == "quota":
+            return [_candidate("https://example.com/quota")]
+        return []
+
+    async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        raise _QuotaExhaustedError("insufficient_quota")
+
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=generate,
+        source_concurrency=1,
+        candidate_concurrency=1,
+    )
+
+    by_source = {run.source_id: run for run in result.runs}
+    assert result.quota_stopped is True
+    assert by_source["quota-source"].status == "partial"
+    assert by_source["quota-source"].error_code == "AI_QUOTA_EXCEEDED"
+    assert by_source["empty-source"].status == "completed"
+    assert by_source["empty-source"].error_code is None

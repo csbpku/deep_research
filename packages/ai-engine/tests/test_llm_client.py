@@ -829,3 +829,20 @@ def test_quota_exhausted_ignores_transient_rate_limits() -> None:
     # ...but it must not stop a whole sync run.
     assert not is_quota_exhausted_error(transient)
     assert not is_quota_exhausted_error(_StatusError("upstream 503 service unavailable"))
+
+
+def test_quota_exhausted_ignores_per_minute_quota_wording_and_billing_mentions() -> None:
+    from ai_engine.llm.client import is_quota_exhausted_error
+    from ai_engine.llm.token_budget import TokenBudgetExceeded
+
+    # Gemini-style transient per-minute limit: must keep the normal retry path.
+    per_minute = _StatusError(
+        "Quota exceeded for quota metric 'requests per minute', retry in 20s", status_code=429,
+    )
+    assert not is_quota_exhausted_error(per_minute)
+    assert not is_quota_exhausted_error(_StatusError("check your plan and billing details", status_code=429))
+    assert is_quota_exhausted_error(_StatusError("billing_hard_limit_reached"))
+
+    # A local token cap also cannot recover inside the run, so it stops the run.
+    budget = TokenBudgetExceeded(scope="platform", used=10, limit=10, requested=1)
+    assert is_quota_exhausted_error(budget)

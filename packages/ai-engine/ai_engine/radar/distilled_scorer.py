@@ -2258,7 +2258,8 @@ async def score_with_llm(
         except Exception as exc:
             from ai_engine.llm.client import is_quota_exhausted_error
 
-            quota_exhausted = is_quota_exhausted_error(exc)
+            # Latch: a later, different error must not clear a quota signal.
+            quota_exhausted = quota_exhausted or is_quota_exhausted_error(exc)
             if raise_on_error:
                 stage = getattr(exc, "scoring_stage", None)
                 reason = (
@@ -2291,7 +2292,8 @@ async def score_with_llm(
             max_retries = (
                 _LLM_RATE_LIMIT_MAX_RETRIES if rate_limited else _LLM_MAX_RETRIES
             )
-            if attempt >= max_retries:
+            # Retrying an exhausted allowance only adds sleeps and failing calls.
+            if attempt >= max_retries or quota_exhausted:
                 failure_reason = (
                     "invalid_json_response"
                     if isinstance(exc, json.JSONDecodeError)

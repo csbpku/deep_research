@@ -1670,3 +1670,20 @@ async def test_scorer_fallback_does_not_flag_transient_failures(monkeypatch):
     result = await score_with_llm("title", "content", scorer=flaky)
     assert result.is_default is True
     assert result.quota_exhausted is False
+
+
+@pytest.mark.asyncio
+async def test_scorer_quota_error_is_not_retried(monkeypatch):
+    monkeypatch.setattr(distilled_scorer, "_LLM_RETRY_DELAY", 0.0)
+    calls = 0
+
+    async def exhausted_then_other(title: str, content: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise _BillingError("insufficient_quota")
+        raise RuntimeError("different error")
+
+    result = await score_with_llm("title", "content", scorer=exhausted_then_other)
+    assert calls == 1  # no retry sleeps or failing calls once the allowance is gone
+    assert result.quota_exhausted is True
