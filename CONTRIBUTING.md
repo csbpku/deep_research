@@ -34,7 +34,7 @@ gh pr create --base main --head codex/radar-filter-fix
 
 `main` 的 push CI 成功后会自动触发 Deploy，构建 Web 和 AI engine 的 commit-SHA 镜像并部署 VPS。因此，合并 `main` 同时具有发布影响，需要用户明确授权合并/发布。用户已授权本次合并与发布后，继续执行到生产验证完成，不重复请求确认。
 
-例外：当本次合并改动的每个路径都是文档（`docs/**` 或 `*.md`，例如 `RELEASE_NOTES.md`、`AGENTS.md`），CI 会跳过类型检查、单测和全部 E2E 套件，Deploy 会跳过镜像构建、Reader Beta 发布和 VPS 部署，并在 job summary 里说明跳过原因。此时不需要发布授权；跳过不是失败，工作流仍然是成功状态。
+例外：当本次合并改动的每个路径都是文档（`docs/**` 或 `*.md`，例如 `RELEASE_NOTES.md`、`AGENTS.md`），CI 会跳过类型检查、单测和全部 E2E 套件，Deploy 会跳过镜像构建、Reader Beta 发布和 VPS 部署，并在 job summary 里说明跳过原因。CI 与发布脚手架专属改动则运行完整 CI，但同样跳过生产部署；具体范围见下文。上述跳过不会触发生产发布，不能当作一次完整发布验证。
 
 判定由 `scripts/ci-changed-paths.sh` 统一负责，CI 与 Deploy 共用同一套规则：
 

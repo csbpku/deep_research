@@ -6,7 +6,7 @@
 
 `image-retention.py` 默认只预览，`--apply` 才删除。仅处理本项目 GHCR Web/AI engine 仓库的 commit SHA 标签；保留每个仓库最新两个不同镜像版本、14 天内镜像、所有容器（含停止容器及后代镜像）的引用。自定义构建、别名、无标签镜像、容器、卷、数据库和备份均不处理；每轮最多检查 20 个旧标签。每次操作重新核对镜像 ID 和引用，使用 `docker image rm --no-prune`，无 force 或全局 prune。通过文件锁防重入，Docker 查询失败即中止，审计结果原子更新为 `latest.json`。
 
-2026-10-21 经用户确认，已在 VPS deploy 用户启用每周实际清理 cron：UTC 周日 20:15（北京时间周一 04:15）。脚本 `/opt/deep_research/infra/image-retention.py`；报告 `/opt/deep_research/maintenance/image-retention/latest.json`，调度日志同目录 `latest.log`。当前带 `--apply`，已按用户确认开启实际删除；首次运行无候选、未删除对象。后续修改必须保留相同保护策略。修改前的 crontab 留在该目录，更新时只替换带 `deep-research-image-retention-apply` 标记的本项目任务，保留其他任务。
+经用户确认，VPS deploy 用户的每周清理 cron 在 UTC 周日 20:15（北京时间周一 04:15）运行，使用 `--apply`。脚本 `/opt/deep_research/infra/image-retention.py`；报告 `/opt/deep_research/maintenance/image-retention/latest.json`，调度日志同目录 `latest.log`。每轮的 20 项上限在容器引用检查之前截取，受保护项也占名额，因此重复命中受保护项可能使后续候选长期未检查；不能仅凭任务成功推断已释放空间，应同时查看报告及 `df`。后续修改必须保留相同保护策略；更新 cron 时只替换带 `deep-research-image-retention-apply` 标记的本项目任务，保留其他任务。
 
 Zread 卷不属于镜像保留机制：普通阅读默认 browser 模式，但 AI engine 及独立 repair 仍挂载 `deep-research_zread-work`，repair 使用 `/data/zread/governance` 保存恢复状态。整卷不能按缓存删除；仓库 checkout 和 `.zread` 草稿需另外核验、列清单并确认后清理。
 

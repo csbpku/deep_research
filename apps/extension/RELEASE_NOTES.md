@@ -1,10 +1,10 @@
 # Reader 更新日志
 
-记录 Reader 扩展每个版本的用户可见变更、对应提交范围和商店提交状态。
+记录 Reader 扩展每个版本的用户可见变更。Beta 发布记录见 [GitHub Releases](https://github.com/csbpku/deep_research/releases)；商店现状以 [Chrome Web Store](https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl) 为准。
 
 版本号以 `apps/extension/package.json`、`apps/extension/manifest.json` 和
-`apps/extension/wxt.config.ts` 三处为准，必须一致。CI 在扩展源码变化但版本号
-未提升时会拒绝发布，因此每一批功能都要先在这里落一条记录再提商店审核。
+`apps/extension/wxt.config.ts` 三处为准，必须一致。CI 比较已发布的同版本 Beta
+安装包内容：内容不同时拒绝覆盖；尚未发布的版本可以继续修订后再提交审核。
 
 ## 发布批次策略
 
@@ -14,32 +14,32 @@
 
 ## 0.2.36
 
-状态：发布准备中；尚未提交 Chrome Web Store 审核。
+Beta：2026-11-05 发布 `reader-v0.2.36`。
 
 - 聊天输入：范围、总结、翻译、联网和模型收进一条工具栏；窄面板把模型名放到上一行，避免被截断。
 - 回答状态：快速失败的请求保留实际错误，避免误报后台任务已停止。
 
 ## 0.2.35
 
-状态：发布准备中；尚未发布 Beta 或提交 Chrome Web Store 审核。
+Beta：2026-10-29 发布 `reader-v0.2.35`。
 
 - 安装后继续阅读：在雷达页面发起安装后，尝试自动打开刚才选择的原文；无法自动继续时仍可手动打开。
 
 ## 0.2.34
 
-状态：发布准备中；尚未发布 Beta 或提交 Chrome Web Store 审核。
+Beta：2026-10-29 发布 `reader-v0.2.34`。
 
 - 原文入口：插件失效时不再吞掉点击，由网页继续打开安装入口。
 
 ## 0.2.33
 
-状态：发布准备中；尚未发布 Beta 或提交 Chrome Web Store 审核。
+Beta：2026-10-29 发布 `reader-v0.2.33`。
 
 - 收藏：删除或撤销保存的摘录后，及时同步原网页的高亮。
 
 ## 0.2.32
 
-状态：发布准备中；尚未发布 Beta 或提交 Chrome Web Store 审核。
+Beta：2026-10-29 发布 `reader-v0.2.32`。
 
 - 选段解释：等待侧栏加载模型和平台配置后再执行选段动作，点击“解释这段”会打开聊天并自动发问；请求失败后仍保留问题。
 - 原文定位：跨段选择保留与正文位置一致的原文换行和空白，修复平台锚点校验失败。
@@ -61,16 +61,14 @@
 
 ## 0.2.31
 
-状态：发布准备中；本次提升用于发布 main 已包含的模型列表筛选修复，未提交 Chrome Web Store 审核。
+Beta：2026-10-26 发布 `reader-v0.2.31`。
 
 - 模型选择：模型列表异步读取完成后，继续保留当前搜索词的筛选结果与“没有匹配的模型”提示，避免被通用提示覆盖。
 - 发布：`5c13f60` 已修改扩展源码，本版本同步提升 package、manifest 和 WXT 的版本号，避免覆盖不可变的 `reader-v0.2.30` Beta 产物。平台原文安装确认修复兼容现有插件，不要求升级到本版本。
 
 ## 0.2.30
 
-状态：已发布 Beta 0.2.30（GitHub 预发布 `reader-v0.2.30`）；2026-10-23 已提交
-Chrome Web Store 审核（条目 `bldpmkepljipbadeegednfinnilgoedl`，Pending review，
-选择审核通过后手动发布）；商店线上版本仍为 0.2.28，待审核通过后手动发布。
+Beta：2026-10-23 发布 `reader-v0.2.30`。
 
 - 界面文案：修复相同英文原文反查中文词条时的串位问题，补齐缺失的中文词条，
   面板按钮、占位符与提示按稳定标记而不是显示文案定位。
@@ -85,7 +83,7 @@ Chrome Web Store 审核（条目 `bldpmkepljipbadeegednfinnilgoedl`，Pending re
 
 ## 0.2.29
 
-状态：已合入 `main`（`d2ea516`），已发布 Beta 0.2.29，待提交商店审核
+已合入 `main`（`d2ea516`），已发布 Beta 0.2.29。
 
 包含两批功能：
 
@@ -116,7 +114,7 @@ Chrome Web Store 审核（条目 `bldpmkepljipbadeegednfinnilgoedl`，Pending re
 ```markdown
 ## <版本号>
 
-状态：待提交商店审核 | 已提交审核 | 已发布
+Beta：<发布日期及标签；未发布时省略>
 
 - <用户可见的变更，写成用户能理解的句子>
 
