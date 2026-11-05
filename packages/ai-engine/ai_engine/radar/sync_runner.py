@@ -40,7 +40,7 @@ from ai_engine.fetcher.safe_fetch import (
     raise_for_document_status,
     safe_fetch,
 )
-from ai_engine.ingestion.pipeline import _generate_brief
+from ai_engine.ingestion.pipeline import _generate_brief, canonicalize_url
 from ai_engine.markdown_pipeline import normalize_markdown
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.candidate_filter import filter_candidate
@@ -157,6 +157,9 @@ def _classify_original_kind(source_type: str, url: str) -> str:
     (zread.ai-style for repos, Lumi-style for arxiv, plain markdown for
     prose blogs) so we need a richer discriminator.
     """
+    if source_type == "vendor_changelog" and urlsplit(url).fragment:
+        # A page fetch drops the fragment and would replace this entry with the whole changelog.
+        return "vendor_changelog_entry"
     u = (url or "").lower()
     if "arxiv.org/abs/" in u or "huggingface.co/papers/" in u or source_type in ("arxiv", "huggingface_papers"):
         return "arxiv"
@@ -802,14 +805,19 @@ def _stored_original(markdown: str) -> tuple[str, int, str]:
     return stored, len(raw), hashlib.sha256(raw).hexdigest()
 
 
-async def _existing_candidate(pool: Any, canonical_url: str) -> dict[str, Any] | None:
+async def _existing_candidate(
+    pool: Any, canonical_url: str, *, legacy_page_url: str | None = None,
+    legacy_entry_url: str | None = None,
+) -> dict[str, Any] | None:
     async with pool.connection() as conn:
+        query = ('SELECT "id", "status", "body", "originalMarkdown", "tags" FROM "summaries" '
+                 'WHERE "canonicalUrl" = %s')
+        params: tuple[str, ...] = (canonical_url,)
+        if legacy_page_url and legacy_entry_url:
+            query += ' OR ("canonicalUrl" = %s AND "url" = %s)'
+            params += (legacy_page_url, legacy_entry_url)
         row = await (
-            await conn.execute(
-                'SELECT "id", "status", "body", "originalMarkdown", "tags" FROM "summaries" '
-                'WHERE "canonicalUrl" = %s LIMIT 1',
-                (canonical_url,),
-            )
+            await conn.execute(query + ' LIMIT 1', params)
         ).fetchone()
     return dict(row) if row else None
 
@@ -1721,9 +1729,18 @@ async def _run_source(
 
             async with candidate_semaphore:
                 try:
-                    normalized = normalize_candidate(raw_candidate)
+                    normalized = normalize_candidate(raw_candidate, source_type=source.source_type)
                     markdown = ""
-                    existing = await _existing_candidate(pool, normalized.canonical_url)
+                    legacy_page_url = (
+                        canonicalize_url(raw_candidate.url)
+                        if source.source_type == "vendor_changelog" and urlsplit(raw_candidate.url).fragment
+                        else None
+                    )
+                    existing = await _existing_candidate(
+                        pool, normalized.canonical_url,
+                        legacy_page_url=legacy_page_url,
+                        legacy_entry_url=raw_candidate.url if legacy_page_url else None,
+                    )
                     if existing is not None:
                         existing_id = str(existing["id"])
                         if str(existing.get("status") or "") == "archived":
@@ -1789,7 +1806,20 @@ async def _run_source(
                         skipped_rule_noise += 1
                         return
 
-                    metadata_only_fallback = False
+                    entry_snapshot = (
+                        source.source_type == "vendor_changelog"
+                        and bool(urlsplit(raw_candidate.url).fragment)
+                    )
+                    if entry_snapshot and not raw_candidate.snippet.strip():
+                        await _record_sync_diagnostic(
+                            pool, source=source, run_id=run_id, candidate=raw_candidate,
+                            canonical_url=normalized.canonical_url, kind="filtered",
+                            reason_code="CHANGELOG_ENTRY_BODY_UNAVAILABLE",
+                            reason_message="未取得该条更新的正文，不能使用整页内容替代",
+                        )
+                        total_skipped += 1
+                        return
+                    metadata_only_fallback = entry_snapshot
                     document_host = _host(raw_candidate.url)
                     # Full source text is an ephemeral scoring input in both
                     # reading modes. Browser mode only suppresses persistence
@@ -1819,14 +1849,18 @@ async def _run_source(
                         )
                         return
                     try:
-                        fetched, markdown = await _fetch_document_with_content_retries(
-                            document_fetcher,
-                            url=raw_candidate.url,
-                            source_type=source.source_type,
-                            run_id=run_id,
-                            source_id=source.id,
-                            domain=document_host,
-                        )
+                        if entry_snapshot:
+                            markdown = raw_candidate.snippet.strip()[:8000]
+                            fetched = _snippet_document(raw_candidate.url, markdown)
+                        else:
+                            fetched, markdown = await _fetch_document_with_content_retries(
+                                document_fetcher,
+                                url=raw_candidate.url,
+                                source_type=source.source_type,
+                                run_id=run_id,
+                                source_id=source.id,
+                                domain=document_host,
+                            )
                     except Exception as fetch_exc:
                         if (
                             _can_use_snippet_fallback(source, raw_candidate)
@@ -1887,6 +1921,13 @@ async def _run_source(
                     low_quality = _is_low_quality_content(raw_content)
                     brief: Any = None
                     interpretation = ""
+                    short_entry = (
+                        entry_snapshot and 20 <= len(raw_content.strip()) < 200
+                        and not any(marker in raw_content.lower() for marker in _LOW_QUALITY_MARKERS)
+                    )
+                    if short_entry:
+                        low_quality = False
+                        interpretation = raw_content.strip()
                     if low_quality:
                         # Page fetch landed on a bot check (Cloudflare etc.) or a
                         # too-short shell. Any fallback path counts as 1 fallback
@@ -1969,9 +2010,10 @@ async def _run_source(
                     item = {
                         "title": normalized.title,
                         "snippet": brief_context,
+                        "context_is_source_snapshot": entry_snapshot,
                     }
                     # 低质量 fallback（snippet 路径）已直接用 snippet 作 interpretation，跳过 LLM
-                    if not low_quality:
+                    if not low_quality and not short_entry:
                         try:
                             brief = await _generate_brief_with_retry(
                                 generate_brief,
@@ -2230,7 +2272,9 @@ async def _run_source(
                         },
                     )
                     try:
-                        diagnostic_url = normalize_candidate(raw_candidate).canonical_url
+                        diagnostic_url = normalize_candidate(
+                            raw_candidate, source_type=source.source_type,
+                        ).canonical_url
                     except Exception:
                         diagnostic_url = raw_candidate.url
                     await _record_sync_diagnostic(

@@ -91,6 +91,14 @@ def test_normalize_candidate_rejects_non_http() -> None:
         normalize_candidate(RadarCandidate(title="x", url="file:///tmp/x"))
 
 
+def test_vendor_changelog_identity_preserves_distinct_entry_anchors() -> None:
+    first = RadarCandidate(title="Release one", url="https://example.com/notes#first")
+    second = RadarCandidate(title="Release two", url="https://example.com/notes#second")
+    assert normalize_candidate(first, source_type="vendor_changelog").canonical_url == first.url
+    assert normalize_candidate(second, source_type="vendor_changelog").canonical_url == second.url
+    assert normalize_candidate(first, source_type="rss").canonical_url == "https://example.com/notes"
+
+
 def test_score_candidate_has_three_dimensions_and_reason() -> None:
     normalized = normalize_candidate(
         RadarCandidate(
@@ -138,6 +146,27 @@ async def test_rss_fetcher_calls_safe_fetch_and_parses_item() -> None:
     # fetch_rss_candidates returns parsed items; just verify kwargs were passed
     assert items[0].title == "Agent release"
     assert items[0].content_origin == "rss"
+
+
+@pytest.mark.parametrize("status,content", [
+    (403, b"<html><body>Access denied</body></html>"),
+    (200, b"<!doctype html><html><body>Try again later</body></html>"),
+])
+async def test_rss_fetcher_does_not_report_error_pages_as_empty_success(status: int, content: bytes) -> None:
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        from dataclasses import replace
+        return replace(_doc(content, url=url), status=status)
+
+    with pytest.raises(SafeFetchError) as exc:
+        await fetch_rss_candidates({"feedUrl": "https://feed.example/rss"}, fetcher=fake_fetch)
+    assert exc.value.code == "UPSTREAM_HTTP_ERROR"
+
+
+async def test_rss_fetcher_accepts_a_valid_empty_feed() -> None:
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(b'<rss version="2.0"><channel><title>Empty</title></channel></rss>', url=url)
+
+    assert await fetch_rss_candidates({"feedUrl": "https://feed.example/rss"}, fetcher=fake_fetch) == []
 
 
 async def test_rss_ai_filter_applies_result_cap_after_filtering() -> None:
@@ -942,7 +971,7 @@ async def test_vendor_changelog_extracts_h2_titles_and_dedupes(tmp_path, monkeyp
         assert len(items) == 3, items
         first_titles = [it.title for it in items]
         assert "gpt-5 model launch" in first_titles[0]
-        # Second call with the same fetch: statefile dedupes, returns 0.
+        # Discovery replays entries; durable ingestion owns deduplication.
         items_again = await fetch_vendor_changelog(
             {
                 "vendor": "openai",
@@ -952,7 +981,17 @@ async def test_vendor_changelog_extracts_h2_titles_and_dedupes(tmp_path, monkeyp
             },
             client=client,
         )
-        assert items_again == []
+        assert [item.url for item in items_again] == [item.url for item in items]
+
+
+async def test_vendor_changelog_respects_bounded_max_entries() -> None:
+    html = "<body>" + "".join(f"<h2>Release number {i:03}</h2>" for i in range(70)) + "</body>"
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
+    async with httpx.AsyncClient(transport=transport) as client:
+        config = {"vendor": "example", "sources": ["https://example.com/changelog"]}
+        assert len(await fetch_vendor_changelog(config, client=client)) == 30
+        assert len(await fetch_vendor_changelog({**config, "max_entries": 50}, client=client)) == 50
+        assert len(await fetch_vendor_changelog({**config, "max_entries": 100}, client=client)) == 60
 
 
 async def test_vendor_changelog_applies_path_filter(tmp_path) -> None:
@@ -985,6 +1024,23 @@ async def test_vendor_changelog_applies_path_filter(tmp_path) -> None:
     # through without crashing; behavioural assertions live in
     # test_vendor_changelog_extracts_h2_titles_and_dedupes above.
     assert isinstance(items, list)
+
+
+async def test_changelog_replays_previously_seen_urls_until_database_confirms_them(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_file = tmp_path / "legacy.json"
+    state_file.write_text('{"anthropic": ["https://example.com/notes#update-one"]}')
+    monkeypatch.setenv("VENDOR_CHANGELOG_STATE_PATH", str(state_file))
+    html = '<h2><span id="update-one">Update one for agents</span></h2>'
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_vendor_changelog(
+            {"vendor": "anthropic", "sources": ["https://example.com/notes"]},
+            client=client,
+        )
+    assert [item.url for item in items] == ["https://example.com/notes#update-one"]
+    assert state_file.read_text() == '{"anthropic": ["https://example.com/notes#update-one"]}'
 
 
 async def test_vendor_changelog_anchor_extractor_handles_anthropic_html() -> None:
@@ -1056,6 +1112,7 @@ async def test_vendor_changelog_extracts_openai_structured_entries(
         )
     assert len(items) == 2
     assert "Agents API" in items[0].title
+    assert items[0].snippet == "Released the Agents API in public beta."
     assert "Solutions" not in "\n".join(item.title for item in items)
     assert all(item.url.startswith("https://developers.openai.com/api/docs/changelog#") for item in items)
     assert items[0].published_at == datetime(2026, 9, 10, tzinfo=timezone.utc)
@@ -1072,6 +1129,7 @@ async def test_vendor_changelog_extracts_anthropic_rss_entries(
       <title>Claude Platform release notes — September 10, 2026</title>
       <link>https://platform.claude.com/docs/en/release-notes/overview#september-10-2026</link>
       <pubDate>Thu, 10 Sep 2026 00:00:00 GMT</pubDate>
+      <description><![CDATA[<p>Verified release note with a concrete change.</p>]]></description>
     </item>
     </channel></rss>"""
 
@@ -1091,6 +1149,7 @@ async def test_vendor_changelog_extracts_anthropic_rss_entries(
     assert len(items) == 1
     assert items[0].url.endswith("#september-10-2026")
     assert items[0].published_at == datetime(2026, 9, 10, tzinfo=timezone.utc)
+    assert items[0].snippet == "Verified release note with a concrete change."
 
 
 async def test_vendor_changelog_card_parser_uses_release_note_links() -> None:

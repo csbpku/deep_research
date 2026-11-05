@@ -17,22 +17,19 @@ For each vendor we are given:
     allow_path_regex  optional regex; only entries whose URL matches
                        get ingested (filters out random marketing posts).
 
-The fetcher keys its statefile per vendor so a release on one vendor
-doesn't poison another.
+The database owns deduplication. Discovery must not mark an entry delivered
+before the sync pipeline has stored it or recorded a durable disposition.
 """
 
 from __future__ import annotations
 
-import json
 import html as _html
 import logging
-import os
 import re as _re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
@@ -42,7 +39,6 @@ from ai_engine.radar.models import RadarCandidate
 
 logger = logging.getLogger("vendor_changelog_fetcher")
 
-_MAX_ENTRIES_PER_VENDOR = 30
 _USER_AGENT = "deep-research-radar/0.1"
 
 
@@ -52,30 +48,7 @@ class _ChangelogEntry:
     title: str
     url: str | None = None
     published_at: datetime | None = None
-
-
-def _state_path() -> Path:
-    default = Path(__file__).parent.parent / "static_docs" / ".vendor_changelog_state.json"
-    return Path(os.environ.get("VENDOR_CHANGELOG_STATE_PATH", str(default)))
-
-
-def _load_state() -> dict[str, list[str]]:
-    path = _state_path()
-    if not path.exists():
-        return {}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return raw if isinstance(raw, dict) else {}
-    except Exception:
-        return {}
-
-
-def _save_state(state: dict[str, list[str]]) -> None:
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    body: str = ""
 
 
 def _strip_html(html: str) -> str:
@@ -164,6 +137,7 @@ def _extract_rss_entries(html: str, source_url: str) -> list[_ChangelogEntry]:
                 title=title[:240],
                 url=url,
                 published_at=_parse_rss_datetime(_rss_field(block, "pubDate")),
+                body=_rss_field(block, "description"),
             )
         )
     return entries
@@ -240,6 +214,7 @@ def _extract_openai_entries(html: str, source_url: str) -> list[_ChangelogEntry]
                 title=body[:240],
                 url=f"{source_url.rstrip('/')}#{slug}",
                 published_at=published_at,
+                body=body,
             )
         )
     return entries
@@ -294,7 +269,7 @@ async def fetch_vendor_changelog(
     *,
     client: httpx.AsyncClient | None = None,
 ) -> list[RadarCandidate]:
-    """Fetch one vendor's changelog and return newly-added entries as RadarCandidates."""
+    """Fetch one vendor's recent entries for durable database deduplication."""
 
     vendor = str(config.get("vendor") or "").strip()
     sources = [str(u) for u in config.get("sources", []) if isinstance(u, str) and u]
@@ -313,8 +288,7 @@ async def fetch_vendor_changelog(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=15.0, headers={"User-Agent": _USER_AGENT}, follow_redirects=True)
     candidates: list[RadarCandidate] = []
-    state = _load_state()
-    seen_urls: set[str] = set(state.get(vendor, []))
+    seen_urls: set[str] = set()
 
     try:
         for source_url in sources:
@@ -359,7 +333,7 @@ async def fetch_vendor_changelog(
                 candidates.append(RadarCandidate(
                     title=title[:300],
                     url=url,
-                    snippet="",
+                    snippet=entry.body[:8000],
                     published_at=entry.published_at or datetime.now(timezone.utc),
                     content_origin="web",
                     tags=tags,
@@ -375,7 +349,4 @@ async def fetch_vendor_changelog(
         if owns_client:
             await http.aclose()
 
-    # Persist the bumped state set so the next run can diff against it.
-    state[vendor] = sorted(seen_urls)
-    _save_state(state)
-    return candidates[:_MAX_ENTRIES_PER_VENDOR]
+    return candidates[:max_entries]
