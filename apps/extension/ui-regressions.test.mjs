@@ -237,6 +237,77 @@ test('new background answer snapshots omit model instructions and retain only di
   }
 });
 
+test('a fast failed answer is not reported as interrupted while its final state is being saved', async () => {
+  const source = readFileSync(new URL('./answer-worker.js', import.meta.url), 'utf8');
+  let releaseWrite;
+  let writeStarted;
+  const writing = new Promise(resolve => { writeStarted = resolve; });
+  let stored = { id: 'job', status: 'running' };
+  const sandbox = {
+    setInterval, clearInterval, AbortController,
+    chrome: {
+      runtime: { sendMessage: async () => {}, getPlatformInfo: async () => {} },
+      storage: { session: {
+        get: async () => ({ 'readerAnswer:job': stored }),
+        set: async value => {
+          writeStarted();
+          await new Promise(resolve => { releaseWrite = resolve; });
+          stored = value['readerAnswer:job'];
+        },
+      } },
+    },
+    requestPlatformAnswer: async () => { throw new Error('selection validation failed'); },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(source, 'const tasks = new Map();', 'chrome.runtime.onMessage.addListener('), sandbox);
+  const result = vm.runInContext(`(() => {
+    const task = { id: 'job', status: 'running', streamed: '' };
+    const controller = new AbortController();
+    tasks.set(task.id, { task, controller });
+    return execute({ mode: 'platform', scope: 'selection', context: {}, history: [] }, task, controller);
+  })()`, sandbox);
+  await writing;
+  const duringWrite = await vm.runInContext("snapshot('job')", sandbox);
+  assert.equal(duringWrite.status, 'failed');
+  assert.equal(duringWrite.error, 'selection validation failed');
+  releaseWrite();
+  await result;
+  const afterWrite = await vm.runInContext("snapshot('job')", sandbox);
+  assert.equal(afterWrite.status, 'failed');
+  assert.equal(afterWrite.error, 'selection validation failed');
+});
+
+test('automatic reading-position restoration cannot replace an unrelated answer error', async () => {
+  const messages = [];
+  const sandbox = { resolveAnchorRange: async () => ({ error: '原文已变化，无法准确定位' }), send: message => messages.push(message) };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(content, 'async function focusAnchor(', 'function removeAnnotationHighlight('), sandbox);
+  await vm.runInContext("focusAnchor({}, { silent: true })", sandbox);
+  assert.equal(messages.length, 0);
+  await vm.runInContext('focusAnchor({})', sandbox);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'deep-research:anchor-unresolved');
+  assert.match(content, /focusAnchor\(message\.anchor, \{ silent: true \}\)/u);
+});
+
+test('background annotation failures preserve a current notice or answer', () => {
+  const notice = { textContent: '' };
+  const sandbox = { message: { type: 'deep-research:annotation-unresolved', id: 'saved', reason: '定位失败' },
+    pendingAnnotationHighlightId: null, discussionRunning: false, $: () => notice, setNotice: value => { notice.textContent = value; } };
+  vm.createContext(sandbox);
+  const handler = extract(panel, "if (message.type === 'deep-research:annotation-unresolved')", "if (message.type === 'deep-research:annotation-resolved'");
+  notice.textContent = '回答失败';
+  vm.runInContext(handler, sandbox);
+  assert.equal(notice.textContent, '回答失败');
+  notice.textContent = '';
+  sandbox.discussionRunning = true;
+  vm.runInContext(handler, sandbox);
+  assert.equal(notice.textContent, '');
+  sandbox.discussionRunning = false;
+  vm.runInContext(handler, sandbox);
+  assert.equal(notice.textContent, '定位失败');
+});
+
 test('translation progress counts confirmed page translations instead of processed model blocks', () => {
   const nodes = new Map();
   const $ = id => {

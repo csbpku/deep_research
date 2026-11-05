@@ -7,6 +7,11 @@ const tasks = new Map();
 const key = id => `readerAnswer:${id}`;
 const emit = task => chrome.runtime.sendMessage({ type: 'deep-research:answer-update', task }).catch(() => {});
 const snapshot = async id => {
+  // In-memory state is authoritative until the terminal snapshot is persisted.
+  // Otherwise a fast response can be mistaken for a terminated worker while
+  // chrome.storage.session.set is still writing its final status.
+  const active = tasks.get(id)?.task;
+  if (active) return { ...active };
   const value = (await chrome.storage.session.get(key(id)))[key(id)];
   if (value?.status === 'running' && !tasks.has(id)) return { ...value, status: 'interrupted', error: '浏览器停止了后台任务；已保留问题，请重试。' };
   return value;
@@ -71,8 +76,9 @@ async function execute(input, task, controller) {
     task.status = controller.signal.aborted ? 'cancelled' : 'failed';
     task.error = error.message || '回答未完成';
   } finally {
-    clearInterval(keepAlive); tasks.delete(task.id);
-    await chrome.storage.session.set({ [key(task.id)]: { ...task } });
+    clearInterval(keepAlive);
+    try { await chrome.storage.session.set({ [key(task.id)]: { ...task } }); }
+    finally { tasks.delete(task.id); }
     await emit({ ...task });
   }
 }

@@ -3718,7 +3718,7 @@ chrome.runtime.onMessage.addListener((message) => {
     setNotice(t("已回到原文证据。"));
   }
   if (message.type === 'deep-research:annotation-unresolved') {
-    if (!pendingAnnotationHighlightId || message.id === pendingAnnotationHighlightId) {
+    if (pendingAnnotationHighlightId ? message.id === pendingAnnotationHighlightId : !discussionRunning && !$('notice').textContent) {
       setNotice(message.reason || t("原文已变化，标注已保存，但没有高亮到不匹配的位置。"));
       pendingAnnotationHighlightId = null;
     }
