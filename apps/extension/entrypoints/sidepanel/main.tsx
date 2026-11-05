@@ -203,9 +203,9 @@ function ReaderPanel() {
                   </ReaderButton>
                   <Paper component="div" variant="outlined" id="composer-scope-menu" className="composer-scope-menu hidden" role="menu" aria-label={t("回答依据")}>
                     <div id="discussion-scope-options" className="discussion-scope-options" role="group" aria-label={t("回答依据")}>
-                      <ReaderButton id="scope-page" className="scope-option" type="button" variant="text" control="scope">{t("整篇")}</ReaderButton>
-                      <ReaderButton id="scope-selection" className="scope-option hidden" type="button" variant="text" control="scope">{t("选段")}</ReaderButton>
-                      <ReaderButton id="scope-image" className="scope-option hidden" type="button" variant="text" control="scope">{t("图示")}</ReaderButton>
+                      <ReaderButton id="scope-page" className="scope-option" type="button" role="menuitemradio" variant="text" control="scope">{t("整篇")}</ReaderButton>
+                      <ReaderButton id="scope-selection" className="scope-option hidden" type="button" role="menuitemradio" variant="text" control="scope">{t("选段")}</ReaderButton>
+                      <ReaderButton id="scope-image" className="scope-option hidden" type="button" role="menuitemradio" variant="text" control="scope">{t("图示")}</ReaderButton>
                     </div>
                   </Paper>
                 </div>

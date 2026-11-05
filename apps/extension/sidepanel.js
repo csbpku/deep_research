@@ -150,13 +150,17 @@ function closeComposerScopeMenu({ restoreFocus = false } = {}) {
   $('composer-scope')?.setAttribute('aria-expanded', 'false');
   if (restoreFocus) $('composer-scope')?.focus();
 }
+function visibleScopeOptions() {
+  return ['scope-page', 'scope-selection', 'scope-image'].map($).filter(button => button && !button.classList.contains('hidden'));
+}
 function toggleComposerScopeMenu() {
   const chip = $('composer-scope');
   if (!chip || chip.disabled) return;
   if (!$('composer-scope-menu').classList.contains('hidden')) { closeComposerScopeMenu({ restoreFocus: true }); return; }
   show($('composer-scope-menu'), true);
   chip.setAttribute('aria-expanded', 'true');
-  $('scope-page')?.focus();
+  const options = visibleScopeOptions();
+  (options.find(button => button.getAttribute('aria-checked') === 'true') || options[0])?.focus();
 }
 function renderComposerModelOptions() {
   const search = $('composer-model-search').value.trim().toLocaleLowerCase();
@@ -1086,6 +1090,7 @@ function renderDiscussionScopeControls(scope = discussionScope) {
         : imageAvailable;
     show(button, available);
     button.setAttribute('aria-pressed', String(scope === optionScope));
+    button.setAttribute('aria-checked', String(scope === optionScope));
     button.classList.toggle('active', scope === optionScope);
   });
   show($('discussion-scope-options'), hasAlternative);
@@ -3852,7 +3857,14 @@ async function init() {
   $('open-history-inline')?.addEventListener('click', () => void openHistoryPage());
   $('composer-scope')?.addEventListener('click', () => toggleComposerScopeMenu());
   $('composer-scope-menu')?.addEventListener('keydown', event => {
-    if (event.key === 'Escape') { event.preventDefault(); closeComposerScopeMenu({ restoreFocus: true }); }
+    if (event.key === 'Escape') { event.preventDefault(); closeComposerScopeMenu({ restoreFocus: true }); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const options = visibleScopeOptions();
+    if (!options.length) return;
+    event.preventDefault();
+    const current = options.indexOf(document.activeElement);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : event.key === 'ArrowUp' ? (current <= 0 ? options.length - 1 : current - 1) : (current + 1) % options.length;
+    options[index].focus();
   });
   $('scope-page')?.addEventListener('click', () => { setDiscussionScope('page'); closeComposerScopeMenu(); });
   $('scope-selection')?.addEventListener('click', () => { setDiscussionScope('selection'); closeComposerScopeMenu(); });
