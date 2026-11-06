@@ -300,13 +300,19 @@
   // exclusions that protect forms, navigation and our own overlays. Shared by
   // block extraction and anchor resolution so both see the same text.
   function readingBlockNodes() {
+    // A microdata or documentation candidate can itself be a paragraph or a
+    // leaf div/section. querySelectorAll alone would silently drop that root.
+    const collect = (selector) => roots.flatMap((scopeRoot) => [
+      ...(scopeRoot.matches(selector) ? [scopeRoot] : []),
+      ...scopeRoot.querySelectorAll(selector),
+    ]);
     // Publishers sometimes use unadorned divs for article paragraphs.
     // Only add leaf containers outside semantic blocks, preserving structure.
-    const leafContainers = roots.flatMap((scopeRoot) => Array.from(scopeRoot.querySelectorAll('div,section')))
+    const leafContainers = collect('div,section')
       .filter((node) => !node.closest(READING_BLOCK_SELECTOR))
       .filter((node) => !node.querySelector(`${READING_BLOCK_SELECTOR},div,section,script,style,form,button,input,textarea,select`))
       .filter((node) => /[\p{L}]{2}/u.test(sourceBlockText(node)));
-    return [...roots.flatMap((scopeRoot) => Array.from(scopeRoot.querySelectorAll(READING_BLOCK_SELECTOR))), ...leafContainers]
+    return [...new Set([...collect(READING_BLOCK_SELECTOR), ...leafContainers])]
       .sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
       .filter((node) => !node.closest('[data-deep-research-translation]'))
       // Never treat a form or an editable control as article text. This is a
@@ -1748,17 +1754,30 @@
 
   // A mutation that lands outside every current root can still be the article
   // arriving late in a sibling container. Re-select when it is inside a
-  // candidate container; ignore unrelated page chrome.
-  function changeAffectsReadingScope(target) {
+  // candidate container, or when the added subtree introduces one. A new
+  // candidate's parent need not be a reading container itself.
+  function changeAffectsReadingScope(target, record) {
     if (roots.some((scopeRoot) => !scopeRoot.isConnected || scopeRoot.contains(target) || target.contains(scopeRoot))) return true;
-    const candidateSelector = globalThis.__deepResearchReadingScope?.CANDIDATE_SELECTOR;
-    return Boolean(candidateSelector && target.closest && target.closest(candidateSelector));
+    // Site-specific roots intentionally ignore surrounding page metadata.
+    if (!readingScope.scope) return false;
+    const scopeApi = globalThis.__deepResearchReadingScope;
+    const candidateSelector = scopeApi?.CANDIDATE_SELECTOR;
+    if (!candidateSelector) return false;
+    if (target.closest(candidateSelector)) return true;
+    return record.type === 'childList' && Array.from(record.addedNodes).some((node) => {
+      if (!(node instanceof Element)) return false;
+      const candidates = [
+        ...(node.matches(candidateSelector) ? [node] : []),
+        ...node.querySelectorAll(candidateSelector),
+      ];
+      return candidates.some((candidate) => !candidate.closest(scopeApi.EXCLUDED_SELECTOR));
+    });
   }
 
   const observer = new MutationObserver((records) => {
     const pageChanged = records.some((record) => {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
-      if (target && !changeAffectsReadingScope(target)) return false;
+      if (target && !changeAffectsReadingScope(target, record)) return false;
       if (target?.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]')) return false;
       if (record.type === 'childList' && record.removedNodes.length > 0 && Array.from(record.removedNodes).every((node) => node instanceof Element && node.matches('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]'))) return false;
       return record.type === 'childList' && (Array.from(record.addedNodes).some((node) => {

@@ -35,6 +35,11 @@
     '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
     '[aria-hidden="true"]', '[contenteditable="true"]',
     'script', 'style', 'noscript', 'svg', 'template',
+    // Reader output must never vote for a reading root or inflate coverage.
+    // Design hosts include the controls and image-translation wrappers; the
+    // original article nodes remain eligible even when hidden by translation.
+    '[data-deep-research-translation]', '[data-deep-research-design-host]',
+    '[data-deep-research-annotation-highlight]',
   ].join(',');
   const EXCLUDED_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'TEMPLATE', 'NAV', 'HEADER', 'FOOTER', 'ASIDE', 'FORM', 'BUTTON', 'TEXTAREA', 'SELECT', 'INPUT']);
   // A candidate must carry at least this much prose to be a reading root.
@@ -103,7 +108,7 @@
       .map((element) => ({
         element,
         chars: proseLength(element),
-        hasHeading: Boolean(element.querySelector && element.querySelector('h1')),
+        hasHeading: Array.from(element.querySelectorAll('h1')).some((heading) => !isExcluded(heading)),
       }))
       .filter((candidate) => candidate.chars > 0);
     // Stable sort: equal scores keep document order, so an outer container

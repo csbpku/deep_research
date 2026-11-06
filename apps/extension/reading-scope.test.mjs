@@ -120,3 +120,33 @@ test('an empty document returns the body without throwing', () => {
   assert.equal(scope.mode, 'page');
   assert.equal(scope.coverage, 1);
 });
+
+test('translations never change the roots, source character totals, or coverage', () => {
+  const doc = documentFrom(`<main id="primary"><h1>Guide</h1><p>${'Primary source. '.repeat(80)}</p></main><main id="secondary"><h2>Details</h2><p>${'Secondary source. '.repeat(15)}</p></main>`);
+  const before = selectReadingRoots(doc);
+  assert.deepEqual(Array.from(before.roots, label), ['#primary', '#secondary']);
+
+  doc.querySelector('#primary p').setAttribute('style', 'display:none');
+  const translation = doc.createElement('p');
+  translation.setAttribute('data-deep-research-translation', 'true');
+  translation.textContent = '译文内容。'.repeat(1000);
+  doc.getElementById('primary').appendChild(translation);
+  const after = selectReadingRoots(doc);
+  assert.deepEqual(after, before, 'only source prose participates in selection and coverage');
+});
+
+test('Reader output cannot become a candidate or hide a partial-coverage warning', () => {
+  const doc = documentFrom(`<article id="source">${paragraph(1, 200)}</article><div>${paragraph(2, 4000)}</div>`);
+  const before = selectReadingRoots(doc);
+  assert.equal(before.partial, true);
+  const translated = doc.createElement('div');
+  translated.className = 'markdown-body';
+  translated.setAttribute('data-deep-research-translation', 'true');
+  translated.innerHTML = `<h1>Translated heading</h1>${paragraph(3, 6000)}`;
+  doc.getElementById('source').appendChild(translated);
+  const imageUi = doc.createElement('main');
+  imageUi.setAttribute('data-deep-research-design-host', 'true');
+  imageUi.innerHTML = paragraph(4, 6000);
+  doc.body.appendChild(imageUi);
+  assert.deepEqual(selectReadingRoots(doc), before);
+});
