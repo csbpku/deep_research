@@ -462,6 +462,13 @@ function pageReadDescriptor(context = pageContext || documentContext) {
   const bounded = context.bodyTruncated || context.blocksTruncated;
   const details = [t("{0} 个正文块", blocks), t("{0} 字符", chars.toLocaleString())];
   if (bounded) details.push(t("已按上下文上限截取"));
+  if (context.scopePartial) {
+    return {
+      state: 'partial',
+      label: t("正文可能不完整"),
+      detail: t("已读取 {0} 个正文块，页面其余正文可能不在已识别区域内；请以选段或原文为准。", blocks),
+    };
+  }
   return { state: 'ready', label: t("正文已读取"), detail: details.join(' · ') };
 }
 
@@ -473,6 +480,7 @@ function updatePageContextUi(context = pageContext || documentContext || selecti
     status.textContent = descriptor.label;
     status.classList.toggle('is-ready', descriptor.state === 'ready');
     status.classList.toggle('is-error', descriptor.state === 'error');
+    status.classList.toggle('is-partial', descriptor.state === 'partial');
     status.classList.toggle('is-loading', descriptor.state === 'loading' || descriptor.state === 'idle');
   }
   if (meta) meta.textContent = descriptor.detail;

@@ -56,6 +56,9 @@ importers:
       '@wxt-dev/module-react':
         specifier: ^1.2.2
         version: 1.2.2(vite@6.4.3(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.1))(wxt@0.21.4(esbuild@0.28.1)(rolldown@1.2.9)(rollup@4.62.2)(typescript@5.9.3)(vite@6.4.3(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.1)))
+      linkedom:
+        specifier: 0.18.13
+        version: 0.18.13
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

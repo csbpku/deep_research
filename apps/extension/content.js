@@ -141,7 +141,22 @@
     }
     return document.querySelector('article') || document.querySelector('main') || document.querySelector('[role="main"]') || document.body;
   }
-  let root = findRoot();
+  // Reading roots: one or more disjoint containers that hold the article.
+  // Site-specific roots keep their existing priority. Everything else goes
+  // through the scored selection in reading-scope.js, which the build places
+  // ahead of this file in the same injected script.
+  function findRoots() {
+    const hostname = location.hostname.toLowerCase();
+    const siteSpecific = hostname === 'github.com' || hostname.endsWith('.github.com') || hostname === 'github.localhost'
+      || hostname === 'zread.ai' || hostname.endsWith('.zread.ai') || hostname === 'zread.localhost';
+    const scopeApi = globalThis.__deepResearchReadingScope;
+    if (siteSpecific || !scopeApi) return { roots: [findRoot()], scope: null };
+    const scope = scopeApi.selectReadingRoots(document);
+    return { roots: scope.roots.length ? scope.roots : [findRoot()], scope };
+  }
+  let readingScope = findRoots();
+  let roots = readingScope.roots;
+  let root = roots[0];
   let lastSelectionContext = null;
   let lastSelectionNode = null;
   let lastSelectionRange = null;
@@ -159,7 +174,9 @@
   let nextBlockId = 0;
   let nextImageId = 0;
   window.__deepResearchReaderRefresh = () => {
-    root = findRoot();
+    readingScope = findRoots();
+    roots = readingScope.roots;
+    root = roots[0];
   };
 
   function clean(text) {
@@ -279,14 +296,17 @@
     return clean(clone.textContent || '');
   }
 
-  function extractBlocks() {
+  // Every element that may hold article text, in document order, after the
+  // exclusions that protect forms, navigation and our own overlays. Shared by
+  // block extraction and anchor resolution so both see the same text.
+  function readingBlockNodes() {
     // Publishers sometimes use unadorned divs for article paragraphs.
     // Only add leaf containers outside semantic blocks, preserving structure.
-    const leafContainers = Array.from(root.querySelectorAll('div,section'))
+    const leafContainers = roots.flatMap((scopeRoot) => Array.from(scopeRoot.querySelectorAll('div,section')))
       .filter((node) => !node.closest(READING_BLOCK_SELECTOR))
       .filter((node) => !node.querySelector(`${READING_BLOCK_SELECTOR},div,section,script,style,form,button,input,textarea,select`))
       .filter((node) => /[\p{L}]{2}/u.test(sourceBlockText(node)));
-    const nodes = [...Array.from(root.querySelectorAll(READING_BLOCK_SELECTOR)), ...leafContainers]
+    return [...roots.flatMap((scopeRoot) => Array.from(scopeRoot.querySelectorAll(READING_BLOCK_SELECTOR))), ...leafContainers]
       .sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
       .filter((node) => !node.closest('[data-deep-research-translation]'))
       // Never treat a form or an editable control as article text. This is a
@@ -298,6 +318,10 @@
       // structured block. This keeps one source passage from entering the
       // translation queue twice while still covering plain table cells.
       .filter((node) => !node.matches('td,th,dt,dd') || !node.querySelector('h1,h2,h3,h4,p,li,blockquote,pre'));
+  }
+
+  function extractBlocks() {
+    const nodes = readingBlockNodes();
     const blocks = [];
     nodes.forEach((node) => {
       // Read source DOM even when originals are hidden by translation. Nested
@@ -384,10 +408,10 @@
 
   function extractImages() {
     const imageNodes = [
-      ...Array.from(root.querySelectorAll('img')),
+      ...roots.flatMap((scopeRoot) => Array.from(scopeRoot.querySelectorAll('img'))),
       // Inline SVG is common in architecture diagrams and documentation. Do
       // not send tiny icons or the extension's own overlays to a model.
-      ...Array.from(root.querySelectorAll('svg')).filter((node) => {
+      ...roots.flatMap((scopeRoot) => Array.from(scopeRoot.querySelectorAll('svg'))).filter((node) => {
         const rect = node.getBoundingClientRect();
         return rect.width >= 80 && rect.height >= 40 && (node.viewBox?.baseVal?.width || rect.width) >= 80;
       }),
@@ -502,6 +526,9 @@
     if (!blocks.length && String(body || '').trim()) {
       warnings.push(t("当前页面正文尚未形成可处理的文本块；请等待页面加载或改用选段操作。"));
     }
+    if (readingScope.scope?.partial) {
+      warnings.push(t("正文可能不完整：页面的大部分文字不在已识别的正文区域内。全文问答、翻译和总结可能缺少内容，可以选择原文段落后操作。"));
+    }
     const crossOriginFrames = Array.from(document.querySelectorAll('iframe')).filter((frame) => {
       try {
         const source = new URL(frame.getAttribute('src') || frame.src || '', location.href);
@@ -533,7 +560,8 @@
       .filter(Boolean);
     let fallback = '';
     if (!body) {
-      const clone = root.cloneNode(true);
+      const clone = document.createElement('div');
+      roots.forEach((scopeRoot) => clone.appendChild(scopeRoot.cloneNode(true)));
       clone.querySelectorAll('script,style,noscript,form,[contenteditable="true"],nav,header,footer,aside,[data-deep-research-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]').forEach((node) => node.remove());
       fallback = clean(clone.innerText || clone.textContent || '');
     }
@@ -550,6 +578,9 @@
       blockCount: blocks.length,
       blocks: blocks.slice(0, 24),
       scopeWarnings: scopeWarningsFor(blocks, body || fallback),
+      scopeMode: readingScope.scope?.mode || 'site',
+      scopeCoverage: readingScope.scope?.coverage ?? null,
+      scopePartial: Boolean(readingScope.scope?.partial),
       // Keep public image URLs and bounded inline SVG data in viewport updates.
       // The latter lets a newly inserted diagram enter an already-running
       // translation queue without requiring a second full-page action. Raster
@@ -1231,17 +1262,7 @@
       const currentHash = await contentHash(currentBody);
       if (!currentHash || currentHash !== anchor.contentHash) return { error: t("原文已变化，无法准确定位") };
     }
-    // Publishers sometimes use unadorned divs for article paragraphs.
-    // Only add leaf containers outside semantic blocks, preserving structure.
-    const leafContainers = Array.from(root.querySelectorAll('div,section'))
-      .filter((node) => !node.closest(READING_BLOCK_SELECTOR))
-      .filter((node) => !node.querySelector(`${READING_BLOCK_SELECTOR},div,section,script,style,form,button,input,textarea,select`))
-      .filter((node) => /[\p{L}]{2}/u.test(sourceBlockText(node)));
-    const nodes = [...Array.from(root.querySelectorAll(READING_BLOCK_SELECTOR)), ...leafContainers]
-      .sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
-      .filter((node) => !node.closest('[data-deep-research-translation]'))
-      .filter((node) => !node.closest('form, [contenteditable="true"]'))
-      .filter((node) => !node.matches('td,th,dt,dd') || !node.querySelector('h1,h2,h3,h4,p,li,blockquote,pre'));
+    const nodes = readingBlockNodes();
     let candidates = nodes.filter((node) => clean(node.innerText || node.textContent || '').includes(quote));
     if (anchor.selectorPath) {
       try {
@@ -1725,10 +1746,19 @@
     }, 250);
   }, { passive: true });
 
+  // A mutation that lands outside every current root can still be the article
+  // arriving late in a sibling container. Re-select when it is inside a
+  // candidate container; ignore unrelated page chrome.
+  function changeAffectsReadingScope(target) {
+    if (roots.some((scopeRoot) => !scopeRoot.isConnected || scopeRoot.contains(target) || target.contains(scopeRoot))) return true;
+    const candidateSelector = globalThis.__deepResearchReadingScope?.CANDIDATE_SELECTOR;
+    return Boolean(candidateSelector && target.closest && target.closest(candidateSelector));
+  }
+
   const observer = new MutationObserver((records) => {
     const pageChanged = records.some((record) => {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
-      if (target && root.isConnected && !root.contains(target) && !target.contains(root)) return false;
+      if (target && !changeAffectsReadingScope(target)) return false;
       if (target?.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]')) return false;
       if (record.type === 'childList' && record.removedNodes.length > 0 && Array.from(record.removedNodes).every((node) => node instanceof Element && node.matches('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]'))) return false;
       return record.type === 'childList' && (Array.from(record.addedNodes).some((node) => {
@@ -1813,7 +1843,7 @@
       }
     }
     if (message?.type === 'deep-research:select-image' && typeof message.src === 'string') {
-      const image = Array.from(root.querySelectorAll('img')).find(node => (node.currentSrc || node.src) === message.src);
+      const image = roots.flatMap((scopeRoot) => Array.from(scopeRoot.querySelectorAll('img'))).find(node => (node.currentSrc || node.src) === message.src);
       if (image && !image.closest('form,[contenteditable="true"]')) void selectReadingImage(image);
     }
     if (message?.type === 'deep-research:request-full-document') {

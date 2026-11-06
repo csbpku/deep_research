@@ -788,5 +788,8 @@
   "删除失败，请刷新后重试。": "Could not delete the item. Refresh and try again.",
   "收藏已恢复。": "Saved item restored.",
   "记录已在其他页面恢复，未覆盖现有内容。": "This item was already restored elsewhere. Its current content was preserved.",
-  "恢复失败，仍可点击“撤销删除”重试。": "Could not restore the item. Select Undo delete to try again."
+  "恢复失败，仍可点击“撤销删除”重试。": "Could not restore the item. Select Undo delete to try again.",
+  "正文可能不完整": "Article text may be incomplete",
+  "已读取 {0} 个正文块，页面其余正文可能不在已识别区域内；请以选段或原文为准。": "Read {0} text blocks. The rest of the page may be outside the detected article area; rely on selections or the original page.",
+  "正文可能不完整：页面的大部分文字不在已识别的正文区域内。全文问答、翻译和总结可能缺少内容，可以选择原文段落后操作。": "Article text may be incomplete: most of the page text is outside the detected article area. Full-page answers, translation and summaries may miss content; select the original passage and act on that instead."
 }

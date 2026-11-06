@@ -558,6 +558,12 @@ jobs:
         run: pnpm --filter @deep-research/reader-extension e2e:selection-explain
         timeout-minutes: 5
 
+      - name: Reader reading-scope E2E
+        env:
+          CHROME_FOR_TESTING: ${{ steps.chrome.outputs.path }}
+        run: pnpm --filter @deep-research/reader-extension e2e:reading-scope
+        timeout-minutes: 5
+
       - name: Save the verified Reader package for deployment
         uses: actions/upload-artifact@v7
         with:

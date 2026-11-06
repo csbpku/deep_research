@@ -8,7 +8,10 @@ const publicDir = resolve(root, 'public');
 await mkdir(publicDir, { recursive: true });
 await import('./generate-design-system.mjs');
 const tokens = JSON.parse(await readFile(new URL('../../../packages/design-system/src/tokens.json', import.meta.url), 'utf8'));
-const contentSource = await readFile(resolve(root, 'content.js'), 'utf8');
+// The reading-scope selector ships inside content.js so every injection path
+// (background.js and the e2e harnesses) gets the same code in one script.
+const readingScopeSource = await readFile(resolve(root, 'reading-scope.js'), 'utf8');
+const contentSource = `${readingScopeSource}\n${await readFile(resolve(root, 'content.js'), 'utf8')}`;
 const tokenPlaceholder = 'const READER_DESIGN_TOKENS = {};';
 if (!contentSource.includes(tokenPlaceholder)) {
   throw new Error('content.js is missing the design token placeholder');
