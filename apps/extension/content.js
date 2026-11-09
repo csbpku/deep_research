@@ -19,6 +19,8 @@
   // Shared with the React panel and its settings surface: `readerColorScheme`
   // in chrome.storage.local holds 'light' | 'dark' | 'system'.
   const READER_COLOR_SCHEME_KEY = 'readerColorScheme';
+  // Mirrors TRANSLATION_LAYOUT_KEY from translation-layout.js.
+  const READER_TRANSLATION_LAYOUT_KEY = 'readerTranslationLayout';
   const readerDarkQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   // A content script is a classic script and cannot import color-scheme.js, so
   // this mirrors resolveColorScheme() there. Both treat an unknown value as
@@ -28,6 +30,28 @@
     const normalized = typeof preference === 'string' ? preference.trim().toLowerCase() : '';
     if (normalized === 'light' || normalized === 'dark') return normalized;
     return systemPrefersDark === true ? 'dark' : 'light';
+  }
+  // Bilingual reading is stored next to the color scheme in
+  // `chrome.storage.local`: `readerTranslationLayout` holds 'replace' |
+  // 'stacked'. A content script cannot import translation-layout.js, so the
+  // rules below mirror normalizeTranslationLayout() / layoutForBlock() and
+  // translation-layout.test.mjs keeps the two implementations aligned.
+  let readerTranslationLayout = 'replace';
+  function normalizeReaderTranslationLayout(value) {
+    if (typeof value !== 'string') return 'replace';
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'stacked' ? 'stacked' : 'replace';
+  }
+  // No 'system' member exists, so resolving is normalization.
+  function resolveReaderTranslationLayout(preference) {
+    return normalizeReaderTranslationLayout(preference);
+  }
+  function readerLayoutForBlock({ layout, tagName, isTable, isCode } = {}) {
+    if (normalizeReaderTranslationLayout(layout) !== 'stacked') return 'replace';
+    const tag = typeof tagName === 'string' ? tagName.trim().toLowerCase() : '';
+    if (isCode === true || isTable === true) return 'replace';
+    if (tag === 'pre' || tag === 'code' || tag === 'td' || tag === 'th') return 'replace';
+    return 'stacked';
   }
   let readerColorSchemePreference = 'system';
   let readerColorScheme = resolveReaderColorScheme(readerColorSchemePreference, readerDarkQuery?.matches === true);
@@ -99,6 +123,11 @@
   Promise.resolve(chrome.storage?.local?.get?.(READER_COLOR_SCHEME_KEY)).then(stored => {
     setReaderColorSchemePreference(stored?.[READER_COLOR_SCHEME_KEY]);
   }).catch(() => {});
+  // A host without storage keeps the default `replace`, which is exactly the
+  // behavior pages had before the layout setting existed.
+  Promise.resolve(chrome.storage?.local?.get?.(READER_TRANSLATION_LAYOUT_KEY)).then(stored => {
+    setReaderTranslationLayoutPreference(stored?.[READER_TRANSLATION_LAYOUT_KEY]);
+  }).catch(() => {});
   // The operating-system preference has no storage event, so the in-page
   // controls subscribe to the media query themselves.
   readerDarkQuery?.addEventListener?.('change', refreshReaderDesignScheme);
@@ -109,6 +138,11 @@
     }
     if (area === 'local' && changes[READER_COLOR_SCHEME_KEY]) {
       setReaderColorSchemePreference(changes[READER_COLOR_SCHEME_KEY].newValue);
+    }
+    if (area === 'local' && changes[READER_TRANSLATION_LAYOUT_KEY]) {
+      // Re-layout what is already on the page: no new model request and no
+      // rewritten translation text.
+      setReaderTranslationLayoutPreference(changes[READER_TRANSLATION_LAYOUT_KEY].newValue);
     }
     if (area === 'local' && changes.readerDockCollapsed) {
       applyDockCollapsed(changes.readerDockCollapsed.newValue === true);
@@ -810,6 +844,117 @@
   let lastParagraphPointer = { x: 0, y: 0 };
   let paragraphMenuState = '';
   let paragraphMenuLocked = false;
+
+  // The bilingual rule block lives in reader-ui.css, but that stylesheet ships
+  // with the side-panel bundle while this classic content script styles
+  // arbitrary web pages and cannot import CSS. Keep the exact same block here
+  // and let translation-layout.test.mjs fail when the two copies drift.
+  const READER_TRANSLATION_LAYOUT_CSS = `
+/* reader-translation-layout:start */
+/* Bilingual page translation: the source block stays visible and the
+   translation sits directly below it behind a token-colored divider. */
+[data-deep-research-bilingual-source="true"] + [data-deep-research-translation][data-deep-research-layout="stacked"] {
+  margin-block-start: var(--reader-space-2) !important;
+  padding-block-start: var(--reader-space-2) !important;
+  border-block-start: 1px solid var(--reader-color-outline) !important;
+  border-radius: var(--reader-radius-xs) !important;
+  background: color-mix(in srgb, var(--reader-color-surface-container) 55%, transparent) !important;
+}
+/* reader-translation-layout:end */
+`;
+
+  function ensureTranslationLayoutStyles() {
+    if (document.querySelector('style[data-deep-research-translation-layout]')) return;
+    const style = document.createElement('style');
+    style.setAttribute('data-deep-research-translation-layout', 'true');
+    style.textContent = READER_TRANSLATION_LAYOUT_CSS;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  // `stacked` is a per-block decision: code and table content cannot afford a
+  // second copy of themselves, everything else can.
+  function translationLayoutForNode(node) {
+    return readerLayoutForBlock({
+      layout: readerTranslationLayout,
+      tagName: node.tagName,
+      isTable: node.matches('td,th') || Boolean(node.closest('td,th')),
+      isCode: node.matches('pre,code'),
+    });
+  }
+
+  function translationDisplayFor(original, translated) {
+    if (translated.dataset.deepResearchDisplay) return translated.dataset.deepResearchDisplay;
+    return getComputedStyle(original).display || '';
+  }
+
+  function sourceDisplayFor(original, translated) {
+    if (translatedOriginalDisplays.has(original)) return translatedOriginalDisplays.get(original) || '';
+    return translated.dataset.deepResearchOriginalDisplay || '';
+  }
+
+  // Applies the current layout to an already rendered pair without touching the
+  // translated text. Runtime switches keep the reader's current choice between
+  // "translation only" and "original only", so only the display rules change.
+  function layoutTranslationPair(original, translated) {
+    const layout = translationLayoutForNode(original);
+    const translationVisible = translated.style.display !== 'none';
+    const originalDisplay = sourceDisplayFor(original, translated);
+    if (!translatedOriginalDisplays.has(original)) translatedOriginalDisplays.set(original, originalDisplay);
+    if (layout === 'stacked') {
+      ensureTranslationLayoutStyles();
+      // The divider colors come from the shared design tokens, which the host
+      // page does not define. Painting the translation node keeps the variables
+      // scoped to our block instead of the page root.
+      applyReaderDesignTokens(translated);
+      translated.setAttribute('data-deep-research-layout', 'stacked');
+      original.setAttribute('data-deep-research-bilingual-source', 'true');
+      // The pair may arrive here from `replace`, which left the source hidden.
+      original.style.display = originalDisplay;
+      // Nested blocks would otherwise show their text twice because the
+      // ancestor translation already covers the descendant text. `replace`
+      // hides the duplicate together with the ancestor original; bilingual mode
+      // has to suppress the descendant translation itself.
+      const nested = Boolean(original.parentElement?.closest('[data-deep-research-bilingual-source="true"]'));
+      translated.style.display = nested || !translationVisible ? 'none' : translationDisplayFor(original, translated);
+      // A block that becomes bilingual takes over the descendants it covers.
+      if (translationVisible) {
+        original.querySelectorAll('[data-deep-research-translation]').forEach((node) => { node.style.display = 'none'; });
+      }
+    } else {
+      translated.removeAttribute('data-deep-research-layout');
+      original.removeAttribute('data-deep-research-bilingual-source');
+      // `replace` keeps the source's inline box so fonts and alignment survive;
+      // `stacked` deliberately dropped it so page indentation is not applied
+      // twice to the translation.
+      const originalStyle = original.getAttribute('style');
+      if (originalStyle === null) translated.removeAttribute('style');
+      else translated.setAttribute('style', originalStyle);
+      translated.style.setProperty('display', translationVisible ? translationDisplayFor(original, translated) : 'none');
+      translated.style.setProperty('border-inline-start', 'none', 'important');
+      translated.style.setProperty('padding-inline-start', '0', 'important');
+      original.style.display = translationVisible ? 'none' : originalDisplay;
+    }
+    return layout;
+  }
+
+  function relayoutAppliedTranslations() {
+    document.querySelectorAll('[data-deep-research-translation-for]').forEach((translated) => {
+      const id = translated.getAttribute('data-deep-research-translation-for');
+      const original = id && document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
+      if (!original) return;
+      layoutTranslationPair(original, translated);
+    });
+    syncParagraphControl(focusedTranslationId);
+  }
+
+  function setReaderTranslationLayoutPreference(value) {
+    const next = resolveReaderTranslationLayout(value);
+    if (next === readerTranslationLayout) return;
+    readerTranslationLayout = next;
+    // Already rendered pairs switch in place: no model request, no text rewrite.
+    relayoutAppliedTranslations();
+  }
+
   function syncParagraphControl(id, forceMenu = false) {
     const original = id && document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
     const translated = id && document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`);
@@ -903,13 +1048,22 @@
     const original = document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
     const translated = document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`);
     if (!original || !translated || !translatedOriginalDisplays.has(original)) return false;
-    const showOriginal = translated.style.display !== 'none';
-    original.style.display = showOriginal ? translatedOriginalDisplays.get(original) || '' : 'none';
-    translated.style.display = showOriginal ? 'none' : translated.dataset.deepResearchDisplay || '';
+    const translationWasVisible = translated.style.display !== 'none';
+    if (translationLayoutForNode(original) === 'stacked') {
+      // Bilingual mode always keeps the source readable; the shortcut only
+      // hides the translation below it, then restores the pair on the next
+      // press. This matches the replace-mode "translation, then original" loop
+      // from the reader's point of view.
+      original.style.display = sourceDisplayFor(original, translated);
+      translated.style.display = translationWasVisible ? 'none' : translationDisplayFor(original, translated);
+    } else {
+      original.style.display = translationWasVisible ? sourceDisplayFor(original, translated) : 'none';
+      translated.style.display = translationWasVisible ? 'none' : translationDisplayFor(original, translated);
+    }
     if (!translatedOriginalAttributes.has(original)) translatedOriginalAttributes.set(original, { title: original.getAttribute('title'), tabindex: original.getAttribute('tabindex') });
     original.title = t("右键或段落按钮可切回译文；Alt+Shift+O / Alt+单击也可切换");
-    if (document.activeElement === translated && showOriginal) { original.tabIndex = 0; original.focus({ preventScroll: true }); }
-    else if (document.activeElement === original && !showOriginal) translated.focus({ preventScroll: true });
+    if (document.activeElement === translated && translationWasVisible) { original.tabIndex = 0; original.focus({ preventScroll: true }); }
+    else if (document.activeElement === original && !translationWasVisible) translated.focus({ preventScroll: true });
     focusedTranslationId = id;
     selectedParagraphId = id;
     syncParagraphControl(id);
@@ -1826,6 +1980,47 @@
     document.querySelectorAll('[data-deep-research-image-overlay]').forEach((node) => node.remove());
   }
 
+  // Restoring the source has to undo both layouts: every translation node goes
+  // away, every original becomes visible again, and the bilingual markers that
+  // CSS and tests key on must not survive on the source nodes.
+  function restoreTranslations({ silent = false } = {}) {
+    selectedParagraphId = null;
+    focusedTranslationId = null;
+    syncParagraphControl(null);
+    document.querySelectorAll('[data-deep-research-translation]').forEach((node) => {
+      const id = node.getAttribute('data-deep-research-translation-for');
+      const original = id
+        ? document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`)
+        : node.previousElementSibling;
+      // A selection popup also carries data-deep-research-translation, but it is
+      // not attached to a source block; its previous sibling must stay untouched.
+      if (original && !node.hasAttribute('data-deep-research-selection-translation')) {
+        original.removeAttribute('data-deep-research-bilingual-source');
+        const originalDisplay = translatedOriginalDisplays.has(original)
+          ? translatedOriginalDisplays.get(original)
+          : node.dataset.deepResearchOriginalDisplay;
+        // Stacked pairs never hid the source, but a page version that switched
+        // layouts still has to end with the source display it started with.
+        if (originalDisplay !== undefined) original.style.display = originalDisplay || '';
+        translatedOriginalDisplays.delete(original);
+        const attributes = translatedOriginalAttributes.get(original);
+        if (attributes) {
+          for (const [name, value] of Object.entries(attributes)) {
+            if (value === null) original.removeAttribute(name); else original.setAttribute(name, value);
+          }
+          translatedOriginalAttributes.delete(original);
+        }
+      }
+      node.removeAttribute('data-deep-research-layout');
+      node.remove();
+    });
+    paragraphMenuLocked = false;
+    focusedTranslationId = null; contextParagraphId = null; syncParagraphControl(null, true);
+    removeSelectionTranslation();
+    restoreImageTranslations();
+    if (!silent) send({ type: 'deep-research:translations-restored' });
+  }
+
   document.addEventListener('mouseup', (event) => {
     if (event.composedPath().some(isTranslationNode)) return;
     window.setTimeout(async () => {
@@ -1996,7 +2191,15 @@
           fail(id, t("本段原文已变化，旧译文未显示；请重新开启全文翻译。")); return;
         }
         const existing = document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`);
-        if (existing) { existing.textContent = text; existing.dataset.deepResearchTargetLanguage = targetLanguage || ''; appliedIds.push(id); return; }
+        if (existing) {
+          existing.textContent = text;
+          existing.dataset.deepResearchTargetLanguage = targetLanguage || '';
+          // The stored layout may have changed while the request was in flight;
+          // re-apply it to the refreshed node without another model call.
+          layoutTranslationPair(node, existing);
+          appliedIds.push(id);
+          return;
+        }
         if (getComputedStyle(node).display === 'none' && translatedOriginalDisplays.has(node)) {
           node.style.display = translatedOriginalDisplays.get(node) || '';
         }
@@ -2004,7 +2207,10 @@
           fail(id, t("原文当前不可显示，译文未应用；请展开内容后重试。")); return;
         }
         const translated = document.createElement(node.tagName.toLowerCase());
-        for (const attribute of ['class', 'style', 'dir', 'lang', 'role']) {
+        // `style` is intentionally not copied here: layoutTranslationPair copies
+        // it for `replace` and skips it for `stacked`, where the source's own
+        // padding/margin would otherwise read as a second indentation.
+        for (const attribute of ['class', 'dir', 'lang', 'role']) {
           const value = node.getAttribute(attribute);
           if (value !== null) translated.setAttribute(attribute, value);
         }
@@ -2021,14 +2227,11 @@
         translated.dataset.deepResearchDisplay = getComputedStyle(node).display;
         translated.tabIndex = 0;
         translated.title = t("右键或段落按钮可查看原文；Alt+Shift+O / Alt+单击也可切换");
-        translated.style.setProperty('display', getComputedStyle(node).display);
-        translated.style.setProperty('border-inline-start', 'none', 'important');
-        translated.style.setProperty('padding-inline-start', '0', 'important');
         translated.dataset.deepResearchOriginalDisplay = node.style.display;
         translated.dataset.deepResearchOriginalAttributes = JSON.stringify({ title: node.getAttribute('title'), tabindex: node.getAttribute('tabindex') });
         translatedOriginalDisplays.set(node, node.style.display);
-        node.style.display = 'none';
         node.insertAdjacentElement('afterend', translated);
+        layoutTranslationPair(node, translated);
         appliedCount += 1;
         appliedIds.push(id);
       });
@@ -2049,32 +2252,7 @@
       send({ type: 'deep-research:image-translations-applied', count: appliedCount, appliedIds });
     }
     if (message?.type === 'deep-research:restore-translations') {
-      selectedParagraphId = null;
-      focusedTranslationId = null;
-      syncParagraphControl(null);
-      document.querySelectorAll('[data-deep-research-translation]').forEach((node) => {
-        const id = node.getAttribute('data-deep-research-translation-for');
-        const original = id
-          ? document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`)
-          : node.previousElementSibling;
-        if (original && translatedOriginalDisplays.has(original)) {
-          original.style.display = translatedOriginalDisplays.get(original) || '';
-          translatedOriginalDisplays.delete(original);
-          const attributes = translatedOriginalAttributes.get(original);
-          if (attributes) {
-            for (const [name, value] of Object.entries(attributes)) {
-              if (value === null) original.removeAttribute(name); else original.setAttribute(name, value);
-            }
-            translatedOriginalAttributes.delete(original);
-          }
-        }
-        node.remove();
-      });
-      paragraphMenuLocked = false;
-      focusedTranslationId = null; contextParagraphId = null; syncParagraphControl(null, true);
-      removeSelectionTranslation();
-      restoreImageTranslations();
-      if (!message.silent) send({ type: 'deep-research:translations-restored' });
+      restoreTranslations({ silent: message.silent === true });
     }
   });
 

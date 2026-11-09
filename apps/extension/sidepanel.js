@@ -4,6 +4,8 @@ import { t, getUiLanguage, setUiLanguage } from './i18n.js';
 import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './answer-task.js';
 import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
 import { answerCoverage } from './answer-presentation.js';
+import { SITE_RULES_KEY, normalizeSiteRules, setSiteRule, siteRuleFor } from './site-rules.js';
+import { glossaryPrompt, parseGlossary, serializeGlossary } from './glossary.js';
 import { detectLocalModels } from './local-models.js';
 import { readerStore } from './reader-store.js';
 import { createLibraryDeletion, libraryFacets, libraryItems, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
@@ -122,6 +124,13 @@ let pageReadState = 'idle';
 let lastSavedInsight = null;
 let insightSyncFailed = false;
 const libraryView = { query: '', kind: 'all', page: 1, tag: '' };
+// Site rules and the glossary are small, user-visible preferences. They are
+// kept in memory for the panel session and persisted separately: rules in
+// chrome.storage (shared with the content script), glossary in the reader
+// store so it travels with export/import.
+let siteRules = {};
+let glossaryEntries = [];
+let currentSiteHost = '';
 const libraryDeletion = createLibraryDeletion(readerStore);
 let libraryRenderRequest = 0;
 let libraryMutationBusy = false;
@@ -1640,6 +1649,64 @@ function renderLibraryTagOptions(tags) {
   select.value = current;
 }
 
+function renderSiteRule() {
+  const select = $('site-rule-mode');
+  const hint = $('site-rule-hint');
+  if (!select || !hint) return;
+  const url = pageContext?.url || documentContext?.url || '';
+  const rule = siteRuleFor(url, siteRules);
+  currentSiteHost = rule.host;
+  select.value = rule.mode;
+  select.disabled = !rule.host;
+  if (!rule.host) {
+    hint.textContent = t("没有打开可读取的网页，站点规则会在打开文章后生效。");
+    return;
+  }
+  hint.textContent = rule.matched === 'suffix'
+    ? t("当前站点：{0}（由通配规则 {1} 匹配）", rule.host, `*.${rule.host.split('.').slice(-2).join('.')}`)
+    : t("当前站点：{0}", rule.host);
+}
+
+async function saveSiteRule(mode) {
+  if (!currentSiteHost) return;
+  siteRules = setSiteRule(siteRules, currentSiteHost, mode);
+  await chrome.storage.local.set({ [SITE_RULES_KEY]: normalizeSiteRules(siteRules) });
+  renderSiteRule();
+}
+
+async function loadGlossary() {
+  const stored = await readerStore.getSetting('glossary', '');
+  glossaryEntries = parseGlossary(typeof stored === 'string' ? stored : '');
+  const input = $('glossary-input');
+  if (input) input.value = serializeGlossary(glossaryEntries);
+}
+
+async function saveGlossary() {
+  const input = $('glossary-input');
+  if (!input) return;
+  const entries = parseGlossary(input.value);
+  glossaryEntries = entries;
+  await readerStore.setSetting('glossary', serializeGlossary(entries));
+  input.value = serializeGlossary(entries);
+  $('glossary-status').textContent = t("术语表已保存（{0} 条）。", entries.length);
+}
+
+function currentGlossaryPrompt() {
+  return glossaryEntries.length ? glossaryPrompt(glossaryEntries, currentTranslationLanguage()) : '';
+}
+
+// A site marked "always" starts one translation per page automatically. The
+// set keeps a re-rendered panel from re-requesting the same article.
+const autoTranslatedPages = new Set();
+function maybeAutoTranslate() {
+  const url = pageContext?.url;
+  if (!url || !textModelReady() || translationRunning || translatedTextIds.size) return;
+  if (siteRuleFor(url, siteRules).mode !== 'always') return;
+  if (autoTranslatedPages.has(url)) return;
+  autoTranslatedPages.add(url);
+  void startFullTranslation();
+}
+
 async function exportLibraryMarkdown() {
   try {
     const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
@@ -2720,7 +2787,7 @@ async function retryTranslationItem(item) {
       if (!block) throw new Error(t("正文已变化，请重新开启全文翻译"));
       const results = platformModeReady()
         ? await requestPlatformTranslations(context, [block], { signal: controller.signal })
-        : await translateBlocks(readingProvider(context.targetLanguage), document, [block], { signal: controller.signal });
+        : await translateBlocks(readingProvider(context.targetLanguage), document, [block], { signal: controller.signal, glossaryPrompt: currentGlossaryPrompt() });
       const [translated] = results;
       if (!translated?.text) throw new Error(translated?.error || t("正文翻译结果为空"));
       const [applied] = await applyTextTranslations([{ ...translated, targetLanguage: context.targetLanguage }], payload => sendToPage({ ...payload, documentUrl: context.url }));
@@ -2783,6 +2850,7 @@ async function processDocument(context, runId = activeTranslationRun) {
         tabId: activeTabId,
         context,
         reapply: job.status === 'completed',
+        glossaryPrompt: currentGlossaryPrompt(),
       });
       if (accepted?.ok) {
         persistJobPatch(job, { workerManaged: true, status: job.status === 'completed' ? 'queued' : job.status || 'queued' });
@@ -2848,6 +2916,7 @@ async function processDocument(context, runId = activeTranslationRun) {
   try {
     const translationOptions = {
       signal: controller.signal,
+      glossaryPrompt: currentGlossaryPrompt(),
       // Apply each completed block immediately. Waiting for every paragraph
       // made a long page feel frozen even though the model was already
       // returning usable results.
@@ -3495,7 +3564,7 @@ function handleEmptyPrimary() {
 }
 
 function showSettings() {
-  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); updateReadingModeUi();
+  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); renderSiteRule(); updateReadingModeUi();
   if (readingMode === 'local') scheduleModelDiscovery({ markDirty: false });
 }
 
@@ -3716,7 +3785,7 @@ chrome.runtime.onMessage.addListener((message) => {
       if (documentChanged) setNotice('');
     }
     applyRadarEntryContext(pageContext);
-    renderPage(); setPlatformConnected(platformConnected); void applyAnnotationsForContext(pageContext);
+    renderPage(); renderSiteRule(); setPlatformConnected(platformConnected); void applyAnnotationsForContext(pageContext);
     // Restore an exact page-version session before persisting the fresh page
     // snapshot. Otherwise the first page-context event could overwrite a
     // renamed session (and its discussion) with an empty default session.
@@ -3728,6 +3797,9 @@ chrome.runtime.onMessage.addListener((message) => {
       if (interactionAtResumeStart !== interactionGeneration || contextForResume !== pageContext) return;
       saveLocalSession();
       await findPendingTranslation(contextForResume);
+      // Only after a resumable job had its chance: a site rule must not start
+      // a second full translation on top of the restored one.
+      maybeAutoTranslate();
     })();
     // When a page appends or edits content during a full translation, the
     // old overlays must be removed before taking the new snapshot. The
@@ -3955,6 +4027,18 @@ async function init() {
   $('interface-language').value = (await chrome.storage.local.get('readerUiLanguage')).readerUiLanguage || 'system';
   const storedScheme = (await chrome.storage.local.get('readerColorScheme')).readerColorScheme;
   $('color-scheme').value = ['light', 'dark'].includes(storedScheme) ? storedScheme : 'system';
+  const storedLayout = (await chrome.storage.local.get('readerTranslationLayout')).readerTranslationLayout;
+  $('translation-layout').value = storedLayout === 'stacked' ? 'stacked' : 'replace';
+  siteRules = normalizeSiteRules((await chrome.storage.local.get(SITE_RULES_KEY))[SITE_RULES_KEY]);
+  await loadGlossary();
+  renderSiteRule();
+  $('site-rule-mode').addEventListener('change', event => void saveSiteRule(event.target.value));
+  $('save-glossary').addEventListener('click', () => void saveGlossary());
+  $('translation-layout').addEventListener('change', async event => {
+    // The content script owns how an applied translation is laid out; the
+    // panel only stores the preference and the script re-lays out live.
+    await chrome.storage.local.set({ readerTranslationLayout: event.target.value === 'stacked' ? 'stacked' : 'replace' });
+  });
   $('color-scheme').addEventListener('change', async event => {
     // The theme provider and the content script both read this key, so the
     // panel only has to persist the choice and let them subscribe.
@@ -4088,7 +4172,7 @@ async function init() {
   $('library-previous').addEventListener('click', () => { libraryView.page -= 1; void updateLibrary(); $('library-summary').scrollIntoView({ block: 'nearest' }); });
   $('library-next').addEventListener('click', () => { libraryView.page += 1; void updateLibrary(); $('library-summary').scrollIntoView({ block: 'nearest' }); });
   $('undo-library-delete').addEventListener('click', () => void undoLibraryDelete());
-  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await libraryDeletion.reset(); await readerStore.clearAll(); show($('library-notice'), false); webSearchEnabled = false; renderWebSearchToggle(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true; await syncSearchPermissions(); renderWebSearchToggle(); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
+  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await libraryDeletion.reset(); await readerStore.clearAll(); show($('library-notice'), false); webSearchEnabled = false; renderWebSearchToggle(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl', SITE_RULES_KEY]); siteRules = {}; await readerStore.setSetting('glossary', ''); glossaryEntries = []; if ($('glossary-input')) $('glossary-input').value = ''; provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true; await syncSearchPermissions(); renderWebSearchToggle(); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
   await updateLibrary();
   void restorePendingPageAction();
   selectionActionsReady = true;

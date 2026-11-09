@@ -373,7 +373,7 @@ function translationSandbox(context, imageRequest) {
     DOMException, context, boundWindowTabId: null, activeTabId: 7, applyTextTranslations, translationController: controller, activeJobRecord: job,
     translationRequested: true, translationRunning: true, activeTranslationRun: 1,
     failedTranslationItems: [], translatedTextIds: new Set(), translatedImageIds: new Set(),
-    platformModeReady: () => true, boundTaskContext: (c) => c, currentReadingLanguage: () => 'zh-CN',
+    platformModeReady: () => true, boundTaskContext: (c) => c, currentReadingLanguage: () => 'zh-CN', currentGlossaryPrompt: () => '',
     updatePageContextUi: () => {}, updateReaderTranslations: () => {}, translationCoverageWarning: () => '', makeDocument: (c) => c,
     persistJobPatch: (j, p) => Object.assign(j, p), renderProgress: () => {}, sendToPage: async (m) => ({ ok: true, appliedIds: (m.translations || []).map(item => item.id) }),
     setNotice: (n) => notices.push(n), requestPlatformTranslations: async () => [],

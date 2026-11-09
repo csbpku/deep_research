@@ -293,6 +293,18 @@ function ReaderPanel() {
           <ReaderDisclosure className="provider-extra-checks" label={<>{t("图片能力")}</>}><ReaderButton id="test-vision" type="button" variant="outlined">{t("检测图片能力")}</ReaderButton></ReaderDisclosure>
         </section>
               <Alert id="settings-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
+        <section id="reading-translation-settings" className="settings-card">
+          <div className="settings-card-heading">
+            <Typography component="h3" variant="h3">{t("阅读与翻译")}</Typography>
+          </div>
+          <div className="field"><label htmlFor="translation-layout">{t("翻译版式")}</label><ReaderSelect id="translation-layout" defaultValue="replace"><option value="replace">{t("替换原文")}</option><option value="stacked">{t("原文与译文对照")}</option></ReaderSelect></div>
+          <p className="small">{t("对照版式保留原文；代码块和表格单元格仍按替换处理。")}</p>
+          <div className="field"><label htmlFor="site-rule-mode">{t("本站翻译规则")}</label><ReaderSelect id="site-rule-mode" defaultValue="ask"><option value="ask">{t("每次询问")}</option><option value="always">{t("总是自动翻译")}</option><option value="never">{t("从不自动翻译")}</option></ReaderSelect></div>
+          <p id="site-rule-hint" className="small" />
+          <div className="field"><label htmlFor="glossary-input">{t("术语表")}</label><ReaderTextField id="glossary-input" multiline minRows={3} placeholder={t("每行一条：source => 译法")} /></div>
+          <div className="actions"><ReaderButton id="save-glossary" type="button" variant="outlined">{t("保存术语表")}</ReaderButton></div>
+          <p id="glossary-status" className="small" role="status" aria-live="polite" />
+        </section>
         <section className="settings-card">
           <div className="field"><label htmlFor="interface-language">{t('界面语言')}</label><ReaderSelect id="interface-language" defaultValue="system"><option value="system">{t('跟随浏览器')}</option><option value="zh-CN">简体中文</option><option value="en">English</option></ReaderSelect></div>
           <p className="small">{t('回答跟随提问语言；翻译可在输入区旁选择目标语言，并自动记住。')}</p>

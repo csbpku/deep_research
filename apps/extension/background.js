@@ -120,7 +120,7 @@ function summarizeFailure(item, kind) {
   };
 }
 
-async function executeTranslationJob({ jobId, tabId, context, reapply = false }) {
+async function executeTranslationJob({ jobId, tabId, context, reapply = false, glossaryPrompt = '' }) {
   const existing = translationJobs.get(jobId);
   if (existing) {
     existing.tabId = tabId;
@@ -218,6 +218,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
     };
     let translations = await translateBlocks(readingProvider, document, translatableBlocks, {
       signal: controller.signal,
+      glossaryPrompt,
       // The content script can paint a paragraph as soon as its model call
       // completes. The final aggregate below remains as a recovery pass for
       // a page that changed while the job was running.
@@ -651,7 +652,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse?.({ ok: false, error: '翻译任务缺少页面上下文' });
       return false;
     }
-    void executeTranslationJob({ jobId, tabId, context: message.context, reapply: Boolean(message.reapply) });
+    void executeTranslationJob({
+      jobId,
+      tabId,
+      context: message.context,
+      reapply: Boolean(message.reapply),
+      glossaryPrompt: typeof message.glossaryPrompt === 'string' ? message.glossaryPrompt : '',
+    });
     sendResponse?.({ ok: true });
     return true;
   }

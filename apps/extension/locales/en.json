@@ -831,5 +831,22 @@
   "本次回答没有可核对的原文证据；正文已按上限截取": "This answer has no verifiable source evidence; the page text was truncated.",
   "证据覆盖 {0} 段；正文已按上限截取，结论未覆盖全文": "{0} source paragraphs cited; the page text was truncated, so the answer does not cover the whole article.",
   "证据覆盖 {0} 段，正文共 {1} 段": "{0} source paragraphs cited out of {1}.",
-  "证据覆盖 {0} 段，正文段数未知": "{0} source paragraphs cited."
+  "证据覆盖 {0} 段，正文段数未知": "{0} source paragraphs cited.",
+  "阅读与翻译": "Reading and translation",
+  "翻译版式": "Translation layout",
+  "替换原文": "Replace the original",
+  "原文与译文对照": "Original and translation",
+  "对照版式保留原文；代码块和表格单元格仍按替换处理。": "The comparison layout keeps the source text. Code blocks and table cells are still replaced.",
+  "本站翻译规则": "Rule for this site",
+  "每次询问": "Ask every time",
+  "总是自动翻译": "Always translate",
+  "从不自动翻译": "Never translate automatically",
+  "术语表": "Glossary",
+  "每行一条：source => 译法": "One per line: source => translation",
+  "保存术语表": "Save glossary",
+  "术语表已保存（{0} 条）。": "Glossary saved ({0} entries).",
+  "术语表格式无法识别，请使用“source => 译法”每行一条。": "Could not read the glossary. Use one “source => translation” pair per line.",
+  "当前站点：{0}": "Current site: {0}",
+  "没有打开可读取的网页，站点规则会在打开文章后生效。": "No readable page is open. The site rule applies once an article is open.",
+  "保存术语表后，下一次翻译会优先使用这些译法。": "After saving, the next translation prefers these terms."
 }
