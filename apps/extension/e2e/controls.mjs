@@ -32,7 +32,16 @@ const providerPort = 8804;
 // replacement has its own 24-page matrix; removing the fixture's timer here
 // prevents an unrelated incremental job from racing the retry assertion.
 const fixtureHtml = (await readFile(fixturePath, 'utf8')).replace(/<script>[\s\S]*?<\/script>/u, '');
-let failedTranslationOnce = true;
+// Fail one specific paragraph twice, so the automatic single-item retry also
+// fails and the failure stays visible long enough for the manual retry. A
+// blanket "first request fails" depended on request ordering, which made the
+// assertion flaky once batching or page refreshes changed.
+const failingTargetText = 'Bounded queues keep browser work responsive';
+// Keep failing until the test explicitly allows the manual retry to succeed.
+// Auto-retries after a page refresh would otherwise clear the failure before
+// the assertion can see it.
+let allowTargetSuccess = false;
+let failingTargetAttempts = 0;
 let requestCount = 0;
 const requestKinds = [];
 
@@ -72,10 +81,11 @@ const providerServer = createServer(async (request, response) => {
     response.end(JSON.stringify({ choices: [{ message: { content: 'READER_VISION_CHECK' } }] }));
     return;
   }
-  // Make one text block fail exactly once. This exercises the visible failed
-  // item and the single-item retry path without making the whole task fail.
-  if (failedTranslationOnce && (system.includes('技术文档翻译器') || system.includes('图片翻译器'))) {
-    failedTranslationOnce = false;
+  // The target paragraph fails on its first two attempts (batch + automatic
+  // retry), so the panel must surface a visible, individually retryable item.
+  if ((system.includes('技术文档翻译器') || system.includes('图片翻译器') || system.includes('技术文档翻译编辑'))
+    && content.includes(failingTargetText) && !allowTargetSuccess) {
+    failingTargetAttempts += 1;
     response.writeHead(503, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
     response.end(JSON.stringify({ error: { message: 'temporary test rate limit' } }));
     return;
@@ -239,7 +249,7 @@ try {
     console.error(JSON.stringify({
       requestCount,
       requestKinds,
-      failedTranslationOnce,
+      failingTargetAttempts,
       notice: await panel.locator('#notice').innerText().catch(() => ''),
       progress: await panel.locator('#progress-area').innerText().catch(() => ''),
       body: (await panel.locator('body').innerText().catch(() => '')).slice(-2500),
@@ -248,6 +258,7 @@ try {
   }
   const failureText = await panel.locator('#translation-failures').innerText();
   if (!failureText.includes('重试')) throw new Error(`失败项没有显示重试入口：${failureText}`);
+  allowTargetSuccess = true;
   await panel.locator('.translation-retry').first().click();
   try {
     // The failure list renders one row per item. The previous assertion looked
@@ -460,6 +471,9 @@ try {
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#save-selection').click();
   await panel.locator('#save-note').fill('可复用的原文标注');
+  // Advanced fields live behind a collapsed section now.
+  await panel.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await panel.locator('#save-highlight').waitFor({ state: 'visible' });
   await panel.locator('#save-highlight').check();
   await panel.locator('#confirm-save').click();
   await fixture.waitForSelector('[data-deep-research-annotation-highlight] span', { timeout: 10_000 });

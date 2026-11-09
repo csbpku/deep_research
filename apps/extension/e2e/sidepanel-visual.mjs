@@ -319,6 +319,8 @@ try {
   await panel.locator('#save-selection').click();
   await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
   await panel.locator('#save-note').fill('E2E annotation note');
+  await panel.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await panel.locator('#save-highlight').waitFor({ state: 'visible' });
   await panel.locator('#save-highlight').check();
   await panel.locator('#confirm-save').click();
   await panel.locator('#save-dialog').waitFor({ state: 'hidden', timeout: 10_000 });

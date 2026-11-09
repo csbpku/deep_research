@@ -80,7 +80,7 @@ function ReaderPanel() {
           <div className="section-label"><Typography component="h2" variant="h3">{t("收藏与标注")}</Typography><div className="section-actions"><ReaderButton id="library-export" variant="text" title={t("把当前收藏导出为 Markdown 文件")}>{t("导出 Markdown")}</ReaderButton><ReaderButton id="refresh-library" variant="text">{t("刷新")}</ReaderButton></div></div>
           <p className="library-description">{t("只展示你确认保存的摘录、结论和标注。")}</p>
           <Paper component="div" variant="outlined" id="saved-insight-banner" className="saved-insight-banner hidden">
-            <div>
+            <div className="saved-insight-text">
               <strong id="saved-insight-title">{t("已保存阅读结论")}</strong>
               <span id="saved-insight-detail">{t("可以回到当前会话继续讨论。")}</span>
             </div>
@@ -305,6 +305,18 @@ function ReaderPanel() {
           <div className="actions"><ReaderButton id="save-glossary" type="button" variant="outlined">{t("保存术语表")}</ReaderButton></div>
           <p id="glossary-status" className="small" role="status" aria-live="polite" />
         </section>
+        <section id="usage-settings" className="settings-card">
+          <div className="settings-card-heading">
+            <Typography component="h3" variant="h3">{t("用量")}</Typography>
+          </div>
+          <p id="usage-summary" className="small" role="status" aria-live="polite">{t("本月还没有调用模型。")}</p>
+          <div className="field"><label htmlFor="translation-model">{t("翻译模型（可选）")}</label><ReaderTextField id="translation-model" placeholder={t("留空则与聊天使用同一个模型")} autoComplete="off" /></div>
+          <div className="field"><label htmlFor="price-input">{t("输入单价（每百万 token）")}</label><ReaderTextField id="price-input" type="number" slotProps={{ htmlInput: { min: 0, step: '0.01' } }} autoComplete="off" placeholder="0" /></div>
+          <div className="field"><label htmlFor="price-output">{t("输出单价（每百万 token）")}</label><ReaderTextField id="price-output" type="number" slotProps={{ htmlInput: { min: 0, step: '0.01' } }} autoComplete="off" placeholder="0" /></div>
+          <p className="small">{t("价格留空时不显示预估费用。")}</p>
+          <div className="actions"><ReaderButton id="save-usage-settings" type="button" variant="outlined">{t("保存用量设置")}</ReaderButton></div>
+          <p id="usage-settings-status" className="small" role="status" aria-live="polite" />
+        </section>
         <section className="settings-card">
           <div className="field"><label htmlFor="interface-language">{t('界面语言')}</label><ReaderSelect id="interface-language" defaultValue="system"><option value="system">{t('跟随浏览器')}</option><option value="zh-CN">简体中文</option><option value="en">English</option></ReaderSelect></div>
           <p className="small">{t('回答跟随提问语言；翻译可在输入区旁选择目标语言，并自动记住。')}</p>
@@ -322,13 +334,17 @@ function ReaderPanel() {
         <div className="eyebrow">{t("保存阅读成果")}</div>
         <Typography component="h2" variant="h2">{t("保存摘录与笔记")}</Typography>
         <p id="save-mode-note" className="small" style={{ marginTop: 8 }} />
-        <div className="card"><div className="card-title"><label htmlFor="save-quote">{t("原文摘录")}</label><span id="save-source-title">{t("当前页面")}</span></div><ReaderTextField id="save-quote" style={{ marginTop: 9, minHeight: 100 }}  multiline minRows={3} /></div>
-        <div className="field"><label htmlFor="save-note">{t("我的笔记")}</label><ReaderTextField id="save-note" placeholder={t("补充自己的判断、待验证问题或使用场景")}  multiline minRows={3} /></div>
-        <ReadingSaveOptions />
-        <div id="save-ai-answer-field" className="field hidden"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} /></div>
-        <div className="field"><label htmlFor="save-tags">{t("标签（用逗号分隔，最多 10 个）")}</label><ReaderTextField id="save-tags" placeholder={t("架构, 性能, 待验证")}  /></div>
-        <Alert id="save-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
-        <div className="actions"><ReaderButton id="confirm-save" variant="contained">{t("保存到阅读库")}</ReaderButton><ReaderButton id="cancel-save" variant="outlined">{t("取消")}</ReaderButton></div>
+        <div className="save-dialog-fields">
+          <div className="card"><div className="card-title"><label htmlFor="save-quote">{t("原文摘录")}</label><span id="save-source-title">{t("当前页面")}</span></div><ReaderTextField id="save-quote" style={{ marginTop: 9, minHeight: 100 }}  multiline minRows={3} maxRows={6} /></div>
+          <div className="field"><label htmlFor="save-note">{t("我的笔记")}</label><ReaderTextField id="save-note" placeholder={t("补充自己的判断、待验证问题或使用场景")}  multiline minRows={3} maxRows={4} /></div>
+          <ReaderDisclosure id="save-more-options" className="save-more-options" label={t("更多选项：AI 结论、标签、同步")}>
+            <ReadingSaveOptions />
+            <div id="save-ai-answer-field" className="field hidden"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} maxRows={4} /></div>
+            <div className="field"><label htmlFor="save-tags">{t("标签（用逗号分隔，最多 10 个）")}</label><ReaderTextField id="save-tags" placeholder={t("架构, 性能, 待验证")}  /></div>
+          </ReaderDisclosure>
+          <Alert id="save-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
+        </div>
+        <div className="save-action-bar"><ReaderButton id="confirm-save" className="save-action-primary" variant="contained">{t("保存到阅读库")}</ReaderButton><ReaderButton id="cancel-save" className="save-action-secondary" variant="outlined">{t("取消")}</ReaderButton></div>
       </section>
 
       <div id="mode-data-note" className="footer">{t("独立模式：模型请求与阅读成果保存在本地，可导出或清除。")}</div>

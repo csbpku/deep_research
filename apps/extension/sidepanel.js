@@ -4,6 +4,8 @@ import { t, getUiLanguage, setUiLanguage } from './i18n.js';
 import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './answer-task.js';
 import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
 import { answerCoverage } from './answer-presentation.js';
+import { estimateAnswer, estimateTokens, estimateTranslation, formatTokens } from './cost-estimate.js';
+import { USAGE_KEY, mergeUsage, pruneUsage, recordUsage, usageDay, usageSummary } from './usage-meter.js';
 import { SITE_RULES_KEY, normalizeSiteRules, setSiteRule, siteRuleFor } from './site-rules.js';
 import { glossaryPrompt, parseGlossary, serializeGlossary } from './glossary.js';
 import { detectLocalModels } from './local-models.js';
@@ -129,6 +131,10 @@ const libraryView = { query: '', kind: 'all', page: 1, tag: '' };
 // chrome.storage (shared with the content script), glossary in the reader
 // store so it travels with export/import.
 let siteRules = {};
+// Local, counter-only usage. Nothing here may carry page text or credentials.
+let usageState = { days: {}, totals: {} };
+let translationModel = '';
+let pricing = { inputPerMillion: 0, outputPerMillion: 0 };
 let glossaryEntries = [];
 let currentSiteHost = '';
 const libraryDeletion = createLibraryDeletion(readerStore);
@@ -691,7 +697,10 @@ async function changeTranslationLanguage(value) {
 }
 
 function readingProvider(language = currentTranslationLanguage()) {
-  return provider ? { ...provider, language } : provider;
+  // Translation may use a cheaper model than chat; an empty override keeps
+  // the single-model setup unchanged.
+  const model = String(translationModel || '').trim();
+  return provider ? { ...provider, language, ...(model ? { model } : {}) } : provider;
 }
 
 function providerPreset(kind) {
@@ -1647,6 +1656,63 @@ function renderLibraryTagOptions(tags) {
   }
   select.replaceChildren(...options);
   select.value = current;
+}
+
+function renderUsageSettings() {
+  if (!$('usage-summary')) return;
+  renderUsageSummary();
+  if ($('translation-model')) $('translation-model').value = translationModel;
+  if ($('price-input')) $('price-input').value = pricing.inputPerMillion ? String(pricing.inputPerMillion) : '';
+  if ($('price-output')) $('price-output').value = pricing.outputPerMillion ? String(pricing.outputPerMillion) : '';
+}
+
+async function saveUsageSettings() {
+  const model = String($('translation-model')?.value || '').trim();
+  const input = Math.max(0, Number($('price-input')?.value) || 0);
+  const output = Math.max(0, Number($('price-output')?.value) || 0);
+  translationModel = model;
+  pricing = { inputPerMillion: input, outputPerMillion: output };
+  await readerStore.setSetting('translationModel', model);
+  await readerStore.setSetting('pricing', pricing);
+  $('usage-settings-status').textContent = t("用量设置已保存。");
+}
+
+async function recordUsageEvent(kind, { requests = 0, chars = 0, tokens = 0 } = {}) {
+  if (!requests && !chars && !tokens) return;
+  try {
+    const stored = (await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY];
+    // Read-modify-write with a max merge: two panels racing on the same day
+    // must not double-count, and a losing writer must not erase the winner.
+    const next = recordUsage(stored, { day: usageDay(), kind, requests, chars, tokens });
+    usageState = mergeUsage(stored, next);
+    await chrome.storage.local.set({ [USAGE_KEY]: usageState });
+    renderUsageSummary();
+  } catch { /* usage is best-effort */ }
+}
+
+function recordAnswerUsage(context, question, answer) {
+  const estimate = estimateAnswer(context || {}, question || '');
+  const outputTokens = estimateTokens(String(answer?.answer || ''));
+  void recordUsageEvent('answer', { requests: 1, chars: estimate.chars, tokens: estimate.inputTokens + outputTokens });
+}
+
+function usageMonthToDate(kind) {
+  const today = usageDay();
+  const [year, month] = today.split('-');
+  return usageSummary(usageState, { from: `${year}-${month}-01`, to: today, kind });
+}
+
+function renderUsageSummary() {
+  const target = $('usage-summary');
+  if (!target) return;
+  const translation = usageMonthToDate('translation');
+  const answer = usageMonthToDate('answer');
+  if (!translation.requests && !answer.requests) {
+    target.textContent = t("本月还没有调用模型。");
+    return;
+  }
+  target.textContent = t("本月：翻译 {0} 次请求 / {1} 字符；问答 {2} 次。", translation.requests,
+    formatTokens(translation.chars), answer.requests);
 }
 
 function renderSiteRule() {
@@ -2834,6 +2900,7 @@ async function processDocument(context, runId = activeTranslationRun) {
     : t("全文翻译完成。可以滚动阅读，或选择一段文字继续追问。");
   const usePlatform = platformModeReady();
   context = boundTaskContext({ ...context, targetLanguage: currentTranslationLanguage() }, { preserveAllBlocks: true });
+  const usageEstimate = estimateTranslation({ blocks: context.blocks, body: context.body });
   documentContext = context;
   updatePageContextUi(context);
   const coverageWarning = translationCoverageWarning(context);
@@ -2854,6 +2921,11 @@ async function processDocument(context, runId = activeTranslationRun) {
       });
       if (accepted?.ok) {
         persistJobPatch(job, { workerManaged: true, status: job.status === 'completed' ? 'queued' : job.status || 'queued' });
+        void recordUsageEvent('translation', {
+          requests: usageEstimate.requests + images.length,
+          chars: usageEstimate.chars,
+          tokens: usageEstimate.tokens,
+        });
         return;
       }
     } catch {
@@ -2910,9 +2982,12 @@ async function processDocument(context, runId = activeTranslationRun) {
   const imageLimitNotice = context.imageTruncated
     ? t("图片超过处理上限，已列出 {0}/{1} 张，未处理部分已明确保留。", images.length, context.imageCandidateCount || images.length)
     : '';
+  const usageLine = usageEstimate.requests
+    ? t("本次约 {0} 段、{1} 字符，预计 {2} 次模型请求。", usageEstimate.blocks, formatTokens(usageEstimate.chars), usageEstimate.requests)
+    : '';
   setNotice(usePlatform
-    ? t("正文与图片文字翻译通过调研平台 AI Engine 处理；图片字节仅在本次操作中由浏览器读取并按需上传，不会上传图片 URL。{0}{1}", coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : '')
-    : t("正文翻译会按块处理；图片无法翻译时保留原图并继续。{0}{1}", coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : ''));
+    ? t("正文与图片文字翻译通过调研平台 AI Engine 处理；图片字节仅在本次操作中由浏览器读取并按需上传，不会上传图片 URL。{0}{1}{2}", usageLine ? `\n${usageLine}` : '', coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : '')
+    : t("正文翻译会按块处理；图片无法翻译时保留原图并继续。{0}{1}{2}", usageLine ? `\n${usageLine}` : '', coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : ''));
   try {
     const translationOptions = {
       signal: controller.signal,
@@ -2944,6 +3019,11 @@ async function processDocument(context, runId = activeTranslationRun) {
       ...blocks.filter((block) => block.kind === 'code').map((block) => block.id),
     ]);
     if (runId !== activeTranslationRun) return;
+    void recordUsageEvent('translation', {
+      requests: usageEstimate.requests + images.length,
+      chars: usageEstimate.chars,
+      tokens: usageEstimate.tokens,
+    });
     const finalResults = await applyTranslations([...cachedTranslations, ...translations.filter((item) => item.text)]);
     const renderedById = new Map(finalResults.map((item) => [item.id, item]));
     translations = [...cachedTranslations, ...translations].map((item) => renderedById.get(item.id) || item);
@@ -3312,6 +3392,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     });
     if (!stillVisible()) return;
     latestStructuredAnswer = typeof result === 'string' ? { answer: result, evidence: [], background: '', inference: '', limitations: [], warnings: [] } : result;
+    recordAnswerUsage(requestSource, requestPrompt, latestStructuredAnswer);
     if (requestSource.contentHash && requestSource.contentHash !== (pageContext?.contentHash || documentContext?.contentHash)) latestStructuredAnswer = { ...latestStructuredAnswer, evidence: [], warnings: [...(latestStructuredAnswer.warnings || []), t("页面内容已更新，旧引文定位已撤销。")] };
     latestAnswer = latestStructuredAnswer.answer || '';
     discussionHistory = [
@@ -3417,6 +3498,9 @@ async function openSaveDialog(insight = null, options = {}) {
     includeAI: Boolean(source.aiAnswer), sync: platformModeReady(),
     highlightAvailable, aiAvailable: Boolean(source.aiAnswer), syncAvailable: platformModeReady(),
   });
+  // Editing an existing record with advanced fields must not hide them behind
+  // a collapsed section the user cannot see is populated.
+  if ($('save-more-options')) $('save-more-options').open = Boolean(source.aiAnswer || (source.tags && source.tags.length));
   $('save-notice').textContent = '';
   show($('save-notice'), false);
   if (source.fallbackWarning) setNotice(source.fallbackWarning, $('save-notice'));
@@ -3564,7 +3648,7 @@ function handleEmptyPrimary() {
 }
 
 function showSettings() {
-  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); renderSiteRule(); updateReadingModeUi();
+  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); renderSiteRule(); renderUsageSettings(); updateReadingModeUi();
   if (readingMode === 'local') scheduleModelDiscovery({ markDirty: false });
 }
 
@@ -4030,10 +4114,19 @@ async function init() {
   const storedLayout = (await chrome.storage.local.get('readerTranslationLayout')).readerTranslationLayout;
   $('translation-layout').value = storedLayout === 'stacked' ? 'stacked' : 'replace';
   siteRules = normalizeSiteRules((await chrome.storage.local.get(SITE_RULES_KEY))[SITE_RULES_KEY]);
+  usageState = pruneUsage((await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY], { keepDays: 120 });
+  translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
+  const storedPricing = await readerStore.getSetting('pricing', null);
+  pricing = {
+    inputPerMillion: Math.max(0, Number(storedPricing?.inputPerMillion) || 0),
+    outputPerMillion: Math.max(0, Number(storedPricing?.outputPerMillion) || 0),
+  };
+  await chrome.storage.local.set({ [USAGE_KEY]: usageState });
   await loadGlossary();
   renderSiteRule();
   $('site-rule-mode').addEventListener('change', event => void saveSiteRule(event.target.value));
   $('save-glossary').addEventListener('click', () => void saveGlossary());
+  $('save-usage-settings').addEventListener('click', () => void saveUsageSettings());
   $('translation-layout').addEventListener('change', async event => {
     // The content script owns how an applied translation is laid out; the
     // panel only stores the preference and the script re-lays out live.

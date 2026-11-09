@@ -438,6 +438,8 @@ try {
   await page.locator('#confirm-save').click();
   await page.locator('#save-notice').filter({ hasText: '原文摘录' }).waitFor();
   await page.locator('#save-quote').fill(source);
+  await page.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await page.locator('#save-highlight').waitFor({ state: 'visible' });
   await page.locator('#save-highlight').check();
   await page.locator('#save-note').fill('audit note');
   await page.locator('#confirm-save').dblclick();
@@ -452,6 +454,8 @@ try {
   await page.locator('#save-dialog').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#save-note').inputValue(), 'audit note', '再次保存相同选段会编辑原记录');
   await page.locator('#save-note').fill('audit updated note');
+  await page.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await page.locator('#save-highlight').waitFor({ state: 'visible' });
   await page.locator('#save-highlight').uncheck();
   await page.locator('#confirm-save').dblclick();
   await page.locator('#save-dialog').waitFor({ state: 'hidden' });

@@ -848,5 +848,19 @@
   "术语表格式无法识别，请使用“source => 译法”每行一条。": "Could not read the glossary. Use one “source => translation” pair per line.",
   "当前站点：{0}": "Current site: {0}",
   "没有打开可读取的网页，站点规则会在打开文章后生效。": "No readable page is open. The site rule applies once an article is open.",
-  "保存术语表后，下一次翻译会优先使用这些译法。": "After saving, the next translation prefers these terms."
+  "保存术语表后，下一次翻译会优先使用这些译法。": "After saving, the next translation prefers these terms.",
+  "本月还没有调用模型。": "No model calls this month yet.",
+  "本月：翻译 {0} 次请求 / {1} 字符；问答 {2} 次。": "This month: {0} translation requests / {1} characters; {2} answers.",
+  "本次约 {0} 段、{1} 字符，预计 {2} 次模型请求。": "About {0} paragraphs and {1} characters; roughly {2} model requests.",
+  "用量": "Usage",
+  "翻译模型（可选）": "Translation model (optional)",
+  "留空则与聊天使用同一个模型。": "Leave empty to use the same model as chat.",
+  "输入单价（每百万 token）": "Input price per 1M tokens",
+  "输出单价（每百万 token）": "Output price per 1M tokens",
+  "预估费用：{0}": "Estimated cost: {0}",
+  "价格留空时不显示预估费用。": "Leave the prices empty to hide the cost estimate.",
+  "更多选项：AI 结论、标签、同步": "More options: AI conclusion, tags, sync",
+  "保存用量设置": "Save usage settings",
+  "用量设置已保存。": "Usage settings saved.",
+  "价格按每百万 token 填写，留空或 0 表示不显示预估费用。": "Prices are per 1M tokens; empty or 0 hides the cost estimate."
 }

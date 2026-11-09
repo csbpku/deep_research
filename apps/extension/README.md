@@ -20,7 +20,7 @@
 
 鼠标停在已翻译的段落或使用 Tab 聚焦后，段落旁显示“查看这一段原文 / 译文”按钮；右键菜单同样显示对应操作，切回原文后可再次切回译文。也可按 **Alt+Shift+O** 或 Alt+单击切换。单段操作保留原文和缓存，不发模型请求、不改正文版本；“恢复原文”则清除整页翻译覆盖。
 
-模型配置交互参考 [Open WebUI 的连接与模型发现](https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/) 和 [LM Studio 默认可无认证的本地服务](https://lmstudio.ai/docs/python/getting-started/authentication)。Reader 的空 Key 规则仅适用于回环地址，云端仍要求 Key。
+设置页的“用量”可以查看本月翻译与问答的请求数、字符数和估算 token（只存计数，不含正文），填写每百万 token 的输入/输出单价后会显示预估费用；也可以单独指定“翻译模型”，留空则与聊天共用同一个模型。全文翻译开始前会提示本次预计的段数、字符数和模型请求数。模型配置交互参考 [Open WebUI 的连接与模型发现](https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/) 和 [LM Studio 默认可无认证的本地服务](https://lmstudio.ai/docs/python/getting-started/authentication)。Reader 的空 Key 规则仅适用于回环地址，云端仍要求 Key。
 
 
 ### 翻译性能验收
