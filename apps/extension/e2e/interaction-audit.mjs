@@ -442,6 +442,23 @@ try {
     assert.equal(await openPopup(), true, '再次选中后选段翻译仍未出现');
   }
   await translation.waitFor({ timeout: 30_000 });
+  // Click through the page instead of Playwright's actionability checks: a
+  // page refresh may replace the host at any moment, and this assertion is
+  // about theme colours, not hit-testing.
+  const clickPopupControl = async (selector) => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const clicked = await article.evaluate((sel) => {
+        const host = document.querySelector('[data-deep-research-selection-translation]');
+        const button = host?.shadowRoot?.querySelector(sel);
+        if (!button) return false;
+        button.click();
+        return true;
+      }, selector);
+      if (clicked) return;
+      await article.waitForTimeout(250);
+    }
+    throw new Error(`选段翻译浮层缺少 ${selector}`);
+  };
   const inspectTranslation = () => translation.evaluate(host => ({
     token: host.style.getPropertyValue('--reader-color-surface-raised'),
     background: getComputedStyle(host.shadowRoot.querySelector('.panel')).backgroundColor,
@@ -462,9 +479,9 @@ try {
     host.dataset.stableStamp = stamp;
     return previous === stamp;
   }, null, { timeout: 10_000 });
-  await translation.locator('.expand').click();
+  await clickPopupControl('.expand');
   assert.deepEqual(await inspectTranslation(), normal, '放大时保留同一组主题颜色');
-  await translation.locator('.expand').click();
+  await clickPopupControl('.expand');
   assert.deepEqual(await inspectTranslation(), normal, '恢复尺寸后仍为不透明背景');
   await article.screenshot({ path: `${artifacts}/selection-translation-opacity.png` });
   // A page refresh during the test clears the overlay by design; recreate it
@@ -474,7 +491,7 @@ try {
     await article.keyboard.press('Alt+Shift+t');
     await translation.waitFor({ timeout: 30_000 });
   }
-  await translation.locator('.close').click();
+  await clickPopupControl('.close');
   checks.push('选段翻译浮窗初始、放大、恢复尺寸均保留不透明主题背景');
   };
 
