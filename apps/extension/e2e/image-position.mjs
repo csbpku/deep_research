@@ -2,7 +2,9 @@ import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { tempDir, tempPath } from './temp-paths.mjs';
 
-const contentScript = new URL('../content.js', import.meta.url).pathname;
+// Use the generated copy: the source keeps the design-token placeholder
+// empty, and the overlays need the reader font/colour variables to render.
+const contentScript = new URL('../public/content.js', import.meta.url).pathname;
 const executablePath = process.env.CHROME_FOR_TESTING
   || [
     '/Users/shaobo.chen/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -20,7 +22,11 @@ await page.addInitScript(() => {
     sendMessage(message) { window.__readerMessages.push(message); return Promise.resolve(); },
     onMessage: { addListener(handler) { window.__readerMessageHandler = handler; } },
   };
+  // The content script reads UI language and dock state from local storage.
+  // This harness has no extension context, so it must stub that surface too.
+  const storage = { local: { get: async () => ({}), set: async () => {} }, onChanged: { addListener() {} } };
   Object.defineProperty(window.chrome, 'runtime', { value: runtime, configurable: true });
+  Object.defineProperty(window.chrome, 'storage', { value: storage, configurable: true });
 });
 
 // The image is deliberately local and deterministic. It gives the renderer a
@@ -36,8 +42,9 @@ await page.evaluate(() => {
     sendMessage(message) { window.__readerMessages.push(message); return Promise.resolve(); },
     onMessage: { addListener(handler) { window.__readerMessageHandler = handler; } },
   };
+  const storage = { local: { get: async () => ({}), set: async () => {} }, onChanged: { addListener() {} } };
   try {
-    Object.defineProperty(window, 'chrome', { value: { runtime }, configurable: true, writable: true });
+    Object.defineProperty(window, 'chrome', { value: { runtime, storage }, configurable: true, writable: true });
   } catch {
     Object.defineProperty(window.chrome, 'runtime', { value: runtime, configurable: true });
   }

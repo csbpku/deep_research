@@ -72,13 +72,18 @@
       return null;
     }
   }
-  chrome.storage.local.get('readerUiLanguage').then(stored => {
-    updateReaderLocale(stored.readerUiLanguage);
+  // Harnesses that mount this script without an extension context have no
+  // storage area; reading and language updates then simply stay at defaults.
+  Promise.resolve(chrome.storage?.local?.get?.('readerUiLanguage')).then(stored => {
+    updateReaderLocale(stored?.readerUiLanguage);
   }).catch(() => {});
-  chrome.storage.onChanged.addListener((changes, area) => {
+  chrome.storage?.onChanged?.addListener?.((changes, area) => {
     if (area === 'local' && changes.readerUiLanguage) {
       updateReaderLocale(changes.readerUiLanguage.newValue);
       syncParagraphControl(focusedTranslationId);
+    }
+    if (area === 'local' && changes.readerDockCollapsed) {
+      applyDockCollapsed(changes.readerDockCollapsed.newValue === true);
     }
   });
   function t(message, ...values) {
@@ -147,6 +152,7 @@
   let lastSelectionRange = null;
   let toolbarHost = null;
   let readerDockHost = null;
+  let readerDockCollapsed = false;
   let readerStatusHost = null;
   let readerStatusRevision = 0;
   const annotationHighlights = new Map();
@@ -976,15 +982,26 @@
         button:hover::after,button:focus-visible::after{opacity:1;transform:translateY(-50%) translateX(0)}
         .glyph{display:grid;width:24px;height:24px;place-items:center;border-radius:var(--reader-radius-small);background:var(--reader-color-primary);color:var(--reader-color-inverse-text);letter-spacing:0}
         .quick{color:var(--reader-color-primary)}.quick svg{display:block;width:19px;height:19px}
+        .collapse{height:22px;color:var(--reader-color-text-muted)}
+        .collapse svg{display:block;width:14px;height:14px}
+        .collapse:hover{color:var(--reader-color-primary)}
+        /* Collapsed keeps only the chat entry on the page. Hovering or
+           tabbing into the dock restores the quick actions, so the shortcut
+           never sits on top of article content for the whole session. */
+        .dock.collapsed .quick,.dock.collapsed .collapse{display:none}
+        .dock.collapsed:hover .quick,.dock.collapsed:hover .collapse,
+        .dock.collapsed:focus-within .quick,.dock.collapsed:focus-within .collapse{display:grid}
         @media(prefers-reduced-motion:reduce){button{transition:none}}
       </style>
       <div class="dock" role="toolbar" aria-label="技术文章快捷入口">
+        <button type="button" class="collapse" data-action="collapse" data-tooltip="收起快捷入口" aria-label="收起快捷入口" aria-expanded="true" title="收起快捷入口"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
         <button type="button" class="quick" data-action="summary" data-tooltip="总结本页" aria-label="总结本页" title="总结本页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/></svg></button>
         <button type="button" class="quick" data-action="translate" data-tooltip="翻译本页" aria-label="翻译本页" title="翻译本页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 11"/><path d="m4 14 6-6 6 6"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg></button>
         <button type="button" data-action="open" data-tooltip="打开聊天" aria-label="打开聊天" title="打开 Deep Research Reader 聊天侧栏"><span class="glyph">R</span></button>
       </div>`);
     shadow.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => {
       if (button.dataset.action === 'open') { openChatPanel(); return; }
+      if (button.dataset.action === 'collapse') { setDockCollapsed(true); return; }
       if (button.dataset.action === 'summary') setReaderStatus(t("正在读取正文并生成全文总结…"), 'loading');
       if (button.dataset.action === 'translate') setReaderStatus(t("正在读取正文，准备全文翻译…"), 'loading');
       chrome.runtime.sendMessage({
@@ -992,6 +1009,26 @@
       }).catch(() => {});
     }));
     document.documentElement.appendChild(readerDockHost);
+    applyDockCollapsed(readerDockCollapsed);
+    // The dock is also mounted by isolated harnesses that stub only
+    // `chrome.runtime`; a missing storage area must not break reading.
+    const stored = chrome.storage?.local?.get?.('readerDockCollapsed');
+    Promise.resolve(stored).then((value) => {
+      applyDockCollapsed(value?.readerDockCollapsed === true);
+    }).catch(() => {});
+  }
+
+  function applyDockCollapsed(collapsed) {
+    readerDockCollapsed = collapsed === true;
+    const shadow = readerDockHost?.shadowRoot;
+    if (!shadow) return;
+    shadow.querySelector('.dock')?.classList.toggle('collapsed', readerDockCollapsed);
+    shadow.querySelector('[data-action="collapse"]')?.setAttribute('aria-expanded', String(!readerDockCollapsed));
+  }
+
+  function setDockCollapsed(collapsed) {
+    applyDockCollapsed(collapsed);
+    try { chrome.storage?.local?.set?.({ readerDockCollapsed: readerDockCollapsed })?.catch?.(() => {}); } catch { /* no storage in this host */ }
   }
 
   function openChatPanel() {
@@ -1109,13 +1146,33 @@
     shadow.querySelector('.text').textContent = text.trim();
     const width = Math.min(440, window.innerWidth - 16);
     const anchor = rect.width || rect.height ? rect : fallbackRect;
-    // Prefer space beside the source. Otherwise place below it, then above it.
-    const beside = anchor.right + width + 16 <= window.innerWidth;
-    const left = beside ? anchor.right + 8 : Math.max(8, Math.min(window.innerWidth - width - 8, anchor.left));
-    const below = window.innerHeight - anchor.bottom - 16;
-    const top = beside ? Math.max(8, Math.min(anchor.top, window.innerHeight - 240))
-      : below >= 180 ? anchor.bottom + 8 : Math.max(8, anchor.top - 300);
-    popup.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:${width}px;height:${Math.min(300, Math.max(120, window.innerHeight - top - 8))}px;min-width:min(280px,calc(100vw - 16px));min-height:120px;max-width:calc(100vw - 16px);max-height:calc(100vh - ${top + 8}px);resize:both;overflow:hidden;pointer-events:auto;`;
+    const gap = 8;
+    const clampLeft = (value) => Math.max(8, Math.min(window.innerWidth - width - 8, value));
+    // One line of translated text must not open a half-screen panel, so the
+    // host grows with its content and only caps at the available space. The
+    // placement order is right, left, below, above, whichever first fits.
+    // A side that cannot hold the minimum width is not offered at all.
+    const minimum = Math.min(width, 280);
+    const spaceRight = window.innerWidth - anchor.right - gap - 8;
+    const spaceLeft = anchor.left - gap - 8;
+    let geometry;
+    if (spaceRight >= minimum) {
+      const top = Math.max(8, Math.min(anchor.top, window.innerHeight - 160));
+      geometry = { top, left: clampLeft(anchor.right + gap), maxHeight: Math.min(340, window.innerHeight - top - 8) };
+    } else if (spaceLeft >= minimum) {
+      const top = Math.max(8, Math.min(anchor.top, window.innerHeight - 160));
+      geometry = { top, left: clampLeft(anchor.left - width - gap), maxHeight: Math.min(340, window.innerHeight - top - 8) };
+    } else if (window.innerHeight - anchor.bottom - gap >= 180) {
+      const top = anchor.bottom + gap;
+      geometry = { top, left: clampLeft(anchor.left), maxHeight: Math.min(340, window.innerHeight - top - 8) };
+    } else {
+      const available = Math.max(120, anchor.top - gap - 8);
+      geometry = { bottom: window.innerHeight - anchor.top + gap, left: clampLeft(anchor.left), maxHeight: Math.min(340, available) };
+    }
+    const vertical = geometry.bottom === undefined
+      ? `top:${geometry.top}px;bottom:auto;`
+      : `top:auto;bottom:${geometry.bottom}px;`;
+    popup.style.cssText = `position:fixed;z-index:2147483647;left:${geometry.left}px;${vertical}width:${width}px;height:auto;min-width:min(280px,calc(100vw - 16px));min-height:96px;max-width:calc(100vw - 16px);max-height:${geometry.maxHeight}px;resize:both;overflow:hidden;pointer-events:auto;`;
     applyReaderDesignTokens(popup);
     const initialStyle = popup.style.cssText;
     const expand = shadow.querySelector('.expand');
@@ -1445,6 +1502,30 @@
       send({ type: 'deep-research:request-page' });
     });
     shadow.querySelector('[data-action="explain"]').addEventListener('click', () => void selectReadingImage(image));
+    // The controls sit above the image, not on it: translated figure labels
+    // often live in the top-right corner the toolbar used to cover. They
+    // appear on hover or keyboard focus and stay hidden otherwise.
+    control.style.opacity = '0';
+    control.style.transition = 'opacity 120ms ease';
+    const positionControl = () => {
+      const rect = wrapper.getBoundingClientRect();
+      const above = rect.top >= 48;
+      control.style.top = above ? 'auto' : '6px';
+      control.style.bottom = above ? 'calc(100% + 4px)' : 'auto';
+    };
+    const revealControl = (visible) => {
+      if (!control.isConnected) return;
+      if (visible) positionControl();
+      control.style.opacity = visible ? '1' : '0';
+    };
+    wrapper.addEventListener('mouseenter', () => revealControl(true));
+    wrapper.addEventListener('mouseleave', () => revealControl(false));
+    wrapper.addEventListener('focusin', () => revealControl(true));
+    wrapper.addEventListener('focusout', (event) => {
+      if (!wrapper.contains(event.relatedTarget)) revealControl(false);
+    });
+    control.addEventListener('focusin', () => revealControl(true));
+    control.addEventListener('focusout', () => revealControl(false));
     wrapper.appendChild(control);
   }
 
