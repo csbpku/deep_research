@@ -300,6 +300,22 @@ try {
     if (selector === '#chat-translate') { await openScopeMenu(page); await page.locator('#scope-page').click(); }
     await page.locator(selector).click();
   };
+  // The content script drops the last selection whenever page mutations
+  // settle (400ms debounce). Pressing the shortcut inside that window does
+  // nothing, so wait for quiet before using it.
+  const waitForPageQuiet = async (windowMs = 500) => {
+    await article.evaluate(async (quietMs) => {
+      await new Promise((resolve) => {
+        let timer = setTimeout(() => { observer.disconnect(); resolve(); }, quietMs);
+        const observer = new MutationObserver(() => {
+          clearTimeout(timer);
+          timer = setTimeout(() => { observer.disconnect(); resolve(); }, quietMs);
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        setTimeout(() => { observer.disconnect(); resolve(); }, quietMs * 8);
+      });
+    }, windowMs);
+  };
   const selection = async () => {
     await article.locator('#source').evaluate(el => {
       const range = document.createRange(); range.selectNodeContents(el);
@@ -408,9 +424,24 @@ try {
   const auditSelectionPopup = async () => {
   if (await page.locator('#restore-page').isVisible()) await page.locator('#restore-page').click();
   await selection();
-  await article.keyboard.press('Alt+Shift+t');
   const translation = article.locator('[data-deep-research-selection-translation]');
-  await translation.waitFor();
+  const openPopup = async () => {
+    await waitForPageQuiet();
+    await article.keyboard.press('Alt+Shift+t');
+    try {
+      await translation.waitFor({ timeout: 8_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // One bounded retry: a mutation that lands between the quiet check and the
+  // keypress still clears the stored selection.
+  if (!(await openPopup())) {
+    await selection();
+    assert.equal(await openPopup(), true, '再次选中后选段翻译仍未出现');
+  }
+  await translation.waitFor({ timeout: 30_000 });
   const inspectTranslation = () => translation.evaluate(host => ({
     token: host.style.getPropertyValue('--reader-color-surface-raised'),
     background: getComputedStyle(host.shadowRoot.querySelector('.panel')).backgroundColor,
