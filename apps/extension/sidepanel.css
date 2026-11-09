@@ -14,7 +14,13 @@ h1, h2, h3, p { margin:0 }
 .shell[data-workspace-view="library"] .discussion-panel, .shell[data-workspace-view="library"] .page-overview-scroll > :not(#reading-section) { display:none }
 .source { overflow-wrap:anywhere }
 .section-label { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:var(--reader-space-5) }
-.section-actions { display:flex; align-items:center; gap:8px }
+.section-actions { display:flex; align-items:center; gap:8px; min-width:0 }
+/* The library header carries a format picker plus two actions. In a 320px
+   English panel they must wrap instead of pushing the last action off-panel. */
+#reading-section > .section-label { flex-wrap:wrap; row-gap:var(--reader-space-1) }
+#reading-section .section-actions { flex:1 1 auto; flex-wrap:wrap; justify-content:flex-end }
+#reading-section .section-actions > .MuiFormControl-root { flex:0 1 auto; width:auto; min-width:0; max-width:40% }
+
 #reading-section > .section-label { margin-top:0 }
 .discussion-panel { display:flex; flex-direction:column; min-height:0; flex:1 }
 .discussion-heading { display:none }
