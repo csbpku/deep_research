@@ -3,6 +3,15 @@ import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { tempDir, tempPath } from './temp-paths.mjs';
+import {
+  installPageMutationRecorder,
+  readerFailureSnapshot,
+  readerMessageMark,
+  readerMessagesSince,
+  waitForPageMutationQuiet,
+  waitForPanelMessage,
+  waitForPanelSelection,
+} from './helpers/panel-state.mjs';
 
 // The answer scope lives in one chip now. Open its menu before choosing.
 async function openScopeMenu(page) {
@@ -139,6 +148,7 @@ try {
   const extensionId = new URL(worker.url()).host;
   const fixture = await context.newPage();
   await fixture.goto(`http://127.0.0.1:${fixturePort}/fixture.html`, { waitUntil: 'domcontentloaded' });
+  await installPageMutationRecorder(fixture);
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
   // Record every runtime message the panel receives so a dropped
@@ -153,6 +163,9 @@ try {
         cancelled: message?.cancelled,
         status: message?.job?.status,
         error: message?.job?.error,
+        applied: Array.isArray(message?.appliedIds) ? message.appliedIds.length : undefined,
+        translatedBlocks: Array.isArray(message?.context?.translatedBlockIds) ? message.context.translatedBlockIds.length : undefined,
+        contextHash: typeof message?.context?.contentHash === 'string' ? message.context.contentHash.slice(0, 8) : undefined,
       });
     });
   });
@@ -330,11 +343,11 @@ try {
   // selection happens to cover an entire paragraph. The content script keeps
   // the exact Range and renders a short result next to it without replacing
   // source text.
-  await fixture.evaluate(() => {
+  const partialQuote = 'Bounded queues keep browser';
+  const selectPartialTarget = () => fixture.evaluate((quote) => {
     const node = document.querySelector('#target');
     const text = node?.firstChild;
     if (!node || !text) throw new Error('选段翻译测试缺少目标文本节点');
-    const quote = 'Bounded queues keep browser';
     const range = document.createRange();
     range.setStart(text, 0);
     range.setEnd(text, quote.length);
@@ -342,10 +355,53 @@ try {
     selection?.removeAllRanges();
     selection?.addRange(range);
     node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-  });
+  }, partialQuote);
+  // Keyboard events and background forwarding are only reliable for the
+  // active article tab, so make that an explicit precondition instead of
+  // assuming the last automation step left it focused.
+  await fixture.bringToFront();
+  // The Alt+Shift+T handler refuses to fire while the content script's cached
+  // selection context is empty, and the content script clears that context
+  // from a page refresh that runs 400 ms after any DOM change. A pending
+  // refresh must therefore be drained before selecting; otherwise the toolbar
+  // and selection stay visible while the shortcut silently does nothing.
+  let shortcutForwarded = false;
+  let actionMark = 0;
+  for (let attempt = 0; attempt < 2 && !shortcutForwarded; attempt += 1) {
+    await waitForPageMutationQuiet(fixture);
+    actionMark = await readerMessageMark(panel);
+    await selectPartialTarget();
+    await waitForPanelSelection(panel, partialQuote);
+    await fixture.keyboard.press('Alt+Shift+t');
+    try {
+      await waitForPanelMessage(panel, 'deep-research:selection-action', { from: actionMark, timeout: 8_000 });
+      shortcutForwarded = true;
+    } catch (error) {
+      if (attempt === 1) {
+        console.error(JSON.stringify({
+          diag: 'selection-shortcut-not-forwarded',
+          requestCount,
+          requestKinds,
+          messagesSinceShortcut: await readerMessagesSince(panel, actionMark).catch(() => []),
+          ...await readerFailureSnapshot(panel, fixture),
+        }, null, 2));
+        throw new Error(`Alt+Shift+T 没有触发选段翻译：${error.message}`);
+      }
+      console.warn(`延迟的页面刷新清空了选段状态，重新选择后重试（第 ${attempt + 1} 次）`);
+    }
+  }
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
-  await fixture.keyboard.press('Alt+Shift+t');
-  await fixture.waitForSelector('[data-deep-research-selection-translation]', { timeout: 30_000 });
+  try {
+    await fixture.waitForSelector('[data-deep-research-selection-translation]', { timeout: 30_000 });
+  } catch (error) {
+    console.error(JSON.stringify({
+      diag: 'selection-translation-timeout',
+      requestCount,
+      requestKinds,
+      ...await readerFailureSnapshot(panel, fixture),
+    }, null, 2));
+    throw error;
+  }
   const selectionTranslation = await fixture.evaluate(() => ({
     count: document.querySelectorAll('[data-deep-research-selection-translation]').length,
     source: document.querySelector('#target')?.textContent || '',
@@ -397,6 +453,10 @@ try {
     selection?.addRange(range);
     node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
+  // The save dialog reads the panel's selection context, so wait until the
+  // full paragraph (not the earlier partial quote) reached the panel before
+  // opening it.
+  await waitForPanelSelection(panel, 'Bounded queues keep browser work responsive because cancellation can stop stale requests before they consume more model capacity.');
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#save-selection').click();
   await panel.locator('#save-note').fill('可复用的原文标注');
@@ -451,17 +511,36 @@ try {
   // content hash must invalidate the old highlight instead of drawing it on
   // a similar-looking but changed passage.
   await fixture.bringToFront();
+  const reattachMark = await readerMessageMark(panel);
   await worker.evaluate(async () => {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (tab?.id) await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
   });
-  await fixture.waitForSelector('[data-deep-research-annotation-highlight] span', { timeout: 10_000 });
+  // The panel re-applies the imported annotation on the next page context.
+  // Wait for that resolution instead of a visible mark: when a resumed
+  // translation hides the source paragraph there are no text rects to draw.
+  // Visual marks are already asserted by the save step above; this step is
+  // about the stored annotation re-attaching and then being invalidated.
+  try {
+    await waitForPanelMessage(panel, 'deep-research:annotation-resolved', { from: reattachMark, timeout: 15_000 });
+    await fixture.waitForSelector('[data-deep-research-annotation-highlight]', { state: 'attached', timeout: 10_000 });
+  } catch (error) {
+    console.error(JSON.stringify({ diag: 'annotation-reapply-timeout', ...await readerFailureSnapshot(panel, fixture) }, null, 2));
+    throw error;
+  }
+  const driftMark = await readerMessageMark(panel);
   await fixture.evaluate(() => {
     const target = document.querySelector('#target');
     if (!target) throw new Error('标注漂移测试缺少目标段落');
     target.textContent = `${target.textContent} Changed after the annotation was saved.`;
   });
   await fixture.waitForFunction(() => document.querySelectorAll('[data-deep-research-annotation-highlight]').length === 0, null, { timeout: 10_000 });
+  // The paragraph edit makes the panel cancel the old job and restore source
+  // translations for the new content hash. Let that restore and the page
+  // refresh it triggers land before adding image overlays, otherwise the late
+  // restore removes the labels this step is asserting on.
+  await waitForPanelMessage(panel, 'deep-research:translations-restored', { from: driftMark, timeout: 5_000 }).catch(() => {});
+  await waitForPageMutationQuiet(fixture, { timeout: 15_000 }).catch(() => {});
 
   // A borderline visual result must remain a side translation. This exercises
   // the content-script rendering threshold, not only the model parser. The
@@ -489,7 +568,10 @@ try {
       }],
     });
   }, { imageId: lowConfidenceImageId });
-  await fixture.waitForSelector('[data-deep-research-image-side-translations] [data-deep-research-image-side-translation]', { timeout: 10_000 });
+  // Wait for the exact count the assertion below checks rather than for the
+  // container to appear: a transient container made the count assertion race
+  // with overlays being replaced.
+  await fixture.waitForFunction(() => document.querySelectorAll('[data-deep-research-image-side-translations] [data-deep-research-image-side-translation]').length === 2, null, { timeout: 10_000 });
   const lowConfidenceState = await fixture.evaluate(() => ({
     overlays: document.querySelectorAll('[data-deep-research-image-overlay]').length,
     fallbacks: document.querySelectorAll('[data-deep-research-image-fallback]').length,

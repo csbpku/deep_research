@@ -234,6 +234,10 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
         emit('deep-research:translation-progress', { progress: { ...job } });
       },
     });
+    // A cancel can land after the last batch resolved but before the terminal
+    // commit. Without this check the job would overwrite the user's cancel with
+    // "completed" and re-apply translations on the next page refresh.
+    if (controller.signal.aborted) throw new DOMException('用户取消了翻译', 'AbortError');
     job.processedTextIds = mergeProcessedIds(job.processedTextIds, [
       ...translations.filter((item) => item.text || item.error).map((item) => item.id),
       ...blocks.filter((block) => block.kind === 'code').map((block) => block.id),
@@ -258,6 +262,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
       });
       emit('deep-research:translation-progress', { progress: { ...job } });
     }
+    if (controller.signal.aborted) throw new DOMException('用户取消了翻译', 'AbortError');
     const usableImageTranslations = imageTranslations.filter((item) => item.regions?.length || item.fallbackText || item.fallbackRegions?.length);
     if (usableImageTranslations.length) await sendToTab(tabId, { type: 'deep-research:apply-image-translations', translations: usableImageTranslations });
     const currentFailures = translations.filter((item) => item.error).map((item) => summarizeFailure(item, 'text'));
@@ -271,6 +276,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
       ...(boundedContext.taskWarnings || []),
       ...imageTranslations.filter((item) => item.noText || item.keptOriginal || item.sourceWarning || (item.fallbackText && item.note)).map((item) => `图片 ${item.id}: ${[item.sourceWarning, item.noText ? '未发现可可靠读取的文字' : '', item.keptOriginal ? '图片文字为技术标识符，保留原文' : '', item.note].filter(Boolean).join('；')}`),
     ];
+    if (controller.signal.aborted) throw new DOMException('用户取消了翻译', 'AbortError');
     await commitJob(job, {
       status: failures.length ? 'completed_with_errors' : 'completed',
       textDone: Math.max(Number(job.textDone) || 0, job.processedTextIds.length),

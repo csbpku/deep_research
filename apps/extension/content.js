@@ -2059,7 +2059,9 @@
       if (target?.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]')) return false;
       if (record.type === 'childList' && record.removedNodes.length > 0 && Array.from(record.removedNodes).every((node) => node instanceof Element && node.matches('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]'))) return false;
       return record.type === 'childList' && (Array.from(record.addedNodes).some((node) => {
-        return !(node instanceof Element && node.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom]'));
+        // Annotation highlights are ours too: without this the panel's next
+        // apply-annotations call would re-trigger a refresh every ~400ms.
+        return !(node instanceof Element && node.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]'));
       }) || record.removedNodes.length > 0) || record.type === 'characterData';
     });
     if (!pageChanged) return;
