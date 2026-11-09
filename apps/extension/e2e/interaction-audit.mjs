@@ -420,6 +420,17 @@ try {
   assert.ok(normal.token);
   assert.notEqual(normal.background, 'rgba(0, 0, 0, 0)');
   assert.equal(normal.opacity, '1');
+  // The panel may re-apply the same translation after a page refresh. Wait for
+  // the panel box to stop moving before clicking a control inside it.
+  await article.waitForFunction(() => {
+    const host = document.querySelector('[data-deep-research-selection-translation]');
+    if (!host) return false;
+    const rect = host.getBoundingClientRect();
+    const stamp = `${Math.round(rect.top)}:${Math.round(rect.left)}:${Math.round(rect.height)}`;
+    const previous = host.dataset.stableStamp;
+    host.dataset.stableStamp = stamp;
+    return previous === stamp;
+  }, null, { timeout: 10_000 });
   await translation.locator('.expand').click();
   assert.deepEqual(await inspectTranslation(), normal, '放大时保留同一组主题颜色');
   await translation.locator('.expand').click();

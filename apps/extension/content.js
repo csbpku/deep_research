@@ -1327,6 +1327,13 @@
     // paragraph is not enough evidence for a partial selection because it may
     // contain several unrelated claims.
     if (!selected || (expected && selected !== expected)) return false;
+    // Re-applying the same translation after a page refresh must not replace
+    // the floating panel: that detaches any control the reader is using.
+    const current = document.querySelector('[data-deep-research-selection-translation]');
+    if (current && clean(current.shadowRoot?.querySelector('.text')?.textContent || '') === translation
+      && current.dataset.deepResearchSelectionQuote === selected) {
+      return true;
+    }
     removeSelectionTranslation();
     const rect = lastSelectionRange.getBoundingClientRect();
     const fallbackRect = lastSelectionNode?.getBoundingClientRect?.() || rect;
@@ -1334,6 +1341,7 @@
     const popup = document.createElement('div');
     popup.dataset.deepResearchSelectionTranslation = 'true';
     popup.dataset.deepResearchTranslation = 'true';
+    popup.dataset.deepResearchSelectionQuote = selected;
     popup.setAttribute('role', 'region');
     popup.setAttribute('aria-label', t("选段翻译"));
     applyReaderDesignTokens(popup);
