@@ -436,6 +436,13 @@ try {
   await translation.locator('.expand').click();
   assert.deepEqual(await inspectTranslation(), normal, '恢复尺寸后仍为不透明背景');
   await article.screenshot({ path: `${artifacts}/selection-translation-opacity.png` });
+  // A page refresh during the test clears the overlay by design; recreate it
+  // once so the close control is still exercised instead of skipping it.
+  if (!(await translation.count())) {
+    await selection();
+    await article.keyboard.press('Alt+Shift+t');
+    await translation.waitFor({ timeout: 30_000 });
+  }
   await translation.locator('.close').click();
   checks.push('选段翻译浮窗初始、放大、恢复尺寸均保留不透明主题背景');
   };
