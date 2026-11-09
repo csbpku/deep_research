@@ -1660,6 +1660,31 @@ async def test_scorer_fallback_flags_quota_exhaustion(monkeypatch):
     assert result.quota_exhausted is True
 
 
+async def test_scorer_removes_inline_image_bytes_before_planning_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import base64
+
+    svg = '<svg><text>Measured 95%</text><path d="' + "M0 0 " * 20000 + '"/></svg>'
+    uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+    content = f"Opening evidence.\n\n![Comparison]({uri})\n\nFigure caption.\n\nClosing evidence."
+    prompts: list[str] = []
+
+    async def generate(**kwargs: object) -> object:
+        prompt = str(kwargs["user_prompt"])
+        prompts.append(prompt)
+        assert kwargs["max_input_tokens"]
+        return SimpleNamespace(text=json.dumps(_all_max_parsed()), truncated=False, finish_reason="stop")
+
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("ai_engine.llm.client.generate_text", generate)
+    await anthropic_scorer("Source", content)
+    assert len(prompts) == 1
+    assert "data:image" not in prompts[0]
+    assert all(text in prompts[0] for text in ("Opening evidence.", "Closing evidence.", "Measured 95%"))
+
+
 @pytest.mark.asyncio
 async def test_scorer_fallback_does_not_flag_transient_failures(monkeypatch):
     monkeypatch.setattr(distilled_scorer, "_LLM_RETRY_DELAY", 0.0)

@@ -7,20 +7,26 @@ import os
 import random
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from openai.types.chat import ChatCompletionMessageParam
+import structlog
 
 from ai_engine.llm.config import (
     LlmPurpose,
+    LlmRoute,
     fallback_spec as configured_fallback_spec,
     minimax_reasoning_effort,
     parse_spec,
     resolve_route,
 )
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
+from ai_engine.llm.provider_quota import (
+    ProviderQuotaExhausted, active_quota_error, remember_quota_error, require_quota_available,
+)
 from ai_engine.text_chunking import count_text_tokens
 from ai_engine.llm.token_budget import (
     TokenBudgetError,
@@ -41,6 +47,7 @@ _loop_semaphores: dict[
 ] = {}
 _circuit_failures: dict[str, tuple[int, float]] = {}
 _circuit_lock = asyncio.Lock()
+_logger = structlog.get_logger("ai_engine.llm")
 
 
 def _retry_backoff_seconds(retry_index: int) -> float:
@@ -75,6 +82,7 @@ class TextGenerationResult:
     provider: str
     finish_reason: str | None = None
     truncated: bool = False
+    response_id: str | None = None
 
 
 class ReasoningStreamFilter:
@@ -191,6 +199,20 @@ def _llm_semaphore() -> asyncio.Semaphore:
     return semaphore
 
 
+@asynccontextmanager
+async def _provider_slot(route: LlmRoute) -> AsyncIterator[None]:
+    async with _llm_semaphore():
+        await require_quota_available(route)
+        try:
+            yield
+        except Exception as error:
+            if is_quota_exhausted_error(error) and not isinstance(error, TokenBudgetError):
+                # Publish before releasing the slot or awaiting usage/budget
+                # persistence, otherwise queued requests can slip through.
+                await remember_quota_error(route, error)
+            raise
+
+
 def _cached_client(
     client_type: type[Any],
     *,
@@ -219,7 +241,9 @@ def sanitize_llm_error(exc: BaseException) -> str:
 
 def is_quota_error(exc: BaseException) -> bool:
     """Whether a provider rejected the call because its allowance is exhausted."""
-    if getattr(exc, "status_code", None) == 429:
+    if isinstance(exc, ProviderQuotaExhausted):
+        return True
+    if getattr(exc, "status_code", None) in {402, 429}:
         return True
     detail = str(exc).lower()
     return any(
@@ -245,16 +269,29 @@ _QUOTA_EXHAUSTED_MARKERS = (
     "insufficient balance",
     "billing_hard_limit_reached",
     "billing_not_active",
+    "token plan 用量上限",
+    "m plan 用量上限",
+    "token plan usage limit",
+    "m plan usage limit",
 )
 
 
 def _is_quota_exhausted_single(exc: BaseException) -> bool:
+    if isinstance(exc, ProviderQuotaExhausted):
+        return True
     if getattr(exc, "status_code", None) == 402:
         return True
     # A local token cap cannot recover inside the same sync run either, so it
     # stops the run the same way provider billing exhaustion does.
     if isinstance(exc, TokenBudgetExceeded):
         return True
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        for detail in (body, body.get("error"), body.get("base_resp")):
+            if isinstance(detail, dict) and any(
+                str(detail.get(field)) == "2056" for field in ("code", "status_code")
+            ):
+                return True
     detail = str(exc).lower()
     return any(marker in detail for marker in _QUOTA_EXHAUSTED_MARKERS)
 
@@ -415,6 +452,7 @@ async def generate_text(
     budget_user_id: str | None = None,
     single_attempt: bool = False,
     retry_attempts: int | None = None,
+    max_input_tokens: int | None = None,
 ) -> TextGenerationResult:
     """Generate text with explicit retry -> fallback ordering.
 
@@ -426,6 +464,14 @@ async def generate_text(
     A stage with its own deadline can override same-route retries while
     preserving the configured fallback route.
     """
+    estimated_input = count_text_tokens(user_prompt) + count_text_tokens(system_prompt or "")
+    _logger.info(
+        "llm.request_prepared", operation=operation, request_id=request_id,
+        prompt_chars=len(user_prompt) + len(system_prompt or ""),
+        input_tokens_estimate=estimated_input, max_output_tokens=max_tokens,
+    )
+    if max_input_tokens is not None and estimated_input > max_input_tokens:
+        raise ValueError(f"LLM input budget exceeded: {estimated_input} > {max_input_tokens}")
     primary_spec = _llm_spec(tier, llm_spec)
     fallback_spec = None if single_attempt else _fallback_spec(primary_spec)
     retry_count = 0 if single_attempt else max(
@@ -447,6 +493,10 @@ async def generate_text(
             spec=route_spec,
             tier=tier,
         )
+        quota_error = await active_quota_error(route)
+        if quota_error is not None:
+            last_error = quota_error
+            continue
         if await _circuit_is_open(route.endpoint_key):
             last_error = RuntimeError(f"LLM endpoint circuit open: {route.endpoint_key}")
             continue
@@ -470,9 +520,17 @@ async def generate_text(
                         disable_thinking=disable_thinking,
                     ),
                 )
+            except ProviderQuotaExhausted as error:
+                # Rechecked after waiting for the provider semaphore. No API
+                # request was sent, so do not record a fictitious paid attempt.
+                last_error = error
+                break
             except Exception as error:
                 last_error = error
                 retryable = not isinstance(error, TokenBudgetError) and is_retryable_llm_error(error)
+                hard_quota = is_quota_exhausted_error(error) and not isinstance(error, TokenBudgetError)
+                if hard_quota:
+                    await remember_quota_error(route, error)
                 circuit_state = await _circuit_failure(
                     route.endpoint_key,
                     retryable=retryable,
@@ -493,6 +551,8 @@ async def generate_text(
                     endpoint=route.base_url,
                     circuit_state=circuit_state,
                 )
+                if hard_quota:
+                    break
                 if not retryable:
                     raise
                 await _await_retry_backoff(retry_index)
@@ -546,6 +606,10 @@ async def generate_vision(
     for route_index, route_spec in enumerate(routes):
         used_fallback = route_index > 0
         route = resolve_route("utility", spec=route_spec, tier="light")
+        quota_error = await active_quota_error(route)
+        if quota_error is not None:
+            last_error = quota_error
+            continue
         if await _circuit_is_open(route.endpoint_key):
             last_error = RuntimeError(f"LLM endpoint circuit open: {route.endpoint_key}")
             continue
@@ -571,9 +635,15 @@ async def generate_vision(
                         timeout=timeout,
                     ),
                 )
+            except ProviderQuotaExhausted as error:
+                last_error = error
+                break
             except Exception as error:
                 last_error = error
                 retryable = not isinstance(error, TokenBudgetError) and is_retryable_llm_error(error)
+                hard_quota = is_quota_exhausted_error(error) and not isinstance(error, TokenBudgetError)
+                if hard_quota:
+                    await remember_quota_error(route, error)
                 circuit_state = await _circuit_failure(route.endpoint_key, retryable=retryable)
                 await _record_failure(
                     operation=operation,
@@ -589,6 +659,8 @@ async def generate_vision(
                     endpoint=route.base_url,
                     circuit_state=circuit_state,
                 )
+                if hard_quota:
+                    break
                 if not retryable:
                     raise
                 await _await_retry_backoff(retry_index)
@@ -661,7 +733,7 @@ async def _generate_vision_once(
         effort = minimax_reasoning_effort(model)
         if effort:
             kwargs["extra_body"] = {"output_config": {"effort": effort}}
-        async with _llm_semaphore():
+        async with _provider_slot(route):
             response = await client.messages.create(**kwargs)
         text = "".join(
             block.text
@@ -702,7 +774,7 @@ async def _generate_vision_once(
             }},
         ],
     })
-    async with _llm_semaphore():
+    async with _provider_slot(route):
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
@@ -780,6 +852,10 @@ async def stream_text(
         used_fallback = route_index > 0
         purpose: LlmPurpose = "research" if tier == "heavy" else "utility"
         route = resolve_route(purpose, spec=route_spec, tier=tier)
+        quota_error = await active_quota_error(route)
+        if quota_error is not None:
+            last_error = quota_error
+            continue
         if await _circuit_is_open(route.endpoint_key):
             last_error = RuntimeError(f"LLM endpoint circuit open: {route.endpoint_key}")
             continue
@@ -807,9 +883,17 @@ async def stream_text(
                 )
             except asyncio.CancelledError:
                 raise
+            except ProviderQuotaExhausted as error:
+                if emitted:
+                    raise
+                last_error = error
+                break
             except Exception as error:
                 last_error = error
                 retryable = not isinstance(error, TokenBudgetError) and is_retryable_llm_error(error)
+                hard_quota = is_quota_exhausted_error(error) and not isinstance(error, TokenBudgetError)
+                if hard_quota:
+                    await remember_quota_error(route, error)
                 circuit_state = await _circuit_failure(route.endpoint_key, retryable=retryable)
                 await _record_failure(
                     operation=operation,
@@ -825,6 +909,10 @@ async def stream_text(
                     endpoint=route.base_url,
                     circuit_state=circuit_state,
                 )
+                if hard_quota:
+                    if emitted:
+                        raise
+                    break
                 if emitted or not retryable:
                     raise
                 await _await_retry_backoff(retry_index)
@@ -953,7 +1041,7 @@ async def _generate_text_once(
             kwargs["extra_body"] = {"output_config": {"effort": effort}}
         elif disable_thinking:
             kwargs["thinking"] = {"type": "disabled"}
-        async with _llm_semaphore():
+        async with _provider_slot(route):
             message = await anthropic_client.messages.create(**kwargs)
         text = "".join(
             block.text
@@ -970,6 +1058,7 @@ async def _generate_text_once(
             provider=provider,
             finish_reason=str(getattr(message, "stop_reason", "") or "") or None,
             truncated=getattr(message, "stop_reason", None) == "max_tokens",
+            response_id=getattr(message, "id", None),
         )
 
     from openai import AsyncOpenAI
@@ -992,7 +1081,7 @@ async def _generate_text_once(
     completion_kwargs.update(_openai_generation_options(
         provider, model, max_tokens, tier=tier, disable_thinking=disable_thinking,
     ))
-    async with _llm_semaphore():
+    async with _provider_slot(route):
         response = await openai_client.chat.completions.create(**completion_kwargs)
     choice = response.choices[0] if response.choices else None
     content = choice.message.content if choice is not None else ""
@@ -1013,6 +1102,7 @@ async def _generate_text_once(
         provider=provider,
         finish_reason=str(getattr(choice, "finish_reason", "") or "") or None,
         truncated=getattr(choice, "finish_reason", None) in {"length", "max_tokens"},
+        response_id=getattr(response, "id", None),
     )
 
 
@@ -1071,7 +1161,7 @@ async def _stream_text_once(
             kwargs["extra_body"] = {"output_config": {"effort": effort}}
         elif disable_thinking:
             kwargs["thinking"] = {"type": "disabled"}
-        async with _llm_semaphore():
+        async with _provider_slot(route):
             async with client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
                     await accept(str(text))
@@ -1097,7 +1187,7 @@ async def _stream_text_once(
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
-        async with _llm_semaphore():
+        async with _provider_slot(route):
             # Ask every OpenAI-protocol endpoint for a final usage chunk so the
             # budget settles real tokens; callers fall back to the reservation
             # estimate when a provider omits it.
@@ -1163,6 +1253,11 @@ async def _record_success(
     circuit_state: str,
 ) -> None:
     truncated = result.truncated or result.finish_reason in {"length", "max_tokens"}
+    _logger.info(
+        "llm.response_usage", operation=operation, request_id=request_id,
+        provider_response_id=result.response_id, provider=result.provider,
+        input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+    )
     await record_llm_usage(
         LlmUsageAttempt(
             operation=operation,

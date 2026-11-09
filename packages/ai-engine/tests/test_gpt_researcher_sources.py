@@ -2110,3 +2110,67 @@ async def test_map_step_still_fails_when_the_retry_is_also_truncated() -> None:
             chunks=chunks,
             untrusted_fragment=lambda value: str(value),
         )
+
+
+async def test_brief_removes_binary_images_before_chunking(monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+
+    svg = '<svg><text>Median 12 ms</text><path d="' + "M0 0 " * 20000 + '"/></svg>'
+    uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+    prompts: list[str] = []
+
+    async def generate(**kwargs: object) -> SimpleNamespace:
+        prompts.append(str(kwargs["user_prompt"]))
+        return SimpleNamespace(text="基于正文和图注的完整摘要。", input_tokens=10, output_tokens=4)
+
+    monkeypatch.setattr("ai_engine.llm.client.generate_text", generate)
+    job = _Job(ResearchRequest(
+        job_id="clean-brief", request_id="clean-brief", topic="Source",
+        context=f"Opening.\n\n![Latency]({uri})\n\nClosing evidence.",
+        report_type="summary_brief", source_policy="prefer_user_sources", source_refs=(),
+    ))
+    adapter = object.__new__(GptResearcherAdapter)
+    adapter._brief_llm = "openai:test"
+    await adapter._run_brief(job)
+    assert job.status == AI_JOB_STATUS["SUCCEEDED"]
+    assert len(prompts) == 1
+    assert "data:image" not in prompts[0]
+    assert "Median 12 ms" in prompts[0] and "Closing evidence." in prompts[0]
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_brief_preserves_spent_tokens_after_later_failure_or_cancellation(
+    monkeypatch: pytest.MonkeyPatch, cancel: bool,
+) -> None:
+    started = asyncio.Event()
+
+    async def generate(**_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(text='{"summary":"already paid"}', input_tokens=23, output_tokens=7)
+
+    async def map_chunks(call_llm, **_kwargs: object) -> list[object]:
+        await call_llm("first completed chunk", max_tokens=768)
+        started.set()
+        if cancel:
+            await asyncio.Future()
+        raise RuntimeError("later chunk failed")
+
+    monkeypatch.setattr("ai_engine.llm.client.generate_text", generate)
+    monkeypatch.setattr("ai_engine.adapters.gpt_researcher.BRIEF_CHUNK_TOKEN_BUDGET", 100)
+    job = _Job(ResearchRequest(
+        job_id="partial-cost", request_id="partial-cost", topic="Source",
+        context="Evidence for every chunk. " * 100,
+        report_type="summary_brief", source_policy="prefer_user_sources", source_refs=(),
+    ))
+    adapter = object.__new__(GptResearcherAdapter)
+    adapter._brief_llm = "openai:test"
+    monkeypatch.setattr(adapter, "_map_brief_chunks", map_chunks)
+    task = asyncio.create_task(adapter._run_brief(job))
+    await started.wait()
+    if cancel:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        await task
+        assert job.status == AI_JOB_STATUS["FAILED"]
+    assert (job.token_in, job.token_out) == (23, 7)

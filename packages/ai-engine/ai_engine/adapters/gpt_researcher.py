@@ -81,6 +81,7 @@ from ai_engine.llm.config import (
     resolve_wire_spec,
 )
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
+from ai_engine.llm.input_text import model_readable_text
 from ai_engine.llm.token_budget import TokenBudgetExceeded, TokenBudgetUnavailable
 from ai_engine.text_chunking import count_text_tokens, split_text_by_token_budget
 from ai_engine.reviewer import (
@@ -5225,7 +5226,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             return
 
         topic = job.request.topic
-        context = (job.request.context or "").strip()
+        context = model_readable_text((job.request.context or "").strip())
         is_chat = job.request.request_id.startswith("chat-")
         # Source refs can be hydrated from arbitrary web pages, and the
         # persisted context often contains the extracted body of the same
@@ -5235,6 +5236,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         # cannot turn webpage text into model instructions.
         def untrusted_fragment(value: object) -> str:
             raw = value if isinstance(value, str) else str(value or "")
+            raw = model_readable_text(raw)
             sanitized, _ = _sanitize_external_instruction_text(raw)
             return sanitized.strip()
 
@@ -5257,9 +5259,16 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     disable_thinking=True,
                     operation="chat.answer" if is_chat else "research.summary_brief",
                     request_id=job.request.request_id,
+                    max_input_tokens=(
+                        None if is_chat else
+                        BRIEF_CHUNK_TOKEN_BUDGET + BRIEF_REDUCE_INPUT_TOKEN_BUDGET + 4096
+                    ),
                 )
                 token_input_total += result.input_tokens
                 token_output_total += result.output_tokens
+                async with job.lock:
+                    job.token_in = token_input_total
+                    job.token_out = token_output_total
                 return result
 
             if is_chat:
@@ -5401,6 +5410,12 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 job, "AI_ENGINE_UNAVAILABLE",
                 f"brief LLM call failed: {sanitize_llm_error(exc)}",
             )
+        finally:
+            # Successful chunks are already paid even if a later chunk fails
+            # or the article task is cancelled. Preserve their accumulated cost.
+            async with job.lock:
+                job.token_in = token_input_total
+                job.token_out = token_output_total
 
     async def _map_brief_chunks(
         self,

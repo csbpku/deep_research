@@ -57,6 +57,7 @@ from ai_engine.scoring.scoring_profiles import (
 )
 from ai_engine.llm.config import resolve_spec
 from ai_engine.llm.usage_audit import record_llm_degraded
+from ai_engine.llm.input_text import model_readable_text
 from ai_engine.text_chunking import TextChunk, count_text_tokens, split_text_by_token_budget
 
 logger = logging.getLogger("ai_engine.radar.distilled_scorer")
@@ -764,6 +765,12 @@ async def _generate_scoring_json(
         metrics[generation_key] = generation_index
     original_prompt = request["user_prompt"]
     original_max_tokens = int(request.get("max_tokens") or 0)
+    # Bound the complete request, including title/section metadata and rubric,
+    # instead of trusting the body chunk budget alone.
+    request["max_input_tokens"] = (
+        SCORING_CHUNK_TOKEN_BUDGET + SCORING_EVIDENCE_TOKEN_BUDGET
+        + count_text_tokens(SYSTEM_PROMPT) + 2048
+    )
     for attempt in range(_SCORING_FORMAT_RETRIES + 1):
         request_id = (
             f"radar-score-{scoring_run_id}-{stage}-"
@@ -1229,6 +1236,7 @@ def _prepare_scoring_content(
     "search" or "loading" as real content, so the shell heuristic would
     wrongly truncate them to the README footer. Keep them intact.
     """
+    content = model_readable_text(content)
     if not content:
         return content
     if (
@@ -2128,6 +2136,7 @@ async def score_with_llm(
     repeat the complete primary/fallback route and amplify outages. A custom
     scorer remains retryable for test and extension compatibility.
     """
+    content = model_readable_text(content)
     profile = profile or active_profile()
     llm_spec = resolve_spec("utility")
     verified_arxiv_title = _verified_arxiv_source_title(

@@ -2215,7 +2215,13 @@ class _QuotaExhaustedError(Exception):
     status_code = 402
 
 
-async def test_brief_quota_exhaustion_defers_remaining_candidates_without_retry() -> None:
+@pytest.mark.parametrize("message,status", [
+    ("insufficient_quota: credit balance is empty", 402),
+    ("已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)", 429),
+])
+async def test_brief_quota_exhaustion_defers_remaining_candidates_without_retry(
+    message: str, status: int,
+) -> None:
     """An exhausted allowance stops model calls for the whole run, not per candidate."""
     pool = _Pool([_source()])
 
@@ -2230,7 +2236,9 @@ async def test_brief_quota_exhaustion_defers_remaining_candidates_without_retry(
     async def generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
         nonlocal calls
         calls += 1
-        raise _QuotaExhaustedError("insufficient_quota: credit balance is empty")
+        error = _QuotaExhaustedError(message)
+        error.status_code = status
+        raise error
 
     result = await run_radar_sync(
         pool,
@@ -2249,6 +2257,17 @@ async def test_brief_quota_exhaustion_defers_remaining_candidates_without_retry(
     assert run.total_failed == 0
     assert run.total_skipped == 2
     assert pool.connection_value.canonical_urls == set()
+
+
+def test_oversized_brief_input_is_not_retried_as_a_service_outage() -> None:
+    from types import SimpleNamespace
+    from ai_engine.radar.sync_runner import _is_retryable_brief_failure
+
+    brief = SimpleNamespace(
+        error_code="AI_ENGINE_UNAVAILABLE",
+        error_message="brief LLM call failed: ValueError: LLM input budget exceeded: 20000 > 14596",
+    )
+    assert _is_retryable_brief_failure(brief=brief) is False
 
 
 async def test_scorer_quota_exhaustion_keeps_row_and_defers_later_candidates() -> None:
