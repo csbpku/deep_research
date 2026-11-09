@@ -221,6 +221,15 @@ h1, h2, h3, p { margin:0 }
 
 .MuiFormControl-root:has(input.hidden) { display: none; }
 .dismiss-notice { grid-column: 2; grid-row: 1; }
+.first-run-paths { display:grid; gap:var(--reader-space-2); margin-top:var(--reader-space-4) }
+.first-run-card { display:grid; gap:var(--reader-space-2); padding:var(--reader-space-3) }
+.first-run-card p { margin:0 }
+.first-run-card-head { display:flex; align-items:center; justify-content:space-between; gap:var(--reader-space-2) }
+.first-run-card > button { justify-self:start }
+.local-models-result { display:grid; gap:var(--reader-space-1) }
+.local-model-option { display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; min-height:44px; padding:6px 10px; text-align:left }
+.local-model-option > * { min-width:0; overflow-wrap:anywhere }
+.settings-save-bar { position:sticky; bottom:0; z-index:2; margin-top:var(--reader-space-4); padding-block:var(--reader-space-3) var(--reader-space-2) }
 .page-notice-container { grid-template-columns: minmax(0,1fr) 40px; }
 .chat-selection-card blockquote { line-height: 20px; }
 .translation-failure-row { display: block; }

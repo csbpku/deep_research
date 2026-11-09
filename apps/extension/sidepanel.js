@@ -3,6 +3,7 @@ import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecor
 import { t, getUiLanguage, setUiLanguage } from './i18n.js';
 import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './answer-task.js';
 import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
+import { detectLocalModels } from './local-models.js';
 import { readerStore } from './reader-store.js';
 import { createLibraryDeletion, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
 import {
@@ -893,6 +894,7 @@ function translationCoverageWarning(context) {
 
 function saveLocalSession() {
   if (!contextUrl()) return;
+  hasReadingHistory = true;
   const pageVersion = documentContext?.contentHash || pageContext?.contentHash || selectionContext?.contentHash || null;
   const snapshot = {
     url: contextUrl(),
@@ -1177,16 +1179,21 @@ function syncConversationEmptyState(noMessages = discussionHistory.every((item) 
 }
 
 function renderEmptyState() {
+  renderEmptyStateContent();
+  renderFirstRunPaths();
+}
+
+function renderEmptyStateContent() {
   const title = $('empty-title');
   const description = $('empty-description');
   const primary = $('empty-settings');
   if (!title || !description || !primary) return;
   if (!textModelReady()) {
-    title.textContent = readingMode === 'platform' ? t("平台模式尚未连接。") : t("独立模式尚未配置模型。");
+    title.textContent = readingMode === 'platform' ? t("平台模式尚未连接。") : t("先准备阅读模型。");
     description.textContent = readingMode === 'platform'
       ? t("连接并登录调研平台后，问答与全文翻译即可使用平台 AI Engine。")
-      : t("配置本地模型，或在设置中切换到平台模式并连接调研平台。");
-    primary.textContent = readingMode === 'platform' ? t("连接调研平台") : t("配置独立模型");
+      : t("Reader 不自带模型：它调用你选择的模型服务。正文只在你发起翻译或提问时发送。");
+    primary.textContent = readingMode === 'platform' ? t("连接调研平台") : t("配置模型");
     primary.disabled = false;
     show(primary, true);
     return;
@@ -1218,6 +1225,130 @@ function renderEmptyState() {
   primary.textContent = t("开始阅读当前页");
   primary.disabled = false;
   show(primary, true);
+}
+
+// First-run block: the primary action and the loopback probe live together,
+// so a user without an API key still has a path that ends in a working model.
+let localModelFindings = null;
+let localModelDetection = 'idle';
+let localModelError = '';
+let hasReadingHistory = false;
+
+function boundedPromise(promise, timeoutMs, fallback) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise((resolve) => { setTimeout(() => resolve(fallback), timeoutMs); }),
+  ]);
+}
+
+function renderFirstRunPaths() {
+  const paths = $('first-run-paths');
+  if (!paths) return;
+  // Platform mode has its own single path (connect the platform), so the
+  // local/API-key pair must not appear next to it.
+  const firstRun = !textModelReady() && readingMode !== 'platform';
+  show(paths, firstRun);
+  if ($('empty-history')) show($('empty-history'), hasReadingHistory);
+  if (!firstRun) return;
+  const button = $('detect-local-models');
+  const result = $('local-models-result');
+  if (!button || !result) return;
+  const loading = localModelDetection === 'loading';
+  button.disabled = loading;
+  button.textContent = loading
+    ? t("正在检测本机服务…")
+    : localModelFindings?.length ? t("重新检测本机模型") : t("检测本机模型");
+  show(result, localModelDetection !== 'idle');
+  if (!loading && localModelDetection !== 'idle') renderLocalModelFindings();
+}
+
+function renderLocalModelFindings() {
+  const result = $('local-models-result');
+  if (!result) return;
+  if (localModelError) {
+    result.dataset.state = 'error';
+    result.textContent = localModelError;
+    return;
+  }
+  const findings = localModelFindings || [];
+  if (!findings.length) {
+    result.dataset.state = 'empty';
+    result.textContent = t("没有检测到本机模型服务。先启动 Ollama 或 LM Studio，或在下方用 API Key 配置云端服务。");
+    return;
+  }
+  result.dataset.state = 'ready';
+  const nodes = findings.map((finding) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'local-model-option';
+    option.dataset.localModel = finding.id;
+    const name = document.createElement('strong');
+    name.textContent = finding.label;
+    const detail = document.createElement('span');
+    detail.textContent = t("{0} 个模型 · 默认 {1}", finding.count, finding.model);
+    option.append(name, detail);
+    option.addEventListener('click', () => void connectLocalModel(finding, option));
+    return option;
+  });
+  const hint = document.createElement('p');
+  hint.className = 'small';
+  hint.textContent = t("选择一项即可直接使用；之后可以在设置里更换模型。");
+  result.replaceChildren(...nodes, hint);
+}
+
+async function detectLocalServices() {
+  if (localModelDetection === 'loading') return;
+  localModelDetection = 'loading';
+  localModelFindings = null;
+  localModelError = '';
+  renderFirstRunPaths();
+  try {
+    // A single gesture covers every loopback origin. Probing without it would
+    // be blocked by Chrome's optional host-permission model.
+    // One origin only: Chrome shows a single prompt, and every loopback
+    // candidate resolves to the same host. A browser that never settles the
+    // prompt must not leave the panel stuck on "checking".
+    const granted = !chrome.permissions?.request || await boundedPromise(
+      chrome.permissions.request({ origins: ['http://127.0.0.1/*'] }),
+      15_000,
+      false,
+    );
+    if (!granted) throw new ModelConnectionError('PERMISSION', t("未允许访问本机服务，检测已取消"));
+    localModelFindings = await detectLocalModels((baseUrl) => discoverModels(
+      { providerKind: 'custom', baseUrl, apiKey: '' },
+      { timeoutMs: 2_000 },
+    ));
+    localModelDetection = localModelFindings.length ? 'ready' : 'empty';
+  } catch (error) {
+    localModelDetection = 'error';
+    localModelFindings = [];
+    localModelError = error instanceof Error ? error.message : t("没有检测到本机模型服务");
+  } finally {
+    renderFirstRunPaths();
+  }
+}
+
+async function connectLocalModel(finding, option) {
+  if (option) option.disabled = true;
+  try {
+    provider = await saveProvider({
+      providerKind: finding.providerKind,
+      baseUrl: finding.baseUrl,
+      model: finding.model,
+      apiKey: '',
+    });
+    providerFieldsDirty = false;
+    await setReadingMode('local');
+    applyProviderFields();
+    renderPersistentComposer();
+    renderEmptyState();
+    setNotice(t("已连接 {0}：{1}。打开文章后即可翻译和提问。", finding.label, finding.model));
+  } catch (error) {
+    localModelError = error instanceof Error ? error.message : t("连接本机模型失败");
+    renderFirstRunPaths();
+  } finally {
+    if (option) option.disabled = false;
+  }
 }
 
 function renderSavedInsightBanner() {
@@ -3753,6 +3884,7 @@ async function init() {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); $('send-question').click(); }
   });
   provider = await loadProvider();
+  hasReadingHistory = (await readerStore.listSessions().catch(() => [])).length > 0;
   translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface'));
   updateTranslationLanguageUi();
   window.addEventListener('reader:translation-language-change', event => void changeTranslationLanguage(event.detail));
@@ -3763,7 +3895,7 @@ async function init() {
   await loadPlatformState();
   updateReadingModeUi();
   renderEmptyState();
-  $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
+  $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('detect-local-models')?.addEventListener('click', () => void detectLocalServices()); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
   $('mode-local')?.addEventListener('click', () => void setReadingMode('local'));
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
   $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读")));

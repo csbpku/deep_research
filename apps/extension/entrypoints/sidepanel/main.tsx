@@ -39,7 +39,20 @@ function ReaderPanel() {
       <section id="empty-view" className="empty">
         <div className="eyebrow">{t("原网页阅读助手")}</div>
         <Typography component="h1" variant="h1" id="empty-title">{t("先准备阅读模型。")}</Typography>
-        <p id="empty-description">{t("独立模式配置自己的模型；平台模式登录调研平台后直接使用平台 AI Engine。")}</p>
+        <p id="empty-description">{t("Reader 不自带模型：它调用你选择的模型服务。正文只在你发起翻译或提问时发送。")}</p>
+        <div id="first-run-paths" className="first-run-paths">
+          <Paper component="section" variant="outlined" elevation={0} id="first-run-local" className="first-run-card">
+            <div className="first-run-card-head"><strong>{t("本机模型")}</strong><span className="first-run-tag">{t("无需 API Key")}</span></div>
+            <p className="small">{t("已经运行 Ollama、LM Studio 或本地 API 代理时，直接检测并连接。")}</p>
+            <ReaderButton id="detect-local-models" type="button" variant="outlined">{t("检测本机模型")}</ReaderButton>
+            <div id="local-models-result" className="local-models-result hidden" role="status" aria-live="polite" />
+          </Paper>
+          <Paper component="section" variant="outlined" elevation={0} id="first-run-key" className="first-run-card">
+            <div className="first-run-card-head"><strong>{t("自己的模型服务")}</strong><span className="first-run-tag">{t("22 家服务商")}</span></div>
+            <p className="small">{t("OpenAI、Anthropic、DeepSeek、Kimi 等；也支持任意 OpenAI / Anthropic 兼容地址。")}</p>
+            <p className="small">{t("已有调研平台账号时，可在设置里改为平台模式，使用平台 AI Engine。")}</p>
+          </Paper>
+        </div>
         <div className="actions"><ReaderButton id="empty-settings" variant="contained">{t("配置模型")}</ReaderButton><ReaderButton id="empty-history" variant="outlined">{t("查看聊天记录")}</ReaderButton></div>
       </section>
 
@@ -273,7 +286,7 @@ function ReaderPanel() {
           <ReaderButton id="refresh-models" className="provider-connect" type="button" variant="contained">{t("读取模型列表")}</ReaderButton>
           <div id="model-discovery-status" className="provider-feedback" role="status" aria-live="polite" />
           <div className="field provider-model-field"><label htmlFor="provider-model-search">{t("选择模型")}</label><SettingsModelPicker /><p id="model-list-help" className="small">{t('列表由当前服务返回，可按名称或 ID 搜索；实际可用范围取决于账号权限。')}</p><ReaderDisclosure id="manual-model-settings" label={<>{t("手动指定模型 ID")}</>}><label htmlFor="provider-model">{t("模型 ID")}</label><ReaderTextField id="provider-model" className="reader-settings-field" placeholder={t("填写服务商提供的模型 ID")} slotProps={{ htmlInput: { spellCheck: false } }} /></ReaderDisclosure></div>
-          <div className="actions provider-save-actions"><ReaderButton id="save-settings" type="button" variant="contained">{t("保存配置")}</ReaderButton><ReaderButton id="test-provider" type="button" variant="outlined">{t("测试连接")}</ReaderButton></div>
+          <div className="actions provider-save-actions settings-save-bar"><ReaderButton id="save-settings" type="button" variant="contained">{t("保存配置")}</ReaderButton><ReaderButton id="test-provider" type="button" variant="outlined">{t("测试连接")}</ReaderButton></div>
           <div id="provider-test-status" className="provider-feedback" role="status" aria-live="polite" />
           <ReaderDisclosure className="provider-extra-checks" label={<>{t("图片能力")}</>}><ReaderButton id="test-vision" type="button" variant="outlined">{t("检测图片能力")}</ReaderButton></ReaderDisclosure>
         </section>
