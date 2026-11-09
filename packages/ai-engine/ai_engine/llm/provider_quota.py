@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -67,11 +68,17 @@ async def active_quota_error(route: LlmRoute) -> ProviderQuotaExhausted | None:
     return ProviderQuotaExhausted(state.error, max(0, state.expires_at - time.monotonic()))
 
 
+async def require_quota_available(route: LlmRoute) -> None:
+    error = await active_quota_error(route)
+    if error is not None:
+        raise error
+
+
 def _reset_delay(payload: Any, now: float) -> float | None:
     if not isinstance(payload, dict):
         return None
     base = payload.get("base_resp")
-    if isinstance(base, dict) and base.get("status_code") not in {None, 0}:
+    if isinstance(base, dict) and base.get("status_code") not in (None, 0):
         return None
     rows = payload.get("model_remains")
     if not isinstance(rows, list):
@@ -125,7 +132,11 @@ async def _minimax_reset_delay(route: LlmRoute) -> float | None:
 
 async def remember_quota_error(route: LlmRoute, error: BaseException) -> None:
     key = _key(route)
-    fallback = max(60.0, float(os.environ.get("LLM_QUOTA_COOLDOWN_SECONDS", "3600")))
+    try:
+        configured = float(os.environ.get("LLM_QUOTA_COOLDOWN_SECONDS", "3600"))
+    except ValueError:
+        configured = 3600
+    fallback = max(60.0, min(7 * 24 * 3600, configured)) if math.isfinite(configured) else 3600
     async with _lock:
         old = _cooldowns.get(key)
         if old and old.expires_at > time.monotonic():

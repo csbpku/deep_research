@@ -968,3 +968,56 @@ async def test_complete_prompt_limit_blocks_provider_before_spending(
     monkeypatch.setattr("ai_engine.llm.client._generate_text_once", unexpected)
     with pytest.raises(ValueError, match="LLM input budget exceeded"):
         await generate_text(user_prompt="body", system_prompt="large metadata " * 100, max_input_tokens=20)
+
+
+async def test_queued_calls_recheck_quota_after_acquiring_provider_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.llm.provider_quota import ProviderQuotaExhausted
+
+    first_started, second_prepared, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    audit_started, audit_release = asyncio.Event(), asyncio.Event()
+    sent = 0
+    prepared = 0
+    audit: list[object] = []
+    monkeypatch.setenv("RADAR_LLM_CONCURRENCY", "1")
+    monkeypatch.setenv("FALLBACK_LLM", "openai:primary")
+
+    class Completions:
+        async def create(self, **_kwargs: object) -> object:
+            nonlocal sent
+            sent += 1
+            assert sent == 1, "queued request was sent after allowance exhaustion"
+            first_started.set()
+            await release.wait()
+            raise _StatusError("insufficient balance", 402)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+
+    def cached(*_args: object, **_kwargs: object) -> object:
+        nonlocal prepared
+        prepared += 1
+        if prepared == 2:
+            second_prepared.set()
+        return client
+
+    async def record(event: object) -> None:
+        audit.append(event)
+        audit_started.set()
+        await audit_release.wait()
+
+    monkeypatch.setattr("ai_engine.llm.client._cached_client", cached)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", record)
+    first = asyncio.create_task(generate_text(llm_spec="openai:primary", user_prompt="one"))
+    await first_started.wait()
+    second = asyncio.create_task(generate_text(llm_spec="openai:primary", user_prompt="two"))
+    await second_prepared.wait()
+    release.set()
+    await audit_started.wait()
+    with pytest.raises(ProviderQuotaExhausted):
+        await second
+    audit_release.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+    assert isinstance(results[0], _StatusError)
+    assert isinstance(results[1], ProviderQuotaExhausted)
+    assert sent == 1 and len(audit) == 1
