@@ -7,7 +7,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = resolve(root, 'public');
 await mkdir(publicDir, { recursive: true });
 await import('./generate-design-system.mjs');
-const tokens = JSON.parse(await readFile(new URL('../../../packages/design-system/src/tokens.json', import.meta.url), 'utf8'));
+const sharedSource = new URL('../../../packages/design-system/src/', import.meta.url);
+const lightTokens = JSON.parse(await readFile(new URL('tokens.json', sharedSource), 'utf8'));
+const darkOverrides = JSON.parse(await readFile(new URL('dark.json', sharedSource), 'utf8'));
+// Both sets are complete, not a light set plus overrides: the content script
+// writes the whole palette onto each shadow host, so a switch has no values to
+// inherit from the page and no key can keep a stale light value.
+const designTokens = { light: lightTokens, dark: { ...lightTokens, ...darkOverrides } };
 const contentSource = await readFile(resolve(root, 'content.js'), 'utf8');
 const tokenPlaceholder = 'const READER_DESIGN_TOKENS = {};';
 if (!contentSource.includes(tokenPlaceholder)) {
@@ -15,7 +21,7 @@ if (!contentSource.includes(tokenPlaceholder)) {
 }
 const english = JSON.parse(await readFile(resolve(root, 'locales/en.json'), 'utf8'));
 await writeFile(resolve(publicDir, 'content.js'), contentSource
-  .replace(tokenPlaceholder, `const READER_DESIGN_TOKENS = ${JSON.stringify(tokens)};`)
+  .replace(tokenPlaceholder, `const READER_DESIGN_TOKENS = ${JSON.stringify(designTokens)};`)
   .replace('const READER_EN_MESSAGES = {};', `const READER_EN_MESSAGES = ${JSON.stringify(english)};`));
 await copyFile(resolve(root, 'reader-platform-bridge.js'), resolve(publicDir, 'reader-platform-bridge.js'));
 for (const locale of ['en', 'zh_CN']) {

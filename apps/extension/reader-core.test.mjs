@@ -1829,3 +1829,88 @@ test('cancelling a failed batch never starts its queued per-paragraph retries', 
     assert.equal(calls, 1);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test('citation transcript formats answer and evidence as bounded Markdown', async () => {
+  const { answerCitationText } = await import('./reader-core.js');
+  const text = answerCitationText({
+    answer: '## 结论\n\n有界队列保护内存。[1][2]',
+    evidence: [
+      { quote: 'A bounded queue protects memory.', claim: '这条 claim 不应进入剪贴板', url: 'https://example.com/a?x=1#frag' },
+      { quote: '   ' },
+      { quote: 'The worker rejects stale work.', anchor: { quote: 'The worker rejects stale work.' } },
+    ],
+  }, { url: 'https://example.com/article' });
+  const lines = text.split('\n');
+  assert.ok(text.startsWith('## 结论\n\n有界队列保护内存。[1][2]'), 'the answer body stays untouched Markdown');
+  assert.ok(lines.includes('## 原文证据'));
+  assert.ok(lines.includes('[1] “A bounded queue protects memory.” — <https://example.com/a?x=1#frag>'));
+  assert.ok(lines.includes('[3] “The worker rejects stale work.” — <https://example.com/article>'), 'quote links fall back to the page URL');
+  assert.ok(!text.includes('这条 claim'), 'claims are not copied: a citation stays a quotation');
+  assert.ok(!lines.some((line) => line.startsWith('[2]')), 'blank quotes are skipped without renumbering the rest');
+});
+
+test('citation transcript omits the evidence heading when nothing is citable', async () => {
+  const { answerCitationText } = await import('./reader-core.js');
+  assert.equal(answerCitationText({ answer: 'Only the answer.' }), 'Only the answer.');
+  assert.equal(answerCitationText({ answer: 'Only the answer.', evidence: [] }), 'Only the answer.');
+  assert.equal(answerCitationText({ answer: 'Only the answer.', evidence: [{ quote: '  ' }, {}] }), 'Only the answer.');
+  assert.equal(answerCitationText({}), '');
+  assert.equal(
+    answerCitationText({ answer: 'A', evidence: [{ quote: 'Q', url: 'javascript:alert(1)' }] }),
+    'A\n\n## 原文证据\n\n[1] “Q”',
+    'non-HTTP evidence URLs are dropped instead of becoming a link',
+  );
+});
+
+test('citation transcript escapes Markdown in quotes but not in the answer', async () => {
+  const { answerCitationText } = await import('./reader-core.js');
+  const text = answerCitationText({
+    answer: 'Use `**bold**` and [a](b).',
+    evidence: [{ quote: 'Call `a*b_c[d]` <b> & [x](javascript:alert(1))', url: 'https://example.com/path_(x)' }],
+  });
+  assert.ok(text.startsWith('Use `**bold**` and [a](b).'), 'the answer is already Markdown and must not be escaped');
+  assert.ok(text.includes('“Call \\`a\\*b\\_c\\[d\\]\\` \\<b\\> & \\[x\\](javascript:alert(1))”'));
+  assert.ok(!/(?<!\\)\]\(/u.test(text.split('\n').find((line) => line.startsWith('[1]'))), 'escaped brackets cannot form a link');
+  assert.ok(!text.includes('<b>'), 'escaped angle brackets cannot form HTML');
+  assert.ok(text.includes('<https://example.com/path_(x)>'));
+});
+
+test('citation transcript truncates within the requested character budget', async () => {
+  const { answerCitationText } = await import('./reader-core.js');
+  const long = answerCitationText({ answer: 'A'.repeat(12_500), evidence: [{ quote: 'Q1' }, { quote: 'Q2' }] });
+  assert.ok(long.length <= 12_000, `default limit must hold, got ${long.length}`);
+  assert.match(long, /…（回答超过 12000 字符上限，已截断）/u);
+  assert.match(long, /…（证据较多，已截断：0 \/ 2 条）/u, 'a truncated answer still states that its evidence was dropped');
+
+  const clippedAnswer = answerCitationText({ answer: 'B'.repeat(500) }, { maxChars: 200 });
+  assert.ok(clippedAnswer.length <= 200);
+  assert.equal(clippedAnswer.split('\n\n').at(-1), '…（回答超过 200 字符上限，已截断）');
+
+  const clippedEvidence = answerCitationText({
+    answer: 'Answer',
+    evidence: Array.from({ length: 4 }, (_, index) => ({ quote: `Quote ${index + 1} ${'x'.repeat(40)}`, url: 'https://example.com/a' })),
+  }, { maxChars: 220 });
+  assert.ok(clippedEvidence.length <= 220, `evidence budget must hold, got ${clippedEvidence.length}`);
+  assert.match(clippedEvidence, /…（证据较多，已截断：\d+ \/ 4 条）/u);
+});
+
+test('citation transcript heading follows the injected translator', async () => {
+  const { answerCitationText } = await import('./reader-core.js');
+  const text = answerCitationText(
+    { answer: 'Answer', evidence: [{ quote: 'Q' }] },
+    { translate: (message, ...values) => (message === '原文证据' ? 'Source evidence' : message.replace(/\{(\d+)\}/gu, (_, index) => String(values[Number(index)] ?? ''))) },
+  );
+  assert.match(text, /^Answer\n\n## Source evidence\n\n\[1\] “Q”$/u);
+});
+
+test('citation transcript tolerates partially valid evidence shapes', async () => {
+  const { answerCitationText } = await import('./reader-core.js');
+  assert.equal(answerCitationText({ answer: 'A', evidence: 'not-an-array' }), 'A');
+  const text = answerCitationText({
+    answer: 'A',
+    evidence: [null, { claim: 'no quote' }, 42, { quote: 'Kept', anchor: { quote: 'Kept' } }],
+  });
+  assert.equal(text, 'A\n\n## 原文证据\n\n[4] “Kept”', 'an anchor without a URL still prints the quote, just without a link');
+  assert.equal(answerCitationText({ answer: 'A', evidence: [{ quote: 'Q', anchor: { quote: 'Q' } }] }, { url: 'https://example.com/p' }),
+    'A\n\n## 原文证据\n\n[1] “Q” — <https://example.com/p>');
+});

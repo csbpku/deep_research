@@ -3,9 +3,11 @@ import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecor
 import { t, getUiLanguage, setUiLanguage } from './i18n.js';
 import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './answer-task.js';
 import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
+import { answerCoverage } from './answer-presentation.js';
 import { detectLocalModels } from './local-models.js';
 import { readerStore } from './reader-store.js';
-import { createLibraryDeletion, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
+import { createLibraryDeletion, libraryFacets, libraryItems, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
+import { libraryFileName, libraryMarkdown } from './reader-export.js';
 import {
   prepareVisionImage,
   applyTextTranslations,
@@ -15,6 +17,7 @@ import {
   translationBatches,
   readingAnswerText,
   boundTaskContext,
+  answerCitationText,
   buildAnnotationUrl,
   loadProvider,
   makeDocument,
@@ -118,7 +121,7 @@ let activationNeeded = null;
 let pageReadState = 'idle';
 let lastSavedInsight = null;
 let insightSyncFailed = false;
-const libraryView = { query: '', kind: 'all', page: 1 };
+const libraryView = { query: '', kind: 'all', page: 1, tag: '' };
 const libraryDeletion = createLibraryDeletion(readerStore);
 let libraryRenderRequest = 0;
 let libraryMutationBusy = false;
@@ -737,6 +740,16 @@ function renderStructuredAnswer(result) {
     onLocate: item.anchor?.quote ? () => focusReadingAnchor(item.anchor) : undefined,
   })));
   show(evidencePart, evidenceList.childElementCount > 0);
+  // Tell the reader how much of the article the evidence actually covers.
+  // A "no evidence" note would duplicate the existing warning, so only a
+  // positive count or a truncation notice is shown here.
+  const coverageNode = $('answer-coverage');
+  if (coverageNode) {
+    const coverage = answerCoverage(latestAnswerContext || {}, answer, { translate: t });
+    const coverageVisible = Boolean(coverage.note) && (coverage.evidenceCount > 0 || coverage.truncated);
+    coverageNode.textContent = coverageVisible ? coverage.note : '';
+    show(coverageNode, coverageVisible);
+  }
   renderMarkdown($('answer-background-text'), answer.background || '');
   bindCitationReferences($('answer-background-text'), evidenceItems);
   show(backgroundPart, Boolean(answer.background));
@@ -769,19 +782,16 @@ function answerClipboardText() {
   const answer = latestStructuredAnswer && typeof latestStructuredAnswer === 'object'
     ? latestStructuredAnswer
     : { answer: latestAnswer };
-  const lines = [String(answer.answer || latestAnswer || '').trim()];
+  // The shared builder keeps the answer and its grounded quotes together, so
+  // a pasted conclusion still carries what it was based on. Web sources and
+  // the inference stay outside it: they are not original-page evidence.
+  const lines = [answerCitationText(
+    { answer: answer.answer || latestAnswer || '', evidence: Array.isArray(answer.evidence) ? answer.evidence : [] },
+    { url: contextUrl(), translate: t },
+  )];
   if (answer.searchStatus === 'unavailable') lines.push('', t('联网搜索暂不可用，本次依据原文回答，未核实最新网络信息。'));
   if (answer.webSources?.length) lines.push('', t('网络来源 · 搜索摘要'), ...answer.webSources.map((item, i) => `[W${i + 1}] ${item.title} ${item.url}`));
-  const evidence = Array.isArray(answer.evidence) ? answer.evidence : [];
-  if (evidence.length) {
-    lines.push('', t("原文证据"));
-    evidence.forEach((item, index) => {
-      const quote = String(item?.quote || '').trim();
-      const claim = String(item?.claim || '').trim();
-      if (quote) lines.push(`[${index + 1}] ${quote}${claim ? `：${claim}` : ''}`);
-    });
-  }
-  if (answer.inference) lines.push('', t("AI 推断：{0}", answer.inference));
+  if (answer.inference) lines.push('', t('AI 推断：{0}', answer.inference));
   return lines.join('\n').trim();
 }
 
@@ -1581,6 +1591,9 @@ async function updateLibrary() {
     const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
     if (request !== libraryRenderRequest) return;
     const visibleAnnotations = annotations.filter(annotation => !annotation.insightId);
+    // Facets describe the whole shelf, not the current page, so the tag menu
+    // stays stable while the user narrows the list.
+    renderLibraryTagOptions(libraryFacets(libraryItems(insights, visibleAnnotations)).tags);
     const result = libraryPage(insights, visibleAnnotations, libraryView);
     libraryView.page = result.page;
     const records = result.items.map(({ kind, record }) => kind === 'insight'
@@ -1606,11 +1619,35 @@ async function updateLibrary() {
     $('library-previous').disabled = result.page === 1;
     $('library-next').disabled = result.page === result.pages;
     show($('library-pagination'), result.pages > 1);
-    show($('clear-library-filters'), Boolean(libraryView.query.trim() || libraryView.kind !== 'all'));
+    show($('clear-library-filters'), Boolean(libraryView.query.trim() || libraryView.kind !== 'all' || libraryView.tag));
   } catch {
     if (request === libraryRenderRequest) setLibraryNotice(t("收藏读取失败，请点击“刷新”重试。"));
   } finally {
     if (request === libraryRenderRequest) list.setAttribute('aria-busy', 'false');
+  }
+}
+
+function renderLibraryTagOptions(tags) {
+  const select = $('library-tag');
+  if (!select) return;
+  const current = libraryView.tag;
+  const options = [new Option(t("全部标签"), ''), ...tags.map(tag => new Option(t("{0}（{1} 条）", tag.value, tag.count), tag.value))];
+  if (current && !tags.some(tag => tag.value.toLocaleLowerCase() === current.toLocaleLowerCase())) {
+    // Keep an active filter visible even after its last record is deleted.
+    options.push(new Option(t("{0}（已无匹配）", current), current));
+  }
+  select.replaceChildren(...options);
+  select.value = current;
+}
+
+async function exportLibraryMarkdown() {
+  try {
+    const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
+    const items = libraryItems(insights, annotations.filter(annotation => !annotation.insightId));
+    downloadText(libraryMarkdown(items, { title: t("Reader 收藏") }), libraryFileName());
+    setLibraryNotice(t("已导出 {0} 条收藏。", items.length));
+  } catch {
+    setLibraryNotice(t("导出失败，请稍后重试。"));
   }
 }
 
@@ -3566,6 +3603,15 @@ async function restorePendingPageAction() {
   }
 }
 
+function downloadText(text, filename) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function downloadJson(data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `deep-research-reading-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url);
@@ -3907,6 +3953,13 @@ async function init() {
   setupProviderPicker();
   $('stop-answer').addEventListener('click', () => discussionController?.abort());
   $('interface-language').value = (await chrome.storage.local.get('readerUiLanguage')).readerUiLanguage || 'system';
+  const storedScheme = (await chrome.storage.local.get('readerColorScheme')).readerColorScheme;
+  $('color-scheme').value = ['light', 'dark'].includes(storedScheme) ? storedScheme : 'system';
+  $('color-scheme').addEventListener('change', async event => {
+    // The theme provider and the content script both read this key, so the
+    // panel only has to persist the choice and let them subscribe.
+    await chrome.storage.local.set({ readerColorScheme: event.target.value });
+  });
   $('interface-language').addEventListener('change', async event => {
     persistQuestionDraft();
     saveLocalSession();
@@ -4025,8 +4078,10 @@ async function init() {
   $('refresh-library').addEventListener('click', () => void updateLibrary());
   $('library-search').addEventListener('input', event => { libraryView.query = event.target.value; libraryView.page = 1; void updateLibrary(); });
   $('library-kind').addEventListener('change', event => { libraryView.kind = event.target.value; libraryView.page = 1; void updateLibrary(); });
+  $('library-tag').addEventListener('change', event => { libraryView.tag = event.target.value; libraryView.page = 1; void updateLibrary(); });
+  $('library-export').addEventListener('click', () => void exportLibraryMarkdown());
   $('clear-library-filters').addEventListener('click', () => {
-    libraryView.query = ''; libraryView.kind = 'all'; libraryView.page = 1;
+    libraryView.query = ''; libraryView.kind = 'all'; libraryView.tag = ''; libraryView.page = 1;
     $('library-search').value = ''; $('library-kind').value = 'all';
     void updateLibrary(); $('library-search').focus();
   });

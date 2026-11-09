@@ -3,15 +3,33 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const extensionRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const tokens = JSON.parse(await readFile(new URL('../../../packages/design-system/src/tokens.json', import.meta.url), 'utf8'));
+const sharedSource = new URL('../../../packages/design-system/src/', import.meta.url);
+const lightTokens = JSON.parse(await readFile(new URL('tokens.json', sharedSource), 'utf8'));
+const darkOverrides = JSON.parse(await readFile(new URL('dark.json', sharedSource), 'utf8'));
 
-const declarations = Object.entries(tokens)
+// A dark override without a light counterpart would add a variable that only
+// one scheme defines, leaving the other scheme to fall back to whatever it
+// inherited. Fail here instead of shipping half a palette.
+const unknownDarkTokens = Object.keys(darkOverrides).filter((key) => !(key in lightTokens));
+if (unknownDarkTokens.length) {
+  throw new Error(`dark.json overrides tokens that tokens.json does not define: ${unknownDarkTokens.join(', ')}`);
+}
+
+const declarations = (source) => Object.entries(source)
   .map(([key, value]) => `  --reader-${key}: ${value};`)
   .join('\n');
-const css = `/* Generated from packages/design-system/src/tokens.json. Do not edit generated values. */
+// The shared package writes its dark overrides under `.dark`; the Reader uses
+// the same shape with an attribute selector so no `light`/`dark` class ever
+// lands on <html>. Only the overrides are repeated — every other variable keeps
+// the light value that `:root` already declared.
+const css = `/* Generated from packages/design-system/src/tokens.json and dark.json. Do not edit generated values. */
 :root {
   color-scheme: light;
-${declarations}
+${declarations(lightTokens)}
+}
+:root[data-reader-scheme="dark"] {
+  color-scheme: dark;
+${declarations(darkOverrides)}
 }
 `;
 

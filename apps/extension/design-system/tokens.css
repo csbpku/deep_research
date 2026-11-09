@@ -1,4 +1,4 @@
-/* Generated from packages/design-system/src/tokens.json. Do not edit generated values. */
+/* Generated from packages/design-system/src/tokens.json and dark.json. Do not edit generated values. */
 :root {
   color-scheme: light;
   --reader-color-text: #20242c;
@@ -103,4 +103,66 @@
   --reader-width-content-list: 880px;
   --reader-size-reader-mark: 32px;
   --reader-size-reader-header: 52px;
+}
+:root[data-reader-scheme="dark"] {
+  color-scheme: dark;
+  --reader-color-text: #eef1f6;
+  --reader-color-text-secondary: #c0c8d4;
+  --reader-color-text-muted: #a1adbe;
+  --reader-color-surface: #191e27;
+  --reader-color-surface-raised: #202733;
+  --reader-color-surface-container: #131820;
+  --reader-color-presentation-paper: #29261f;
+  --reader-color-surface-composer: #202733;
+  --reader-color-outline: #384353;
+  --reader-color-outline-strong: #728097;
+  --reader-color-primary: #a9c0ff;
+  --reader-color-primary-container: #263858;
+  --reader-color-primary-hover: #c4d3ff;
+  --reader-color-on-primary: #152340;
+  --reader-color-primary-container-hover: #32496f;
+  --reader-color-warning: #e2c780;
+  --reader-color-warning-container: #372f1e;
+  --reader-color-danger: #ffb3a9;
+  --reader-color-danger-container: #422923;
+  --reader-color-success: #9fd2b5;
+  --reader-color-success-container: #21382e;
+  --reader-color-evidence: #83ced0;
+  --reader-color-evidence-container: #173638;
+  --reader-color-background-context: #a7cfba;
+  --reader-color-background-container: #22362d;
+  --reader-color-inference: #cbb8ec;
+  --reader-color-inference-container: #342d45;
+  --reader-color-limitations: #dfc48c;
+  --reader-color-limitations-container: #39301f;
+  --reader-color-image-translation: #e4cf99;
+  --reader-color-image-translation-container: #38321f;
+  --reader-color-source-github: #c0c8d4;
+  --reader-color-source-github-container: #2b3340;
+  --reader-color-source-articles: #a9c0ff;
+  --reader-color-source-articles-container: #263858;
+  --reader-color-source-community: #e7c38d;
+  --reader-color-source-community-container: #3c3020;
+  --reader-color-source-research: #cbb8ec;
+  --reader-color-source-research-container: #342d45;
+  --reader-color-source-shared: #9dced3;
+  --reader-color-source-shared-container: #20373b;
+  --reader-color-topic-hot: #fb9374;
+  --reader-color-topic-hot-container: #5a2616;
+  --reader-color-topic-warming: #fbbc74;
+  --reader-color-topic-warming-container: #543a1c;
+  --reader-color-topic-emerging: #85e0bf;
+  --reader-color-topic-emerging-container: #194333;
+  --reader-color-tier-deep-read: #5bc5f5;
+  --reader-color-tier-skim: #fccf5f;
+  --reader-color-tier-noise: #a1adbe;
+  --reader-color-tier-track: #384353;
+  --reader-color-inverse-surface: #eef1f6;
+  --reader-color-inverse-text: #20242c;
+  --reader-color-on-inverse-muted: #4a515c;
+  --reader-color-highlight: rgba(255,213,72,0.24);
+  --reader-color-highlight-border: rgba(226,199,128,0.68);
+  --reader-color-scrim: rgba(0,0,0,0.64);
+  --reader-elevation-1: 0 1px 3px #00000033;
+  --reader-elevation-2: 0 8px 28px #00000066;
 }

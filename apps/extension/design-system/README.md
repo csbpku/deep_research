@@ -7,6 +7,34 @@ supplies the isolated webpage controls.
 extension controls. `reader-ui.css`, `sidepanel.css`, and `history.css` retain
 layout and Markdown formatting, not independent button/input skins.
 
+## Colour scheme
+
+`scripts/generate-design-system.mjs` writes two blocks into the generated
+`tokens.css`:
+
+- `:root` carries `color-scheme: light` and the full palette from
+  `packages/design-system/src/tokens.json`;
+- `:root[data-reader-scheme="dark"]` carries `color-scheme: dark` and only the
+  overrides from `packages/design-system/src/dark.json`, the same shape the
+  shared package writes under `.dark`.
+
+Runtime preference is the `readerColorScheme` key in `chrome.storage.local`,
+with `'light' | 'dark' | 'system'` and `'system'` as the default. Both the panel
+and the content script read that key directly. `color-scheme.js` owns the
+resolution rule for the React pages and its unit test; the classic content
+script mirrors that rule because it cannot import an ES module. The React pages set `document.documentElement.dataset.readerScheme`
+to the resolved mode, which is what activates the dark block;
+they never write a `light`/`dark` class on `<html>`. The content script cannot
+inherit `:root`, so it writes the resolved set of `--reader-*` values and
+`color-scheme` onto every shadow host and repaints those hosts when the
+preference or the `prefers-color-scheme` media query changes.
+
+To add a dark token, add the key to `packages/design-system/src/dark.json` (it
+must already exist in `tokens.json`) and regenerate the extension stylesheet
+with `node apps/extension/scripts/generate-design-system.mjs`; the light block
+keeps the light value, the dark block gets the override. Run the same command
+with `--check` to prove the committed file is current.
+
 ## Components and boundaries
 
 - Side panel and history: actual MUI Button/ButtonBase, TextField, NativeSelect
@@ -40,8 +68,8 @@ Buttons are at least 36 px high, fields 44 px, icon controls 40 px; top navigati
 has 44 px targets. The shared header is 52 px high with a 32 px Reader mark and
 content-width navigation targets separated by 4 px.
 
-White surfaces, neutral text, shared blue primary color, and semantic status
-colors define hierarchy. Selection is indicated by state plus a check or
+Light surfaces (with their dark equivalents in `dark.json`), neutral text,
+shared blue primary color, and semantic status colors define hierarchy. Selection is indicated by state plus a check or
 underline, not color alone. Contained buttons are reserved for the main action;
 secondary actions are outlined, save is tonal, supplementary actions are text.
 All variants share the same type, radius, focus and disabled states.

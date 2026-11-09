@@ -52,6 +52,7 @@ h1, h2, h3, p { margin:0 }
 .stream-answer { margin-top:var(--reader-space-2) }
 .answer-structured { margin-top:var(--reader-space-4) }
 .answer-part { margin-top:var(--reader-space-3) }
+.answer-coverage { margin-top:var(--reader-space-2) }
 .answer-part > :last-child { margin-top:var(--reader-space-2) }
 .answer-part ul { padding-left:var(--reader-space-5) }
 .evidence-list { display:grid; gap:8px }
@@ -139,7 +140,7 @@ h1, h2, h3, p { margin:0 }
 .library-pagination { display:flex; align-items:center; justify-content:space-between; gap:var(--reader-space-2); margin-block:var(--reader-space-4) }
 .library-pagination span { font-variant-numeric:tabular-nums; text-align:center }
 .platform-data-details { margin-top:var(--reader-space-4) }
-@media (min-width: 520px) { .library-filters { grid-template-columns:minmax(0, 1fr) minmax(140px, 0.55fr); align-items:end } }
+@media (min-width: 520px) { .library-filters { grid-template-columns:minmax(0, 1fr) minmax(120px, 0.45fr) minmax(120px, 0.45fr); align-items:end } }
 .actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:var(--reader-space-4) }
 .field { margin-top:var(--reader-space-4) }
 .field label { display:block; margin-bottom:var(--reader-space-2) }

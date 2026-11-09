@@ -5,13 +5,32 @@
   }
   window.__deepResearchReaderLoaded = true;
 
-  // Filled from design-system/tokens.json by scripts/sync-static.mjs. Keeping
-  // the token values on each shadow host isolates them from website CSS while
-  // preserving one palette, font stack, radius scale, and elevation system.
+  // Filled from design-system/tokens.json and dark.json by
+  // scripts/sync-static.mjs, one complete set per scheme. Keeping the token
+  // values on each shadow host isolates them from website CSS while preserving
+  // one palette, font stack, radius scale, and elevation system.
   const READER_DESIGN_TOKENS = {};
   const READER_EN_MESSAGES = {};
   const readerUiRoots = new Set();
+  // Every element that received the design tokens, so a scheme change can
+  // repaint the controls that are already mounted instead of only the next one.
+  const readerDesignHosts = new Set();
   const readerUiMessages = new WeakMap();
+  // Shared with the React panel and its settings surface: `readerColorScheme`
+  // in chrome.storage.local holds 'light' | 'dark' | 'system'.
+  const READER_COLOR_SCHEME_KEY = 'readerColorScheme';
+  const readerDarkQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  // A content script is a classic script and cannot import color-scheme.js, so
+  // this mirrors resolveColorScheme() there. Both treat an unknown value as
+  // 'system' and normalize case/whitespace; color-scheme.test.mjs owns the
+  // contract the two implementations have to agree on.
+  function resolveReaderColorScheme(preference, systemPrefersDark) {
+    const normalized = typeof preference === 'string' ? preference.trim().toLowerCase() : '';
+    if (normalized === 'light' || normalized === 'dark') return normalized;
+    return systemPrefersDark === true ? 'dark' : 'light';
+  }
+  let readerColorSchemePreference = 'system';
+  let readerColorScheme = resolveReaderColorScheme(readerColorSchemePreference, readerDarkQuery?.matches === true);
   let readerLocale = /^zh(?:-|$)/iu.test(navigator.language) ? 'zh-CN' : 'en';
   function updateReaderLocale(value) {
     const language = value === 'system' || !value ? navigator.language : value;
@@ -77,10 +96,19 @@
   Promise.resolve(chrome.storage?.local?.get?.('readerUiLanguage')).then(stored => {
     updateReaderLocale(stored?.readerUiLanguage);
   }).catch(() => {});
+  Promise.resolve(chrome.storage?.local?.get?.(READER_COLOR_SCHEME_KEY)).then(stored => {
+    setReaderColorSchemePreference(stored?.[READER_COLOR_SCHEME_KEY]);
+  }).catch(() => {});
+  // The operating-system preference has no storage event, so the in-page
+  // controls subscribe to the media query themselves.
+  readerDarkQuery?.addEventListener?.('change', refreshReaderDesignScheme);
   chrome.storage?.onChanged?.addListener?.((changes, area) => {
     if (area === 'local' && changes.readerUiLanguage) {
       updateReaderLocale(changes.readerUiLanguage.newValue);
       syncParagraphControl(focusedTranslationId);
+    }
+    if (area === 'local' && changes[READER_COLOR_SCHEME_KEY]) {
+      setReaderColorSchemePreference(changes[READER_COLOR_SCHEME_KEY].newValue);
     }
     if (area === 'local' && changes.readerDockCollapsed) {
       applyDockCollapsed(changes.readerDockCollapsed.newValue === true);
@@ -105,22 +133,45 @@
         `${attribute}="${t(text)}" data-reader-label-${attribute}="${encodeURIComponent(text)}"`
       ));
   }
-  function applyReaderDesignTokens(element) {
+  function readerDesignTokensFor(scheme) {
+    return READER_DESIGN_TOKENS[scheme] || READER_DESIGN_TOKENS.light || {};
+  }
+  function paintReaderDesignHost(element) {
     element.dataset.deepResearchDesignHost = 'true';
+    // Mirror the resolved mode onto the host as well, so a scheme change is
+    // observable next to the variables it produced.
+    element.dataset.readerScheme = readerColorScheme;
     // The shadow stylesheets start from `all:initial`, which resets the
-    // native scheme. The Reader renders one palette, so the host states it
-    // explicitly: scrollbars, carets and form controls stay readable instead
-    // of inheriting a dark page's scheme.
-    element.style.colorScheme = 'light';
-    Object.entries(READER_DESIGN_TOKENS).forEach(([name, value]) => {
+    // native scheme. The host states the active scheme explicitly: scrollbars,
+    // carets and form controls stay readable instead of inheriting whatever
+    // scheme the website chose.
+    element.style.colorScheme = readerColorScheme;
+    Object.entries(readerDesignTokensFor(readerColorScheme)).forEach(([name, value]) => {
       element.style.setProperty(`--reader-${name}`, value);
     });
+  }
+  function applyReaderDesignTokens(element) {
+    readerDesignHosts.add(element);
+    paintReaderDesignHost(element);
+  }
+  function refreshReaderDesignScheme() {
+    const resolved = resolveReaderColorScheme(readerColorSchemePreference, readerDarkQuery?.matches === true);
+    if (resolved === readerColorScheme) return;
+    readerColorScheme = resolved;
+    for (const host of readerDesignHosts) {
+      if (!host.isConnected) { readerDesignHosts.delete(host); continue; }
+      paintReaderDesignHost(host);
+    }
+  }
+  function setReaderColorSchemePreference(value) {
+    readerColorSchemePreference = typeof value === 'string' ? value : 'system';
+    refreshReaderDesignScheme();
   }
   // The injected controls live in a shadow root on someone else's page, so
   // the shared token values are read directly from the generated source. The
   // value always comes from the shared token file — never a second literal.
   // The values are injected at build time from packages/design-system.
-  const readerToken = (name) => READER_DESIGN_TOKENS[name] || 'currentColor';
+  const readerToken = (name) => readerDesignTokensFor(readerColorScheme)[name] || 'currentColor';
 
   // An extension update can leave closed-shadow hosts in the page after the
   // previous isolated world is invalidated. Remove only transient controls;

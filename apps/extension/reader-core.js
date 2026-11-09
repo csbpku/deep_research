@@ -991,6 +991,80 @@ export function parseReadingAnswer(raw, context) {
   };
 }
 
+// Clipboard Markdown has to stay readable even when an answer or a page is
+// huge, so the transcript is one bounded string instead of unbounded model
+// output. The cap is a product decision: 12k characters is roughly one long
+// article and keeps the clipboard useful in chat tools that truncate silently.
+const CITATION_MAX_CHARS = 12_000;
+// Evidence quotes are data copied out of an untrusted page. Escaping Markdown
+// punctuation keeps `**`, `](` or backticks in a quote inert: a pasted citation
+// must never turn into emphasis, a link, or inline code by accident.
+const MARKDOWN_ESCAPE = /([\\`*_[\]<>~|])/gu;
+
+function escapeMarkdownText(value) {
+  return String(value || '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(MARKDOWN_ESCAPE, '\\$1');
+}
+
+function citationMessage(message, ...values) {
+  return String(message).replace(/\{(\d+)\}/gu, (_, index) => String(values[Number(index)] ?? ''));
+}
+
+function clipCitationText(text, limit, maxChars, translate) {
+  const source = String(text || '');
+  if (source.length <= limit) return source;
+  const marker = translate('…（回答超过 {0} 字符上限，已截断）', maxChars);
+  const budget = Math.max(0, limit - marker.length - 2);
+  let cut = source.slice(0, budget);
+  // Never leave half of an astral character at the truncation point.
+  if (/[\uD800-\uDBFF]$/u.test(cut)) cut = cut.slice(0, -1);
+  return `${cut.trimEnd()}\n\n${marker}`;
+}
+
+/**
+ * Build the "copy answer with citations" Markdown transcript.
+ *
+ * Numbering keeps the evidence's original 1-based position so `[2]` in the
+ * answer still points at `[2]` here, even when an empty quote is filtered out.
+ * A quote without a URL still prints (the claim is intentionally omitted so the
+ * clipboard stays a quotation, not a paraphrase).
+ */
+export function answerCitationText({ answer, evidence } = {}, options = {}) {
+  const translate = typeof options?.translate === 'function' ? options.translate : citationMessage;
+  const requestedLimit = options?.maxChars;
+  const maxChars = requestedLimit === undefined || requestedLimit === null || !Number.isFinite(Number(requestedLimit))
+    ? CITATION_MAX_CHARS
+    : Math.max(200, Math.floor(Number(requestedLimit)));
+  const body = String(answer ?? '').replace(/\r\n?/gu, '\n').trim();
+  const sourceUrl = typeof options?.url === 'string' ? options.url.trim() : '';
+  const citations = (Array.isArray(evidence) ? evidence : []).flatMap((item, index) => {
+    const raw = typeof item === 'string' ? item : item?.quote;
+    if (typeof raw !== 'string' || !raw.trim()) return [];
+    const url = [item?.url, item?.anchor?.url, item?.sourceUrl, sourceUrl]
+      .find((value) => typeof value === 'string' && /^https?:\/\//iu.test(value.trim()));
+    return [{ line: `[${index + 1}] “${escapeMarkdownText(raw)}”${url ? ` — <${url.trim()}>` : ''}` }];
+  });
+  if (!citations.length) return clipCitationText(body, maxChars, maxChars, translate);
+  const heading = `## ${translate('原文证据')}`;
+  const omitted = (kept) => translate('…（证据较多，已截断：{0} / {1} 条）', kept, citations.length);
+  const compose = (kept) => [
+    body,
+    heading,
+    citations.slice(0, kept).map((citation) => citation.line).join('\n'),
+    kept < citations.length ? omitted(kept) : '',
+  ].filter(Boolean).join('\n\n');
+  let kept = citations.length;
+  while (kept > 0 && compose(kept).length > maxChars) kept -= 1;
+  if (kept > 0) return compose(kept);
+  // The answer alone fills the budget. Keep it readable and say what was cut
+  // instead of silently dropping every citation.
+  const note = omitted(0);
+  const head = clipCitationText(body, Math.max(0, maxChars - note.length - 2), maxChars, translate);
+  return [head, note].filter(Boolean).join('\n\n');
+}
+
 export async function loadProvider() {
   const value = await readerStore.getSetting('provider', DEFAULT_PROVIDER);
   // Older local settings had separate language/visionModel fields. Read them

@@ -77,7 +77,7 @@ function ReaderPanel() {
 
 
         <section id="reading-section">
-          <div className="section-label"><Typography component="h2" variant="h3">{t("收藏与标注")}</Typography><div className="section-actions"><ReaderButton id="refresh-library" variant="text">{t("刷新")}</ReaderButton></div></div>
+          <div className="section-label"><Typography component="h2" variant="h3">{t("收藏与标注")}</Typography><div className="section-actions"><ReaderButton id="library-export" variant="text" title={t("把当前收藏导出为 Markdown 文件")}>{t("导出 Markdown")}</ReaderButton><ReaderButton id="refresh-library" variant="text">{t("刷新")}</ReaderButton></div></div>
           <p className="library-description">{t("只展示你确认保存的摘录、结论和标注。")}</p>
           <Paper component="div" variant="outlined" id="saved-insight-banner" className="saved-insight-banner hidden">
             <div>
@@ -98,6 +98,7 @@ function ReaderPanel() {
           <div className="library-filters">
             <div className="field"><label htmlFor="library-search">{t("搜索收藏")}</label><ReaderTextField id="library-search" type="search" placeholder={t("标题、原文、笔记或结论")} /></div>
             <div className="field"><label htmlFor="library-kind">{t("内容类型")}</label><ReaderSelect id="library-kind" defaultValue="all"><option value="all">{t("全部类型")}</option><option value="insight">{t("摘录与结论")}</option><option value="annotation">{t("原文标注")}</option></ReaderSelect></div>
+            <div className="field"><label htmlFor="library-tag">{t("标签")}</label><ReaderSelect id="library-tag" defaultValue=""><option value="">{t("全部标签")}</option></ReaderSelect></div>
           </div>
           <ReaderButton id="clear-library-filters" className="hidden" type="button">{t("清除筛选")}</ReaderButton>
           <Alert id="library-notice" className="library-notice hidden" role="status" aria-live="polite" icon={false} action={<ReaderButton id="undo-library-delete" className="hidden" type="button">{t("撤销删除")}</ReaderButton>}><span id="library-notice-text" /></Alert>
@@ -161,6 +162,7 @@ function ReaderPanel() {
                 <ReaderButton id="save-answer" className="answer-action answer-save" type="button" startIcon={<ComposerIcon kind="bookmark" />} title={t("保存原文摘录、AI 结论和笔记")} variant="text" control="tonal">{t("保存结论")}</ReaderButton>
               </div>
               <div id="answer-structured" className="answer-structured hidden">
+                <p id="answer-coverage" className="answer-coverage small hidden" role="status" aria-live="polite" />
                 <div id="answer-evidence" className="answer-part response-section hidden" data-answer-section="evidence"><div className="response-section-label">{t("原文证据")}</div><div id="answer-evidence-list" className="evidence-list" /></div>
                 <ReaderDisclosure id="answer-more" className="response-more hidden" label={<>{t("补充说明")}<span id="answer-more-summary" className="response-more-summary" /></>}>
                 <div id="answer-background" className="answer-part response-section hidden" data-answer-section="background"><div className="response-section-label">{t("必要背景")}</div><div id="answer-background-text" /></div>
@@ -294,6 +296,8 @@ function ReaderPanel() {
         <section className="settings-card">
           <div className="field"><label htmlFor="interface-language">{t('界面语言')}</label><ReaderSelect id="interface-language" defaultValue="system"><option value="system">{t('跟随浏览器')}</option><option value="zh-CN">简体中文</option><option value="en">English</option></ReaderSelect></div>
           <p className="small">{t('回答跟随提问语言；翻译可在输入区旁选择目标语言，并自动记住。')}</p>
+          <div className="field"><label htmlFor="color-scheme">{t('外观')}</label><ReaderSelect id="color-scheme" defaultValue="system"><option value="system">{t('跟随系统')}</option><option value="light">{t('浅色')}</option><option value="dark">{t('深色')}</option></ReaderSelect></div>
+          <p className="small">{t('侧栏和网页内的阅读控件使用同一套配色；深色模式适合夜间阅读。')}</p>
         </section>
         <div className="section-label"><Typography component="h2" variant="h3">{t("本地数据")}</Typography></div>
         <div className="actions"><ReaderButton id="export-data" variant="outlined">{t("导出阅读数据")}</ReaderButton><ReaderButton id="import-data" variant="outlined">{t("导入数据")}</ReaderButton><ReaderButton id="clear-cache" variant="outlined" color="error">{t("清除翻译缓存")}</ReaderButton><ReaderButton id="clear-data" variant="outlined" color="error">{t("清除本地数据")}</ReaderButton></div>
