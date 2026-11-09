@@ -488,8 +488,7 @@ try {
   // once so the close control is still exercised instead of skipping it.
   if (!(await translation.count())) {
     await selection();
-    await article.keyboard.press('Alt+Shift+t');
-    await translation.waitFor({ timeout: 30_000 });
+    assert.equal(await openPopup(), true, '重新创建浮层失败');
   }
   await clickPopupControl('.close');
   checks.push('选段翻译浮窗初始、放大、恢复尺寸均保留不透明主题背景');
