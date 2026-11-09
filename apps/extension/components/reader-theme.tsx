@@ -5,6 +5,7 @@ import type { Theme } from '@mui/material/styles';
 import token from '@deep-research/design-system/tokens.json';
 import { designAppearance, designThemeOptions } from '@deep-research/design-system/theme';
 import { READER_COLOR_SCHEME_KEY, normalizeColorSchemePreference, resolveColorScheme } from '../color-scheme.js';
+import { READER_TYPE_SCALE_KEY, normalizeTypeScale, typeScaleVariables } from '../reader-typography.js';
 
 // The Reader reads the same generated stylesheet the platform uses, only
 // under the `--reader-*` prefix. Colour therefore comes from one source: every
@@ -22,9 +23,10 @@ function systemPrefersDark() {
 }
 
 // `chrome` has no ambient type in the extension tsconfig, and this module only
-// needs the one storage key, so the surface it uses is declared here.
+// needs one storage area, so the surface it uses is declared here. Both
+// preferences (colour scheme, type scale) read the same two members.
 interface ReaderStorageChange { newValue?: unknown }
-interface ReaderColorSchemeStorage {
+interface ReaderStorage {
   local?: { get?: (key: string) => Promise<Record<string, unknown>> };
   onChanged?: {
     addListener?: (listener: (changes: Record<string, ReaderStorageChange>, area: string) => void) => void;
@@ -32,8 +34,8 @@ interface ReaderColorSchemeStorage {
   };
 }
 
-function colorSchemeStorage(): ReaderColorSchemeStorage | undefined {
-  return (globalThis as { chrome?: { storage?: ReaderColorSchemeStorage } }).chrome?.storage;
+function readerStorage(): ReaderStorage | undefined {
+  return (globalThis as { chrome?: { storage?: ReaderStorage } }).chrome?.storage;
 }
 
 /**
@@ -56,6 +58,12 @@ function createReaderTheme(mode: ReaderColorScheme): Theme {
   const radius = token['radius-small'];
   const focus = { outline: `2px solid ${primary}`, outlineOffset: '2px' };
   const caption = { fontSize: token['type-caption'], lineHeight: token['line-height-body'], color: muted };
+  // Reading size is a document-level preference (three steps), so answer text
+  // reads it through the custom properties the provider publishes. The token
+  // stays as the fallback: a host without the provider, and the default step,
+  // render exactly what the Reader rendered before the scale existed.
+  const readingSize = `var(--reader-reading-size, ${token['type-reading']})`;
+  const readingLeading = `var(--reader-reading-leading, ${token['line-height-reading']})`;
   const options = designThemeOptions(mode, 'reader');
 
   // No `cssVariables` and no `colorSchemes`: MUI stays on its plain theme path,
@@ -80,7 +88,7 @@ function createReaderTheme(mode: ReaderColorScheme): Theme {
         '.MuiFormControl-root:has(input.hidden)': { display: 'none' },
         '.provider-picker-group h4': { ...caption, fontWeight: token['weight-semibold'] },
         '.reader-composer-field textarea': { fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
-        '.conversation-message-body,.history-detail-message-body': { color: text, fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
+        '.conversation-message-body,.history-detail-message-body': { color: text, fontSize: readingSize, lineHeight: readingLeading },
         '.pending-turn .conversation-message.user': { padding: '12px', backgroundColor: appearance['color-surface-container'], borderRadius: '12px 12px 4px 12px' },
         '.pending-turn .conversation-message-header': { marginBottom: '8px' },
         '.mark': { borderRadius: radius, background: text, color: appearance['color-inverse-text'], fontSize: token['type-title-small'], fontWeight: token['weight-semibold'] },
@@ -131,7 +139,7 @@ function createReaderTheme(mode: ReaderColorScheme): Theme {
         '.response-section[data-answer-section="background"] .response-section-label': { color: appearance['color-background-context'] },
         '.response-section[data-answer-section="inference"] .response-section-label': { color: appearance['color-inference'] },
         '.response-section[data-answer-section="limitations"] .response-section-label': { color: appearance['color-limitations'] },
-        '.response-section p,.response-section li': { fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
+        '.response-section p,.response-section li': { fontSize: readingSize, lineHeight: readingLeading },
         ':is(button,a,[tabindex]):focus-visible': focus,
         '::selection': { background: appearance['color-primary-container'], color: text },
       } },
@@ -256,7 +264,7 @@ export function ReaderThemeProvider({ children }: { children: React.ReactNode })
     apply();
     const query = typeof window.matchMedia === 'function' ? window.matchMedia(DARK_QUERY) : null;
     query?.addEventListener?.('change', apply);
-    const storage = colorSchemeStorage();
+    const storage = readerStorage();
     void Promise.resolve(storage?.local?.get?.(READER_COLOR_SCHEME_KEY)).then(stored => {
       preference = normalizeColorSchemePreference(stored?.[READER_COLOR_SCHEME_KEY]);
       apply();
@@ -271,6 +279,38 @@ export function ReaderThemeProvider({ children }: { children: React.ReactNode })
       query?.removeEventListener?.('change', apply);
       storage?.onChanged?.removeListener?.(onChanged);
     };
+  }, []);
+
+  // Reading typography is a separate axis from colour: it never re-themes the
+  // provider, it only republishes three custom properties on <html>. Writing
+  // them at document level means both provider hosts (the side panel and the
+  // history page) feed one source to the MUI CssBaseline and to the plain
+  // `reader-ui.css` markdown rules, without threading a prop through either.
+  React.useEffect(() => {
+    const root = document.documentElement;
+    const apply = (value: unknown) => {
+      const scale = normalizeTypeScale(value);
+      // The attribute is the stable hook for rules that want to react to the
+      // step; the variables are what the existing stylesheets actually read.
+      root.dataset.readerTypeScale = scale;
+      for (const [name, cssValue] of Object.entries(typeScaleVariables(scale))) {
+        root.style.setProperty(name, cssValue);
+      }
+    };
+    // Applying the default before storage answers is a no-op visually: its
+    // values are what the token fallbacks already resolve to, so there is no
+    // flash of a different size on first paint.
+    apply(undefined);
+    const storage = readerStorage();
+    void Promise.resolve(storage?.local?.get?.(READER_TYPE_SCALE_KEY)).then(stored => {
+      apply(stored?.[READER_TYPE_SCALE_KEY]);
+    }).catch(() => {});
+    const onChanged = (changes: Record<string, ReaderStorageChange>, area: string) => {
+      if (area !== 'local' || !changes[READER_TYPE_SCALE_KEY]) return;
+      apply(changes[READER_TYPE_SCALE_KEY].newValue);
+    };
+    storage?.onChanged?.addListener?.(onChanged);
+    return () => storage?.onChanged?.removeListener?.(onChanged);
   }, []);
 
   return <ThemeProvider theme={readerThemeFor(mode)}>

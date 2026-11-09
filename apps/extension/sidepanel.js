@@ -12,6 +12,8 @@ import { detectLocalModels } from './local-models.js';
 import { readerStore } from './reader-store.js';
 import { createLibraryDeletion, libraryFacets, libraryItems, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
 import { libraryFileName, libraryMarkdown } from './reader-export.js';
+import { buildLibraryAnswerMessages, parseLibraryAnswer, selectLibraryEvidence } from './library-answer.js';
+import { exportNotion, exportObsidian, exportSingleRecord } from './export-formats.js';
 import {
   prepareVisionImage,
   applyTextTranslations,
@@ -20,6 +22,7 @@ import {
   translationContext,
   translationBatches,
   readingAnswerText,
+  messageText,
   boundTaskContext,
   answerCitationText,
   buildAnnotationUrl,
@@ -137,6 +140,7 @@ let translationModel = '';
 let pricing = { inputPerMillion: 0, outputPerMillion: 0 };
 let glossaryEntries = [];
 let currentSiteHost = '';
+let libraryShelf = [];
 const libraryDeletion = createLibraryDeletion(readerStore);
 let libraryRenderRequest = 0;
 let libraryMutationBusy = false;
@@ -1609,9 +1613,10 @@ async function updateLibrary() {
     const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
     if (request !== libraryRenderRequest) return;
     const visibleAnnotations = annotations.filter(annotation => !annotation.insightId);
+    libraryShelf = libraryItems(insights, visibleAnnotations);
     // Facets describe the whole shelf, not the current page, so the tag menu
     // stays stable while the user narrows the list.
-    renderLibraryTagOptions(libraryFacets(libraryItems(insights, visibleAnnotations)).tags);
+    renderLibraryTagOptions(libraryFacets(libraryShelf).tags);
     const result = libraryPage(insights, visibleAnnotations, libraryView);
     libraryView.page = result.page;
     const records = result.items.map(({ kind, record }) => kind === 'insight'
@@ -1619,12 +1624,14 @@ async function updateLibrary() {
         source: record.url || record.document?.url, detail: record.quote, answer: record.note || record.aiAnswer, tags: record.tags,
         meta: new Date(record.createdAt).toLocaleString(), actions: [
           { label: t("编辑"), action: 'edit', run: () => openSaveDialog(record) },
+          { label: t("复制"), action: 'copy', run: () => void copyRecord({ kind, record }) },
           { label: t("删除"), action: 'delete', danger: true, run: () => void deleteLibraryRecord(kind, record) },
         ] }
       : { key: `${kind}:${record.id}`, className: 'insight-row annotation-row',
         title: record.note || record.document?.title || t("未命名标注"), source: record.document?.url, detail: record.anchor?.quote,
         meta: t("标注 · {0}", new Date(record.updatedAt || record.createdAt).toLocaleString()), actions: [
           { label: t("编辑"), action: 'edit', run: () => void openAnnotationDialog(record) },
+          { label: t("复制"), action: 'copy', run: () => void copyRecord({ kind, record }) },
           { label: t("回到原文"), action: 'focus', run: async () => { try { await chrome.tabs.create({ url: buildAnnotationUrl(record.document.url, record.anchor), active: true }); } catch { setLibraryNotice(t("无法打开原文，请复制来源地址后重试。")); } } },
           { label: t("删除"), action: 'delete', danger: true, run: () => void deleteLibraryRecord(kind, record) },
         ] });
@@ -1773,15 +1780,143 @@ function maybeAutoTranslate() {
   void startFullTranslation();
 }
 
-async function exportLibraryMarkdown() {
+async function libraryExportItems() {
+  const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
+  return libraryItems(insights, annotations.filter(annotation => !annotation.insightId));
+}
+
+async function exportLibrary() {
+  const format = $('library-export-format')?.value || 'markdown';
   try {
-    const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
-    const items = libraryItems(insights, annotations.filter(annotation => !annotation.insightId));
+    const items = await libraryExportItems();
+    if (!items.length) {
+      setLibraryNotice(t("还没有收藏内容可以导出。"));
+      return;
+    }
+    if (format === 'notion') {
+      // Notion takes paste, not files: keep it on the clipboard.
+      await copyText(exportNotion(items, { title: t("Reader 收藏") }));
+      setLibraryNotice(t("已复制 {0} 条收藏，可直接粘贴到 Notion。", items.length));
+      return;
+    }
+    if (format === 'obsidian') {
+      const files = exportObsidian(items);
+      const names = Object.keys(files);
+      if (!names.length) {
+        setLibraryNotice(t("还没有收藏内容可以导出。"));
+        return;
+      }
+      // Chrome asks once for permission to download several files; keep a
+      // small gap so the prompt is not treated as a download storm.
+      for (const name of names) {
+        downloadText(files[name], name, 'text/markdown;charset=utf-8');
+        await new Promise((resolve) => { setTimeout(resolve, 160); });
+      }
+      setLibraryNotice(t("已导出 {0} 个页面到下载目录的 Reader 文件夹；浏览器可能询问是否允许多文件下载。", names.length));
+      return;
+    }
     downloadText(libraryMarkdown(items, { title: t("Reader 收藏") }), libraryFileName());
     setLibraryNotice(t("已导出 {0} 条收藏。", items.length));
   } catch {
     setLibraryNotice(t("导出失败，请稍后重试。"));
   }
+}
+
+async function copyRecord(item) {
+  try {
+    await copyText(exportSingleRecord(item, { includeTitle: true }));
+    setLibraryNotice(t("已复制这一条收藏。"));
+  } catch {
+    setLibraryNotice(t("浏览器没有开放剪贴板权限，请手动选择内容复制。"));
+  }
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.cssText = 'position:fixed;top:-1000px;left:-1000px;';
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+}
+
+async function askLibrary() {
+  const input = $('library-ask-input');
+  const status = $('library-ask-status');
+  const answerHost = $('library-ask-answer');
+  const citationsHost = $('library-ask-citations');
+  const button = $('library-ask');
+  const question = String(input?.value || '').trim() || String($('library-search')?.value || '').trim();
+  if (!question) {
+    status.textContent = t("先输入一个具体问题，例如“我之前记过哪些关于背压的结论？”。");
+    return;
+  }
+  if (!textModelReady()) {
+    showModelSetupGuidance(t("问收藏"));
+    return;
+  }
+  const selection = selectLibraryEvidence(libraryShelf, question);
+  if (!selection.terms.length) {
+    status.textContent = t("这个问题没有可用于检索的关键词，换一个具体主题试试。");
+    return;
+  }
+  if (!selection.evidence.length) {
+    status.textContent = t("收藏库里没有匹配“{0}”的条目，换更具体的关键词试试。", selection.terms.slice(0, 3).join('、'));
+    show(answerHost, false);
+    show(citationsHost, false);
+    return;
+  }
+  button.disabled = true;
+  status.textContent = t("正在从 {0} 条相关收藏中整理答案…", selection.evidence.length);
+  try {
+    const messages = buildLibraryAnswerMessages(question, selection.evidence);
+    const payload = await requestChat(readingProvider(), messages, { temperature: 0.2, maxTokens: 1_200 });
+    const result = parseLibraryAnswer(messageText(payload), selection.evidence);
+    renderMarkdown(answerHost, result.answer || '');
+    show(answerHost, Boolean(result.answer));
+    renderLibraryCitations(citationsHost, result.citations);
+    const warnings = [];
+    if (result.warnings.includes('本次回答没有引用收藏条目') || !result.citations.length) {
+      warnings.push(t("本次回答没有引用收藏条目，请谨慎采信。"));
+    }
+    status.textContent = warnings.join(' ') || t("来自 {0} 条收藏证据。", selection.evidence.length);
+    void recordUsageEvent('answer', {
+      requests: 1,
+      chars: question.length + selection.evidence.reduce((sum, item) => sum + String(item.quote || '').length + String(item.note || '').length, 0),
+    });
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : t("收藏问答失败，请稍后重试。");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderLibraryCitations(host, citations) {
+  if (!host) return;
+  host.replaceChildren();
+  const list = (citations || []).filter((item) => item?.url).slice(0, 6);
+  if (!list.length) { show(host, false); return; }
+  const label = document.createElement('span');
+  label.className = 'small';
+  label.textContent = t("引用：");
+  host.append(label);
+  list.forEach((citation, index) => {
+    const link = document.createElement('a');
+    link.href = citation.url;
+    link.target = '_blank';
+    link.rel = 'noreferrer noopener';
+    link.className = 'library-citation';
+    link.textContent = `[${index + 1}] ${citation.title || new URL(citation.url).hostname}`;
+    link.title = String(citation.quote || '').slice(0, 200);
+    host.append(link);
+  });
+  show(host, true);
 }
 
 function setLibraryNotice(message) {
@@ -3756,8 +3891,8 @@ async function restorePendingPageAction() {
   }
 }
 
-function downloadText(text, filename) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+function downloadText(text, filename, mime = 'text/markdown;charset=utf-8') {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;
@@ -4113,6 +4248,8 @@ async function init() {
   $('color-scheme').value = ['light', 'dark'].includes(storedScheme) ? storedScheme : 'system';
   const storedLayout = (await chrome.storage.local.get('readerTranslationLayout')).readerTranslationLayout;
   $('translation-layout').value = storedLayout === 'stacked' ? 'stacked' : 'replace';
+  const storedTypeScale = (await chrome.storage.local.get('readerTypeScale')).readerTypeScale;
+  $('type-scale').value = ['compact', 'large'].includes(storedTypeScale) ? storedTypeScale : 'comfortable';
   siteRules = normalizeSiteRules((await chrome.storage.local.get(SITE_RULES_KEY))[SITE_RULES_KEY]);
   usageState = pruneUsage((await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY], { keepDays: 120 });
   translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
@@ -4127,6 +4264,10 @@ async function init() {
   $('site-rule-mode').addEventListener('change', event => void saveSiteRule(event.target.value));
   $('save-glossary').addEventListener('click', () => void saveGlossary());
   $('save-usage-settings').addEventListener('click', () => void saveUsageSettings());
+  $('type-scale').addEventListener('change', async event => {
+    // The theme provider subscribes to this key and applies the CSS variables.
+    await chrome.storage.local.set({ readerTypeScale: ['compact', 'large'].includes(event.target.value) ? event.target.value : 'comfortable' });
+  });
   $('translation-layout').addEventListener('change', async event => {
     // The content script owns how an applied translation is laid out; the
     // panel only stores the preference and the script re-lays out live.
@@ -4256,7 +4397,9 @@ async function init() {
   $('library-search').addEventListener('input', event => { libraryView.query = event.target.value; libraryView.page = 1; void updateLibrary(); });
   $('library-kind').addEventListener('change', event => { libraryView.kind = event.target.value; libraryView.page = 1; void updateLibrary(); });
   $('library-tag').addEventListener('change', event => { libraryView.tag = event.target.value; libraryView.page = 1; void updateLibrary(); });
-  $('library-export').addEventListener('click', () => void exportLibraryMarkdown());
+  $('library-export').addEventListener('click', () => void exportLibrary());
+  $('library-ask').addEventListener('click', () => void askLibrary());
+  $('library-ask-input').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void askLibrary(); } });
   $('clear-library-filters').addEventListener('click', () => {
     libraryView.query = ''; libraryView.kind = 'all'; libraryView.tag = ''; libraryView.page = 1;
     $('library-search').value = ''; $('library-kind').value = 'all';

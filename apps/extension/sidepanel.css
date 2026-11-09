@@ -137,6 +137,12 @@ h1, h2, h3, p { margin:0 }
 .library-filters { display:grid; grid-template-columns:minmax(0, 1fr); gap:var(--reader-space-3); margin-top:var(--reader-space-4) }
 .library-filters .field { margin-top:0 }
 .library-summary, .library-notice { margin-top:var(--reader-space-3) }
+.library-ask-panel { margin-top:var(--reader-space-3); padding:var(--reader-space-3) }
+.library-ask-row { display:flex; align-items:center; gap:var(--reader-space-2) }
+.library-ask-row > :first-child { flex:1; min-width:0 }
+.library-ask-answer { margin-top:var(--reader-space-2); user-select:text; overflow-wrap:anywhere }
+.library-citations { display:flex; flex-wrap:wrap; align-items:center; gap:var(--reader-space-2); margin-top:var(--reader-space-2) }
+.library-citation { font-size:var(--reader-type-caption); text-decoration:none; color:var(--reader-color-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100% }
 .library-pagination { display:flex; align-items:center; justify-content:space-between; gap:var(--reader-space-2); margin-block:var(--reader-space-4) }
 .library-pagination span { font-variant-numeric:tabular-nums; text-align:center }
 .platform-data-details { margin-top:var(--reader-space-4) }

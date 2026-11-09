@@ -77,7 +77,7 @@ function ReaderPanel() {
 
 
         <section id="reading-section">
-          <div className="section-label"><Typography component="h2" variant="h3">{t("收藏与标注")}</Typography><div className="section-actions"><ReaderButton id="library-export" variant="text" title={t("把当前收藏导出为 Markdown 文件")}>{t("导出 Markdown")}</ReaderButton><ReaderButton id="refresh-library" variant="text">{t("刷新")}</ReaderButton></div></div>
+          <div className="section-label"><Typography component="h2" variant="h3">{t("收藏与标注")}</Typography><div className="section-actions"><ReaderSelect id="library-export-format" defaultValue="markdown" className="compact-select"><option value="markdown">{t("Markdown")}</option><option value="obsidian">{t("Obsidian")}</option><option value="notion">{t("Notion")}</option></ReaderSelect><ReaderButton id="library-export" variant="text" title={t("按所选格式导出收藏")}>{t("导出")}</ReaderButton><ReaderButton id="refresh-library" variant="text">{t("刷新")}</ReaderButton></div></div>
           <p className="library-description">{t("只展示你确认保存的摘录、结论和标注。")}</p>
           <Paper component="div" variant="outlined" id="saved-insight-banner" className="saved-insight-banner hidden">
             <div className="saved-insight-text">
@@ -103,6 +103,15 @@ function ReaderPanel() {
           <ReaderButton id="clear-library-filters" className="hidden" type="button">{t("清除筛选")}</ReaderButton>
           <Alert id="library-notice" className="library-notice hidden" role="status" aria-live="polite" icon={false} action={<ReaderButton id="undo-library-delete" className="hidden" type="button">{t("撤销删除")}</ReaderButton>}><span id="library-notice-text" /></Alert>
           <p id="library-summary" className="small library-summary" role="status" aria-live="polite" />
+          <Paper component="section" variant="outlined" id="library-ask-panel" className="library-ask-panel">
+            <div className="library-ask-row">
+              <ReaderTextField id="library-ask-input" placeholder={t("问收藏：例如“我之前记过哪些关于背压的结论？”")} autoComplete="off" />
+              <ReaderButton id="library-ask" type="button" variant="outlined" title={t("只依据已保存的收藏回答")}>{t("问收藏")}</ReaderButton>
+            </div>
+            <p id="library-ask-status" className="small" role="status" aria-live="polite" />
+            <div id="library-ask-answer" className="library-ask-answer hidden" />
+            <div id="library-ask-citations" className="library-citations hidden" />
+          </Paper>
           <div id="library-list" className="small" style={{ paddingTop: 10 }}>{t("还没有本地保存的成果。")}</div>
           <nav id="library-pagination" className="library-pagination hidden" aria-label={t("收藏分页")}><ReaderButton id="library-previous" type="button" variant="outlined">{t("上一页")}</ReaderButton><span id="library-page" className="small" /><ReaderButton id="library-next" type="button" variant="outlined">{t("下一页")}</ReaderButton></nav>
         </section>
@@ -299,6 +308,8 @@ function ReaderPanel() {
           </div>
           <div className="field"><label htmlFor="translation-layout">{t("翻译版式")}</label><ReaderSelect id="translation-layout" defaultValue="replace"><option value="replace">{t("替换原文")}</option><option value="stacked">{t("原文与译文对照")}</option></ReaderSelect></div>
           <p className="small">{t("对照版式保留原文；代码块和表格单元格仍按替换处理。")}</p>
+          <div className="field"><label htmlFor="type-scale">{t("阅读排版")}</label><ReaderSelect id="type-scale" defaultValue="comfortable"><option value="compact">{t("紧凑")}</option><option value="comfortable">{t("舒适")}</option><option value="large">{t("大")}</option></ReaderSelect></div>
+          <p className="small">{t("只影响侧栏与历史页的回答正文；网页译文保持原网页字号。")}</p>
           <div className="field"><label htmlFor="site-rule-mode">{t("本站翻译规则")}</label><ReaderSelect id="site-rule-mode" defaultValue="ask"><option value="ask">{t("每次询问")}</option><option value="always">{t("总是自动翻译")}</option><option value="never">{t("从不自动翻译")}</option></ReaderSelect></div>
           <p id="site-rule-hint" className="small" />
           <div className="field"><label htmlFor="glossary-input">{t("术语表")}</label><ReaderTextField id="glossary-input" multiline minRows={3} placeholder={t("每行一条：source => 译法")} /></div>
