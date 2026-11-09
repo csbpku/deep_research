@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from collections.abc import Iterator
+
+import pytest
 
 # Load .env so DATABASE_URL is set in test env.
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,8 +39,18 @@ os.environ.setdefault(
 os.environ["JOB_RUNNER_BACKEND"] = "memory"
 os.environ["AI_ENGINE_ADAPTER"] = "fake"  # tests always use fake adapter
 os.environ["LLM_CIRCUIT_ENABLED"] = "false"
+os.environ["LLM_QUOTA_STATUS_QUERY_ENABLED"] = "0"
 # Never let test clients inherit a developer or production service credential.
 os.environ["INTERNAL_SERVICE_TOKEN"] = "test-only-ai-engine-token"
+
+
+@pytest.fixture(autouse=True)
+def isolate_provider_quota_cooldowns() -> Iterator[None]:
+    from ai_engine.llm.provider_quota import _cooldowns
+
+    _cooldowns.clear()
+    yield
+    _cooldowns.clear()
 
 # Clear the vendor fetchers' statefiles before the test session so dedupe
 # tests do not see URLs left behind by prior runs. Each test that wants

@@ -846,3 +846,125 @@ def test_quota_exhausted_ignores_per_minute_quota_wording_and_billing_mentions()
     # A local token cap also cannot recover inside the run, so it stops the run.
     budget = TokenBudgetExceeded(scope="platform", used=10, limit=10, requested=1)
     assert is_quota_exhausted_error(budget)
+
+
+@pytest.mark.parametrize("message", [
+    "已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)",
+    "Token Plan usage limit reached (2056)",
+])
+def test_minimax_plan_exhaustion_is_not_treated_as_temporary_429(message: str) -> None:
+    from ai_engine.llm.client import is_quota_exhausted_error
+
+    assert is_quota_exhausted_error(_StatusError(message, 429))
+
+
+def test_structured_provider_2056_code_is_recognized_without_message_matching() -> None:
+    from ai_engine.llm.client import is_quota_exhausted_error
+
+    error = _StatusError("provider rejected request", 429)
+    error.body = {"error": {"code": 2056}}  # type: ignore[attr-defined]
+    assert is_quota_exhausted_error(error)
+    assert not is_quota_exhausted_error(_StatusError("temporary rate limit; request_id=2056", 429))
+
+
+@pytest.mark.parametrize("status", [402, 429])
+async def test_hard_quota_skips_same_route_retries_and_uses_independent_fallback(
+    monkeypatch: pytest.MonkeyPatch, status: int,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setenv("MINIMAX_API_KEY", "primary-account")
+    monkeypatch.setenv("OPENAI_API_KEY", "backup-account")
+    monkeypatch.setenv("FALLBACK_LLM", "openai:backup")
+    monkeypatch.setenv("LLM_RETRY_ATTEMPTS", "3")
+
+    async def provider(**kwargs: object) -> TextGenerationResult:
+        spec = str(kwargs["llm_spec"])
+        calls.append(spec)
+        if spec.startswith("minimax:"):
+            raise _StatusError("Token Plan usage limit reached (2056)", status)
+        return TextGenerationResult("backup result", 5, 2, "backup", "backup", "openai")
+
+    async def ignore(_event: object) -> None:
+        pass
+
+    monkeypatch.setattr("ai_engine.llm.client._generate_text_once", provider)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", ignore)
+    for _ in range(2):
+        result = await generate_text(llm_spec="minimax:MiniMax-M3.1-Flash", user_prompt="question")
+        assert result.text == "backup result"
+    assert calls == ["minimax:MiniMax-M3.1-Flash", "openai:backup", "openai:backup"]
+
+
+async def test_cached_quota_remains_a_typed_exhaustion_for_other_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.llm.client import is_quota_exhausted_error
+    from ai_engine.llm.provider_quota import ProviderQuotaExhausted
+
+    calls = 0
+    monkeypatch.setenv("FALLBACK_LLM", "openai:primary")
+
+    async def provider(**_kwargs: object) -> TextGenerationResult:
+        nonlocal calls
+        calls += 1
+        raise _StatusError("insufficient balance", 402)
+
+    async def ignore(_event: object) -> None:
+        pass
+
+    monkeypatch.setattr("ai_engine.llm.client._generate_text_once", provider)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", ignore)
+    with pytest.raises(_StatusError):
+        await generate_text(llm_spec="openai:primary", user_prompt="one")
+    with pytest.raises(ProviderQuotaExhausted) as stopped:
+        await generate_text(llm_spec="openai:primary", user_prompt="two")
+    assert is_quota_exhausted_error(stopped.value)
+    from ai_engine.llm.client import is_quota_error
+
+    assert is_quota_error(stopped.value)
+    assert calls == 1
+
+
+async def test_quota_cooldown_is_shared_by_text_vision_and_streaming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.llm.provider_quota import ProviderQuotaExhausted
+
+    calls = 0
+    monkeypatch.setenv("FALLBACK_LLM", "openai:primary")
+
+    async def provider(**_kwargs: object) -> TextGenerationResult:
+        nonlocal calls
+        calls += 1
+        raise _StatusError("Token Plan usage limit reached (2056)", 429)
+
+    async def ignore(_event: object) -> None:
+        pass
+
+    async def delta(_value: str) -> None:
+        raise AssertionError("quota blocked stream emitted output")
+
+    for method in ("_generate_text_once", "_generate_vision_once", "_stream_text_once"):
+        monkeypatch.setattr("ai_engine.llm.client." + method, provider)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", ignore)
+    with pytest.raises(_StatusError):
+        await generate_text(llm_spec="openai:primary", user_prompt="one")
+    with pytest.raises(ProviderQuotaExhausted):
+        await generate_vision(
+            llm_spec="openai:primary", user_prompt="two", system_prompt=None,
+            image_media_type="image/png", image_base64="AQID",
+        )
+    with pytest.raises(ProviderQuotaExhausted):
+        await stream_text(llm_spec="openai:primary", user_prompt="three", on_delta=delta)
+    assert calls == 1
+
+
+async def test_complete_prompt_limit_blocks_provider_before_spending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected(**_kwargs: object) -> TextGenerationResult:
+        raise AssertionError("oversized prompt reached provider")
+
+    monkeypatch.setattr("ai_engine.llm.client._generate_text_once", unexpected)
+    with pytest.raises(ValueError, match="LLM input budget exceeded"):
+        await generate_text(user_prompt="body", system_prompt="large metadata " * 100, max_input_tokens=20)

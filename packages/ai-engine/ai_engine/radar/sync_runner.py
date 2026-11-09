@@ -1732,6 +1732,8 @@ def _is_retryable_brief_failure(
         for key in ("error_code", "error_message")
     )
     lowered = text.lower()
+    if "llm input budget exceeded" in lowered:
+        return False
     return _is_rate_limited_brief(brief=brief, exc=exc) or any(
         marker in lowered
         for marker in (

@@ -105,6 +105,8 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `RADAR_FETCH_RETRIES` | int | 来源与候选传输失败后的额外重试次数 | `2` |
 | `RADAR_FETCH_RETRY_BACKOFF_SECONDS` | float | 传输重试的初始退避秒数（指数增长） | `0.5` |
 | `RADAR_LLM_CONCURRENCY` | int | 全局 LLM 调用上限，sync/enrichment 共用 | `8` |
+| `LLM_QUOTA_COOLDOWN_SECONDS` | float | 供应商硬额度耗尽后的进程内共享冷却（至少 60 秒）；按端点和凭据隔离，不消耗模型请求探测；重启会清除冷却 | `3600` |
+| `LLM_QUOTA_STATUS_QUERY_ENABLED` | bool | 国内 MiniMax 官方端点发生硬额度错误时，使用官方只读余量 API 对齐 5 小时/周窗口；冷却期间最多每 5 分钟查询一次以发现充值/升级恢复，禁用或查询失败时使用上述冷却值；代理和国际端点不转发凭据到国内余量 API | `1` |
 | `RADAR_SCORING_CONCURRENCY` | int | Distilled 评分额外上限 | `8` |
 | `RADAR_ENRICHMENT_CONCURRENCY` | int | Stage 2 enrichment 候选并发数 | `2` |
 | `RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS` | float | enrichment 单条外层超时；`0` 交给 durable worker/Zread CLI 自己控制，正数仅用于显式有界修复 | `0` |
