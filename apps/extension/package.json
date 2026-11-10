@@ -1,6 +1,6 @@
 {
   "name": "@deep-research/reader-extension",
-  "version": "0.2.40",
+  "version": "0.2.41",
   "private": true,
   "type": "module",
   "scripts": {
@@ -47,7 +47,8 @@
     "e2e:bilingual": "node e2e/bilingual-layout.mjs",
     "e2e:site-rules": "node e2e/site-rules-glossary.mjs",
     "e2e:typography": "node e2e/typography-scale.mjs",
-    "e2e:library-ask": "node e2e/library-ask.mjs"
+    "e2e:library-ask": "node e2e/library-ask.mjs",
+    "e2e:onboarding": "node e2e/onboarding-demo.mjs"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

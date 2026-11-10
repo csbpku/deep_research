@@ -141,6 +141,8 @@ let pricing = { inputPerMillion: 0, outputPerMillion: 0 };
 let glossaryEntries = [];
 let currentSiteHost = '';
 let libraryShelf = [];
+// First-run guide: three concrete actions against the bundled demo article.
+let guideState = { demo: false, translate: false, ask: false, dismissed: false };
 const libraryDeletion = createLibraryDeletion(readerStore);
 let libraryRenderRequest = 0;
 let libraryMutationBusy = false;
@@ -1213,6 +1215,7 @@ function syncConversationEmptyState(noMessages = discussionHistory.every((item) 
 function renderEmptyState() {
   renderEmptyStateContent();
   renderFirstRunPaths();
+  renderGuide();
 }
 
 function renderEmptyStateContent() {
@@ -1271,6 +1274,72 @@ function boundedPromise(promise, timeoutMs, fallback) {
     Promise.resolve(promise).catch(() => fallback),
     new Promise((resolve) => { setTimeout(() => resolve(fallback), timeoutMs); }),
   ]);
+}
+
+function renderGuide() {
+  const card = $('guide-card');
+  if (!card) return;
+  const complete = guideState.demo && guideState.translate && guideState.ask;
+  const visible = textModelReady() && !guideState.dismissed && !complete;
+  show(card, visible);
+  if (!visible) return;
+  const steps = [
+    ['guide-demo', guideState.demo],
+    ['guide-translate', guideState.translate],
+    ['guide-ask', guideState.ask],
+  ];
+  for (const [id, done] of steps) {
+    const button = $(id);
+    if (!button) continue;
+    button.classList.toggle('is-done', done);
+    button.setAttribute('aria-pressed', String(done));
+  }
+}
+
+async function saveGuideState(patch) {
+  guideState = { ...guideState, ...patch };
+  await chrome.storage.local.set({ readerGuide: guideState });
+  renderGuide();
+}
+
+async function openDemoArticle() {
+  const url = chrome.runtime.getURL('demo.html');
+  const tab = await chrome.tabs.create({ url, active: true });
+  // The demo page loads content.js itself; extension pages cannot be injected
+  // by chrome.scripting, so the panel asks for the page context directly.
+  if (Number.isInteger(tab?.id)) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        const response = await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+        if (response !== undefined || attempt > 3) break;
+      } catch {
+        await new Promise((resolve) => { setTimeout(resolve, 250); });
+      }
+    }
+  }
+  await saveGuideState({ demo: true });
+  setNotice(t("示例文章已打开：点击“翻译”或直接在下方提问。"));
+}
+
+async function guideTranslate() {
+  if (!pageContext?.url) {
+    await openDemoArticle();
+    return;
+  }
+  if (!textModelReady()) { showModelSetupGuidance(t("全文翻译")); return; }
+  void startFullTranslation();
+}
+
+async function guideAsk() {
+  if (!pageContext?.url) {
+    await openDemoArticle();
+    return;
+  }
+  const input = $('question-input');
+  if (!input) return;
+  input.value = t("这篇文章为什么说有界队列的限制不是为了降低性能？");
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.focus();
 }
 
 function renderFirstRunPaths() {
@@ -3061,6 +3130,7 @@ async function processDocument(context, runId = activeTranslationRun) {
           chars: usageEstimate.chars,
           tokens: usageEstimate.tokens,
         });
+        void saveGuideState({ translate: true });
         return;
       }
     } catch {
@@ -3159,6 +3229,7 @@ async function processDocument(context, runId = activeTranslationRun) {
       chars: usageEstimate.chars,
       tokens: usageEstimate.tokens,
     });
+    void saveGuideState({ translate: true });
     const finalResults = await applyTranslations([...cachedTranslations, ...translations.filter((item) => item.text)]);
     const renderedById = new Map(finalResults.map((item) => [item.id, item]));
     translations = [...cachedTranslations, ...translations].map((item) => renderedById.get(item.id) || item);
@@ -3528,6 +3599,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     if (!stillVisible()) return;
     latestStructuredAnswer = typeof result === 'string' ? { answer: result, evidence: [], background: '', inference: '', limitations: [], warnings: [] } : result;
     recordAnswerUsage(requestSource, requestPrompt, latestStructuredAnswer);
+    if (!guideState.ask) void saveGuideState({ ask: true });
     if (requestSource.contentHash && requestSource.contentHash !== (pageContext?.contentHash || documentContext?.contentHash)) latestStructuredAnswer = { ...latestStructuredAnswer, evidence: [], warnings: [...(latestStructuredAnswer.warnings || []), t("页面内容已更新，旧引文定位已撤销。")] };
     latestAnswer = latestStructuredAnswer.answer || '';
     discussionHistory = [
@@ -4232,7 +4304,7 @@ async function init() {
   await loadPlatformState();
   updateReadingModeUi();
   renderEmptyState();
-  $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('detect-local-models')?.addEventListener('click', () => void detectLocalServices()); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
+  $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('detect-local-models')?.addEventListener('click', () => void detectLocalServices()); $('guide-demo')?.addEventListener('click', () => void openDemoArticle()); $('guide-translate')?.addEventListener('click', () => void guideTranslate()); $('guide-ask')?.addEventListener('click', () => void guideAsk()); $('dismiss-guide')?.addEventListener('click', () => void saveGuideState({ dismissed: true })); $('empty-platform')?.addEventListener('click', () => { showSettings(); void setReadingMode('platform'); }); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
   $('mode-local')?.addEventListener('click', () => void setReadingMode('local'));
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
   $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读")));
@@ -4248,6 +4320,8 @@ async function init() {
   $('color-scheme').value = ['light', 'dark'].includes(storedScheme) ? storedScheme : 'system';
   const storedLayout = (await chrome.storage.local.get('readerTranslationLayout')).readerTranslationLayout;
   $('translation-layout').value = storedLayout === 'stacked' ? 'stacked' : 'replace';
+  const storedGuide = (await chrome.storage.local.get('readerGuide')).readerGuide;
+  guideState = { demo: false, translate: false, ask: false, dismissed: false, ...(storedGuide && typeof storedGuide === 'object' ? storedGuide : {}) };
   const storedTypeScale = (await chrome.storage.local.get('readerTypeScale')).readerTypeScale;
   $('type-scale').value = ['compact', 'large'].includes(storedTypeScale) ? storedTypeScale : 'comfortable';
   siteRules = normalizeSiteRules((await chrome.storage.local.get(SITE_RULES_KEY))[SITE_RULES_KEY]);

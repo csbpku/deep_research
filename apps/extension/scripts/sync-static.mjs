@@ -24,6 +24,15 @@ await writeFile(resolve(publicDir, 'content.js'), contentSource
   .replace(tokenPlaceholder, `const READER_DESIGN_TOKENS = ${JSON.stringify(designTokens)};`)
   .replace('const READER_EN_MESSAGES = {};', `const READER_EN_MESSAGES = ${JSON.stringify(english)};`));
 await copyFile(resolve(root, 'reader-platform-bridge.js'), resolve(publicDir, 'reader-platform-bridge.js'));
+// The demo article ships with the extension so the first run can show the
+// whole reading loop without asking for access to a real website. It loads
+// the generated content script directly: chrome-extension:// pages cannot be
+// targeted by chrome.scripting, but they can load their own resources.
+const demoSource = await readFile(resolve(root, 'demo-article.html'), 'utf8');
+await writeFile(resolve(publicDir, 'demo.html'), demoSource.replace(
+  '</body>',
+  '  <script src="content.js"></script>\n  </body>',
+));
 for (const locale of ['en', 'zh_CN']) {
   const localeDir = resolve(publicDir, '_locales', locale);
   await mkdir(localeDir, { recursive: true });

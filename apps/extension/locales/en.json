@@ -884,5 +884,14 @@
   "本次回答没有引用收藏条目，请谨慎采信。": "This answer cites no saved item; treat it with caution.",
   "来自 {0} 条收藏证据。": "Based on {0} saved items.",
   "收藏问答失败，请稍后重试。": "Library question failed. Try again later.",
-  "引用：": "Sources:"
+  "引用：": "Sources:",
+  "已有调研平台账号？连接平台": "Have a Deep Research account? Connect",
+  "60 秒上手": "Get started in 60 seconds",
+  "隐藏引导": "Hide guide",
+  "用自带的示例文章走一遍：翻译、提问、回到原文证据。": "Walk through the bundled demo article: translate it, ask a question, follow the evidence back.",
+  "1. 打开示例文章": "1. Open the demo article",
+  "2. 翻译这篇文章": "2. Translate it",
+  "3. 问一个问题": "3. Ask a question",
+  "示例文章已打开：点击“翻译”或直接在下方提问。": "Demo article opened. Select Translate, or ask below.",
+  "这篇文章为什么说有界队列的限制不是为了降低性能？": "Why is a bounded queue not a performance limit?"
 }
