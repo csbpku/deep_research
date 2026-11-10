@@ -494,11 +494,13 @@ function describeCitation(value) {
  * Plain text is taken verbatim as the answer: it has no citation field, and
  * guessing citations from bracketed numbers would also match code examples.
  * Structured replies name their citations explicitly, so those are mapped back
- * to the evidence array (1-based), de-duplicated and capped at six.
+ * to the evidence array (1-based), de-duplicated and capped at six. Preserve
+ * each original number so a sparse or reordered subset still matches [n] in
+ * the answer body.
  *
  * @param {unknown} raw
  * @param {Array<{ id?: unknown, title?: unknown, url?: unknown, quote?: unknown }>} evidence
- * @returns {{ answer: string, citations: Array<{ id: unknown, title: string, url: string, quote: string }>, warnings: string[] }}
+ * @returns {{ answer: string, citations: Array<{ number: number, id: unknown, title: string, url: string, quote: string }>, warnings: string[] }}
  */
 export function parseLibraryAnswer(raw, evidence) {
   const items = Array.isArray(evidence) ? evidence : [];
@@ -548,6 +550,7 @@ export function parseLibraryAnswer(raw, evidence) {
     seenNumbers.add(number);
     const item = items[number - 1] ?? {};
     citations.push({
+      number,
       id: item.id ?? '',
       title: typeof item.title === 'string' ? item.title : '',
       url: typeof item.url === 'string' ? item.url : '',

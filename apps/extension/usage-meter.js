@@ -3,9 +3,8 @@
 // People who pay their own API bill want to know "how much did I use this
 // month?" without an account, a server or a telemetry endpoint. This module
 // therefore only ever deals in counters: no page text, no URLs, no API keys,
-// no provider names, no model ids. Keeping the shape that narrow is both a
-// privacy guarantee (there is nothing to leak) and a merge guarantee (two
-// panels writing the same counts cannot corrupt anything but numbers).
+// no provider names, no model ids. Keeping the shape narrow protects privacy
+// and makes imports and usage-snapshot merges predictable.
 //
 // Everything is pure: the caller owns chrome.storage (or anything else) and
 // passes plain objects in and out. `days` is the source of truth; `totals` is a
@@ -96,7 +95,7 @@ function totalsOf(days) {
 }
 
 // Field-wise max merge of one day. Used both when importing (two spellings of
-// the same day key) and when merging panels: keeping the larger evidence is
+// the same day key) and when merging snapshots: keeping the larger evidence is
 // what makes merge idempotent.
 function mergeDay(days, day, entry) {
   const merged = { ...(days[day] || {}) };
@@ -225,10 +224,11 @@ export function usageSummary(usage, range = {}) {
 }
 
 /**
- * Merge two meters without double counting. Multiple panels can record the
- * same batch of requests, so per day per kind we keep the LARGER value of each
- * counter instead of adding them: merge(a, a) is a no-op, and a stale panel
- * that saw fewer requests can never drag the total backwards.
+ * Merge cumulative snapshots without counting the same history twice. Per
+ * day and kind the larger value wins: merge(a, a) is a no-op. Independent
+ * finished requests are deltas, not snapshots; persist those through the
+ * shared usage recorder so concurrent read-modify-write calls cannot lose
+ * increments.
  */
 export function mergeUsage(a, b) {
   const left = normalizeUsage(a);

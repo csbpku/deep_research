@@ -232,10 +232,25 @@ test('structured replies resolve, dedupe and cap citations against the evidence 
   );
   assert.equal(result.answer, '有限缓冲导致背压 [1][2]。');
   assert.deepEqual(result.citations, [
-    { id: 'bp-title', title: '背压与流控', url: 'https://node.test/backpressure', quote: '生产者快于消费者时，缓冲区会持续增长' },
-    { id: 'bp-note', title: 'Node.js Streams', url: 'https://node.test/streams', quote: 'highWaterMark 决定缓冲上限' },
+    { number: 1, id: 'bp-title', title: '背压与流控', url: 'https://node.test/backpressure', quote: '生产者快于消费者时，缓冲区会持续增长' },
+    { number: 2, id: 'bp-note', title: 'Node.js Streams', url: 'https://node.test/streams', quote: 'highWaterMark 决定缓冲上限' },
   ]);
   assert.deepEqual(result.warnings, []);
+});
+
+test('sparse and out-of-order citations keep the original evidence numbers', () => {
+  const evidence = sampleLibrary();
+  const single = parseLibraryAnswer('{"answer":"只依据第三条 [3]。","citations":[3]}', evidence);
+  assert.equal(single.citations[0].number, 3, 'the source must remain [3], not be relabelled [1]');
+  assert.equal(single.citations[0].id, 'cache');
+
+  const reordered = parseLibraryAnswer(
+    '{"answer":"第三条 [3] 与第一条 [1]。","citations":[3,1,"3",9]}',
+    evidence,
+  );
+  assert.deepEqual(reordered.citations.map(item => [item.number, item.id]), [[3, 'cache'], [1, 'bp-title']]);
+  assert.ok(reordered.warnings.some(warning => warning.includes('[9]')));
+  assert.equal(reordered.answer, '第三条 [3] 与第一条 [1]。');
 });
 
 test('unknown citation numbers warn but keep the valid ones', () => {
