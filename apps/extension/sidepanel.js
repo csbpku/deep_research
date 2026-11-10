@@ -1301,8 +1301,10 @@ function renderGuide() {
   const card = $('guide-card');
   if (!card) return;
   const complete = guideState.demo && guideState.translate && guideState.ask;
+  const context = pageContext || documentContext || selectionContext;
   const settingsOpen = $('settings-view') && !$('settings-view').classList.contains('hidden');
   const visible = readingMode !== 'platform' && providerReady(provider)
+    && (!context?.url || isBundledDemoUrl(context.url, chrome.runtime.getURL('demo.html')))
     && document.querySelector('.shell')?.dataset.workspaceView === 'chat'
     && !settingsOpen && !guideState.dismissed && !complete;
   show(card, visible);
@@ -1564,6 +1566,7 @@ function renderPage() {
   show($('empty-view'), !context);
   show($('page-view'), Boolean(context));
   updateAiAvailabilityBanner();
+  renderGuide();
   if (!context) {
     show($('discussion-section'), false);
     show($('persistent-composer'), false);

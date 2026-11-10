@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { applyTextTranslations, boundTaskContext, makeDocument, mergeProcessedIds, translateBlocks } from './reader-core.js';
 import { readerStore } from './reader-store.js';
 import { createBackgroundHarness, waitFor } from './test-helpers/background-runtime.mjs';
+import { isBundledDemoUrl } from './reader-demo.js';
 import { estimateTranslation, formatTokens } from './cost-estimate.js';
 import { createUsageRecorder } from './usage-persistence.js';
 import { mergeUsage, pruneUsage } from './usage-meter.js';
@@ -117,13 +118,29 @@ test('platform mode does not offer the bundled standalone-only demo guide', () =
   const card = {};
   const render = actualFunction('function renderGuide(', '\nasync function saveGuideState(', {
     $: id => id === 'guide-card' ? card : { classList: { toggle() {}, contains: () => true }, setAttribute() {} },
-    guideState: {}, readingMode: 'platform', provider: null,
+    guideState: {}, readingMode: 'platform', provider: null, pageContext: null, documentContext: null, selectionContext: null,
     providerReady: () => false, textModelReady: () => true,
     document: { querySelector: () => ({ dataset: { workspaceView: 'chat' } }) },
     show: (node, visible) => { node.visible = visible; },
   });
   render();
   assert.equal(card.visible, false);
+});
+
+test('the first-run guide stays visible for the demo without taking space from ordinary articles', () => {
+  for (const [url, expected] of [[null, true], ['https://article.invalid/', false], ['chrome-extension://reader-unit/demo.html', true]]) {
+    const card = {};
+    const render = actualFunction('function renderGuide(', '\nasync function saveGuideState(', {
+      $: id => id === 'guide-card' ? card : { classList: { toggle() {}, contains: () => true }, setAttribute() {} },
+      guideState: { ask: true }, readingMode: 'local', provider: { model: 'fixture' },
+      providerReady: () => true, pageContext: url ? { url } : null, documentContext: null, selectionContext: null,
+      chrome: { runtime: { getURL: path => `chrome-extension://reader-unit/${path}` } }, isBundledDemoUrl,
+      document: { querySelector: () => ({ dataset: { workspaceView: 'chat' } }) },
+      show: (node, visible) => { node.visible = visible; },
+    });
+    render();
+    assert.equal(card.visible, expected, `guide visibility for ${url || 'empty view'}`);
+  }
 });
 
 test('panel usage events share the worker recorder without local storage writes', async () => {
