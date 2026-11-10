@@ -54,16 +54,17 @@ function ReaderPanel() {
           </Paper>
         </div>
         <div className="actions"><ReaderButton id="empty-settings" variant="contained">{t("配置模型")}</ReaderButton><ReaderButton id="empty-history" variant="outlined">{t("查看聊天记录")}</ReaderButton><ReaderButton id="empty-platform" variant="text">{t("已有调研平台账号？连接平台")}</ReaderButton></div>
-        <Paper component="section" variant="outlined" elevation={0} id="guide-card" className="guide-card hidden">
-          <div className="guide-head"><strong>{t("60 秒上手")}</strong><ReaderButton id="dismiss-guide" type="button" control="icon" variant="text" aria-label={t("隐藏引导")} title={t("隐藏引导")}><ComposerIcon kind="close" size={16} /></ReaderButton></div>
-          <p className="small">{t("用自带的示例文章走一遍：翻译、提问、回到原文证据。")}</p>
-          <div className="guide-steps">
-            <ReaderButton id="guide-demo" type="button" variant="outlined">{t("1. 打开示例文章")}</ReaderButton>
-            <ReaderButton id="guide-translate" type="button" variant="text">{t("2. 翻译这篇文章")}</ReaderButton>
-            <ReaderButton id="guide-ask" type="button" variant="text">{t("3. 问一个问题")}</ReaderButton>
-          </div>
-        </Paper>
       </section>
+
+      <Paper component="section" variant="outlined" elevation={0} id="guide-card" className="guide-card hidden" sx={{ mx: space.lg, flexShrink: 0 }}>
+        <div className="guide-head"><strong>{t("60 秒上手")}</strong><ReaderButton id="dismiss-guide" type="button" control="icon" variant="text" aria-label={t("隐藏引导")} title={t("隐藏引导")}><ComposerIcon kind="close" size={16} /></ReaderButton></div>
+        <p className="small">{t("用自带的示例文章走一遍：翻译、提问、回到原文证据。")}</p>
+        <div className="guide-steps">
+          <ReaderButton id="guide-demo" type="button" variant="outlined">{t("1. 打开示例文章")}</ReaderButton>
+          <ReaderButton id="guide-translate" type="button" variant="text">{t("2. 翻译这篇文章")}</ReaderButton>
+          <ReaderButton id="guide-ask" type="button" variant="text">{t("3. 问一个问题")}</ReaderButton>
+        </div>
+      </Paper>
 
       <section id="page-view" className="reader-page-view hidden">
         <div id="page-overview-scroll" className="page-overview-scroll">
