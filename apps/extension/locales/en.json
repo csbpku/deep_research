@@ -899,5 +899,8 @@
   "正文翻译会按块处理；图片无法翻译时保留原图并继续。{0}{1}{2}": "Text is translated in batches; untranslatable images keep the original and translation continues.{0}{1}{2}",
   "保存": "Save",
   "留空则与聊天使用同一个模型": "Leave empty to use the same model as chat",
-  "来源": "Source"
+  "来源": "Source",
+  "正文可能不完整": "Article text may be incomplete",
+  "已读取 {0} 个正文块，页面其余正文可能不在已识别区域内；请以选段或原文为准。": "Read {0} text blocks. The rest of the page may be outside the detected article area; rely on selections or the original page.",
+  "正文可能不完整：页面的大部分文字不在已识别的正文区域内。全文问答、翻译和总结可能缺少内容，可以选择原文段落后操作。": "Article text may be incomplete: most of the page text is outside the detected article area. Full-page answers, translation and summaries may miss content; select the original passage and act on that instead."
 }

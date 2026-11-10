@@ -14,7 +14,9 @@ const darkOverrides = JSON.parse(await readFile(new URL('dark.json', sharedSourc
 // writes the whole palette onto each shadow host, so a switch has no values to
 // inherit from the page and no key can keep a stale light value.
 const designTokens = { light: lightTokens, dark: { ...lightTokens, ...darkOverrides } };
-const contentSource = await readFile(resolve(root, 'content.js'), 'utf8');
+// Ship the scope selector and both palettes together in every content-script injection.
+const readingScopeSource = await readFile(resolve(root, 'reading-scope.js'), 'utf8');
+const contentSource = `${readingScopeSource}\n${await readFile(resolve(root, 'content.js'), 'utf8')}`;
 const tokenPlaceholder = 'const READER_DESIGN_TOKENS = {};';
 if (!contentSource.includes(tokenPlaceholder)) {
   throw new Error('content.js is missing the design token placeholder');

@@ -11,6 +11,8 @@ const pages = [
   { kind: 'docs', url: 'https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts' },
   { kind: 'docs', url: 'https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver' },
   { kind: 'docs', url: 'https://react.dev/learn' },
+  // VitePress: the title and the article live in two <main> elements.
+  { kind: 'docs', url: 'https://docs.metaplay.io/miscellaneous/ai-assistants/' },
   { kind: 'docs', url: 'https://nodejs.org/api/worker_threads.html' },
   { kind: 'docs', url: 'https://docs.python.org/3/library/asyncio.html' },
   { kind: 'docs', url: 'https://www.postgresql.org/docs/current/index.html' },
