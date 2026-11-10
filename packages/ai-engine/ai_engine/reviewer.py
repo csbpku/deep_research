@@ -2020,24 +2020,38 @@ class DefaultResearchReviewer:
                 estimated_tokens=inventory_reserved_tokens,
             ):
                 for chunk, inventory_prompt in zip(inventory_chunks, inventory_prompts):
-                    generated = await generate_text(
-                        user_prompt=inventory_prompt,
-                        system_prompt=_CLAIM_INVENTORY_SYSTEM,
-                        llm_spec=self._llm_spec,
-                        tier="light",
-                        max_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
-                        timeout=90.0,
-                        disable_thinking=True,
-                        operation="research.fact_review.inventory",
-                    )
-                    if getattr(generated, "truncated", False):
-                        raise ValueError(
-                            f"第 {chunk.index}/{len(inventory_chunks)} 个报告块的声明清单输出不完整"
+                    parsed_payload: dict[str, Any] | None = None
+                    truncated = False
+                    for attempt in (1, 2):
+                        generated = await generate_text(
+                            user_prompt=inventory_prompt,
+                            system_prompt=_CLAIM_INVENTORY_SYSTEM,
+                            llm_spec=self._llm_spec,
+                            tier="light",
+                            max_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
+                            timeout=90.0,
+                            disable_thinking=True,
+                            operation="research.fact_review.inventory",
                         )
-                    parsed_payload = _extract_json_object(generated.text)
-                    if not parsed_payload:
+                        truncated = bool(getattr(generated, "truncated", False))
+                        if not truncated:
+                            parsed_payload = _extract_json_object(generated.text)
+                        if parsed_payload is not None:
+                            break
+                        # Content-free diagnostics: enough to tell a truncated
+                        # JSON from a non-JSON answer without logging report text.
+                        _review_logger.warning(
+                            "inventory chunk unusable chunk=%s/%s attempt=%s truncated=%s output_chars=%s",
+                            chunk.index,
+                            len(inventory_chunks),
+                            attempt,
+                            truncated,
+                            len(generated.text),
+                        )
+                    if parsed_payload is None:
                         raise ValueError(
-                            f"第 {chunk.index}/{len(inventory_chunks)} 个报告块的声明清单无法解析"
+                            f"第 {chunk.index}/{len(inventory_chunks)} 个报告块的声明清单"
+                            + ("输出不完整" if truncated else "无法解析")
                         )
                     completed_inventory_chunks += 1
                     coverage = parsed_payload.get("coverage_status")
