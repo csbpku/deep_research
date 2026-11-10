@@ -68,6 +68,30 @@ test('ordinary long articles stream through one call with their ending retained'
 import { boundTaskContext, buildAnnotationUrl, cleanTranslationText, combineTranslationParts, explainImage, explainSelection, loadProvider, mergeProcessedIds, mergeTranslationFailures, parseReadingAnswer, providerReady, requestChat, requestChatStream, saveProvider, splitReadingText, splitTranslationBlocks, stripReasoningText, testVisionProvider, translateBlocks, translateImage } from './reader-core.js';
 import { readerStore } from './reader-store.js';
 
+test('translation cache isolates glossary revisions and reuses the matching revision', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls += 1;
+    const request = JSON.parse(options.body);
+    return new Response(JSON.stringify({ choices: [{ message: {
+      content: request.messages[0].content.includes('NEW_GLOSSARY') ? '新术语负责调度。' : '旧术语负责调度。',
+    }, finish_reason: 'stop' }] }), { headers: { 'content-type': 'application/json' } });
+  };
+  const provider = { baseUrl: 'http://127.0.0.1:1234/v1', model: 'glossary-cache-test', language: 'zh-CN', apiKey: '' };
+  const block = { id: 'glossary-cache-block', text: 'The scheduler schedules work.', kind: 'paragraph' };
+  const document = { title: 'Glossary revision cache', blocks: [block] };
+  try {
+    const [old] = await translateBlocks(provider, document, [block], { glossaryPrompt: 'OLD_GLOSSARY' });
+    const [updated] = await translateBlocks(provider, document, [block], { glossaryPrompt: 'NEW_GLOSSARY' });
+    const [revisited] = await translateBlocks(provider, document, [block], { glossaryPrompt: 'OLD_GLOSSARY' });
+    assert.equal(old.text, '旧术语负责调度。');
+    assert.equal(updated.text, '新术语负责调度。');
+    assert.equal(revisited.text, old.text);
+    assert.equal(calls, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('provider readiness requires address, model and key', () => {
   assert.equal(providerReady({ baseUrl: 'https://example.com/v1', model: 'm', apiKey: 'k' }), true);
   assert.equal(providerReady({ baseUrl: 'https://example.com/v1', model: 'm', apiKey: '' }), false);

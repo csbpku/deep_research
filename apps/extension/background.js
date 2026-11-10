@@ -6,6 +6,8 @@ import { activationReason } from './activation.js';
 import { DEFAULT_WEB_APP_URL, resolvePlatformOrigin } from './platform-config.js';
 import { getTrustedReaderPlatformOrigin, validateRadarSourceUrl } from './reader-platform-bridge-utils.js';
 import { resumePendingInstall } from './reader-install-resume.js';
+import { GLOSSARY_MAX_PROMPT_CHARS, glossaryPrompt as buildGlossaryPrompt, parseGlossary } from './glossary.js';
+import { isBundledDemoUrl, requestDemoContext } from './reader-demo.js';
 
 const CONTENT_SCRIPT = 'content.js';
 const RESUME_ALARM = 'deep-research-reader-resume';
@@ -61,13 +63,20 @@ async function activateTabForReading(tab, { engageWindow = false } = {}) {
   if (!tab || !Number.isInteger(tab.id) || !Number.isInteger(tab.windowId)) {
     return { ok: false, reason: 'unsupported' };
   }
+  const bundledDemo = isBundledDemoUrl(tab.url, chrome.runtime.getURL('demo.html'));
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [CONTENT_SCRIPT] });
-    if (engageWindow) await markReadingWindow(tab.windowId);
-    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+    if (bundledDemo) {
+      const ready = await requestDemoContext(tab.id, { sendMessage: (id, message) => chrome.tabs.sendMessage(id, message) });
+      if (!ready) throw new Error('示例文章尚未准备好，请重试');
+      if (engageWindow) await markReadingWindow(tab.windowId);
+    } else {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [CONTENT_SCRIPT] });
+      if (engageWindow) await markReadingWindow(tab.windowId);
+      await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+    }
     return { ok: true, tabId: tab.id, windowId: tab.windowId };
   } catch (error) {
-    const reason = activationReason(tab);
+    const reason = bundledDemo ? 'unknown' : activationReason(tab);
     await notifyPageActivationNeeded(tab, reason);
     console.warn('Deep Research could not activate this page', error);
     return {
@@ -120,7 +129,23 @@ function summarizeFailure(item, kind) {
   };
 }
 
-async function executeTranslationJob({ jobId, tabId, context, reapply = false, glossaryPrompt = '' }) {
+async function translationConfiguration(context, { glossaryPrompt, translationModel }) {
+  const previous = context?.translationConfig;
+  const model = typeof translationModel === 'string' ? translationModel
+    : typeof previous?.translationModel === 'string' ? previous.translationModel
+      : await readerStore.getSetting('translationModel', '').catch(() => '');
+  const glossary = typeof glossaryPrompt === 'string' ? glossaryPrompt
+    : typeof previous?.glossaryPrompt === 'string' ? previous.glossaryPrompt
+      : buildGlossaryPrompt(parseGlossary(await readerStore.getSetting('glossary', '').catch(() => '')), context?.targetLanguage || 'zh-CN');
+  // Only non-secret, bounded translation options travel with temporary input.
+  // Empty strings are explicit settings, not a request to reuse an older one.
+  return {
+    translationModel: typeof model === 'string' ? model.trim().slice(0, 256) : '',
+    glossaryPrompt: typeof glossary === 'string' ? glossary.slice(0, GLOSSARY_MAX_PROMPT_CHARS) : '',
+  };
+}
+
+async function executeTranslationJob({ jobId, tabId, context, reapply = false, glossaryPrompt, translationModel }) {
   const existing = translationJobs.get(jobId);
   if (existing) {
     existing.tabId = tabId;
@@ -131,7 +156,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
     // returning here loses the dynamic update because the side panel has
     // already sent its one full-document request.
     if (nextHash && currentHash && nextHash !== currentHash) {
-      existing.pending = { tabId, context, reapply };
+      existing.pending = { tabId, context, reapply, glossaryPrompt, translationModel };
       existing.controller.abort();
     }
     return;
@@ -142,6 +167,9 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
   // a recreated panel cannot start two model pipelines.
   const entry = { controller, tabId, job: null, pending: null, contextHash: boundedContext.contentHash || boundedContext.version || null };
   translationJobs.set(jobId, entry);
+  const translationConfig = await translationConfiguration(boundedContext, { glossaryPrompt, translationModel });
+  boundedContext.translationConfig = translationConfig;
+  entry.translationConfig = translationConfig;
   const persisted = await readerStore.getJob(jobId).catch(() => null);
   const job = {
     ...(persisted || {}),
@@ -186,6 +214,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
     if (!providerReady(provider)) throw new Error('本地模型配置已失效，请重新打开设置测试连接');
     const readingProvider = {
       ...provider,
+      ...(translationConfig.translationModel ? { model: translationConfig.translationModel } : {}),
       language: boundedContext.targetLanguage || provider.language || 'zh-CN',
     };
     const document = makeDocument(boundedContext);
@@ -218,7 +247,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
     };
     let translations = await translateBlocks(readingProvider, document, translatableBlocks, {
       signal: controller.signal,
-      glossaryPrompt,
+      glossaryPrompt: translationConfig.glossaryPrompt,
       // The content script can paint a paragraph as soon as its model call
       // completes. The final aggregate below remains as a recovery pass for
       // a page that changed while the job was running.
@@ -312,7 +341,8 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
       // Let the terminal write and task-input cleanup commit before starting
       // the queued snapshot with the same durable job id. This keeps failure
       // history and processed IDs available to the incremental run.
-      queueMicrotask(() => void executeTranslationJob({ jobId, ...pending }));
+      const context = { ...pending.context, translationConfig: pending.context?.translationConfig ?? active.translationConfig };
+      queueMicrotask(() => void executeTranslationJob({ jobId, ...pending, context }));
     }
   }
 }
@@ -663,7 +693,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       tabId,
       context: message.context,
       reapply: Boolean(message.reapply),
-      glossaryPrompt: typeof message.glossaryPrompt === 'string' ? message.glossaryPrompt : '',
+      glossaryPrompt: typeof message.glossaryPrompt === 'string' ? message.glossaryPrompt : undefined,
+      translationModel: typeof message.translationModel === 'string' ? message.translationModel : undefined,
     });
     sendResponse?.({ ok: true });
     return true;
