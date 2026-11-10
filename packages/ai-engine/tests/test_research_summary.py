@@ -57,3 +57,16 @@ def test_empty_report_yields_empty_fields():
         "conclusion": "",
         "risks": "",
     }
+
+
+def test_missing_updates_never_overwrite_author_text():
+    from ai_engine.research_summary import missing_summary_updates
+
+    updates = missing_summary_updates(
+        {"background": "作者写的背景", "conclusion": "  ", "risks": None},
+        REPORT,
+    )
+
+    assert "background" not in updates
+    assert "并行执行" in updates["conclusion"]
+    assert "Cypress Cloud" in updates["risks"]

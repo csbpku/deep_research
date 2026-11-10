@@ -18,6 +18,7 @@ Design rules:
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 
 MAX_FIELD_CHARS = 1_200
 
@@ -139,4 +140,20 @@ def derive_research_summary(body: str) -> dict[str, str]:
         "background": _truncate(background or ""),
         "conclusion": _truncate(conclusion or ""),
         "risks": _truncate(risks),
+    }
+
+
+def missing_summary_updates(
+    current: Mapping[str, str | None],
+    body: str,
+) -> dict[str, str]:
+    """Return only the derived fields that are still empty on the draft.
+
+    Existing author text always wins; a backfill must never overwrite it.
+    """
+    derived = derive_research_summary(body)
+    return {
+        field: value
+        for field, value in derived.items()
+        if value and not (current.get(field) or "").strip()
     }
