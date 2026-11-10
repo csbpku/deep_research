@@ -1126,7 +1126,21 @@
     const letter = /^Key[A-Z]$/u.test(event.code || '') ? event.code.slice(3).toLowerCase() : event.key.toLowerCase();
     if (letter === 'o' && toggleOriginalParagraph(focusedTranslationId)) { event.preventDefault(); return; }
     const action = shortcuts[letter];
-    if (!action || !lastSelectionContext) return;
+    if (!action) return;
+    // A refresh clears the cached context after 400ms while the text stays
+    // selected. Rebuild it on demand so the advertised shortcut still works.
+    if (!lastSelectionContext) {
+      if (!window.getSelection()?.toString().trim()) return;
+      event.preventDefault();
+      void selectionContext().then((context) => {
+        if (!context) return;
+        lastSelectionContext = context;
+        send({ type: 'deep-research:selection', context });
+        send({ type: 'deep-research:selection-action', action, context });
+        removeSelectionToolbar();
+      });
+      return;
+    }
     event.preventDefault();
     send({ type: 'deep-research:selection', context: lastSelectionContext });
     send({ type: 'deep-research:selection-action', action, context: lastSelectionContext });
