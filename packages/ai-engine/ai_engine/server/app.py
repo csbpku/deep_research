@@ -66,6 +66,7 @@ from ai_engine.job_runner.store import (
 )
 from ai_engine.job_runner.models import JobSnapshot, ReviewWorkItem
 from ai_engine.reviewer import ClaimVerdict
+from ai_engine.research_summary import derive_research_summary
 from ai_engine.llm.client import (
     TextGenerationResult,
     generate_text,
@@ -3572,12 +3573,17 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             body = output_text.strip()
             origin_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
             revision_sha256 = research_revision_hash({"title": snapshot.topic[:300], "body": body})
+            # Pre-fill the three publish-gate fields from the report itself.
+            # The author can edit them in the editor; publishing still takes an
+            # explicit click, so this removes retyping without bypassing review.
+            summary_fields = derive_research_summary(body)
             sql = (
                 'INSERT INTO "researches" '
                 '("id", "type", "status", "title", "body", "authorId", "creationMethod", '
+                ' "background", "conclusion", "risks", '
                 ' "reviewStatus", "reviewAttempts", "reviewSummary", "reviewClaims", "reviewDetails", "reviewedAt", '
                 ' "aiAssisted", "originContentSha256", "createdAt", "updatedAt") '
-                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NULL, true, %s, now(), now()) "
+                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NULL, true, %s, now(), now()) "
                 'ON CONFLICT ("id") DO NOTHING'
             )
             review_status = review_details.get("status") if review_details else None
@@ -3610,6 +3616,9 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                             snapshot.topic[:300],
                             body,
                             snapshot.requester_id,
+                            summary_fields["background"] or None,
+                            summary_fields["conclusion"] or None,
+                            summary_fields["risks"] or None,
                             review_status,
                             review_attempts,
                             json.dumps(review_summary, ensure_ascii=False) if review_summary is not None else None,
