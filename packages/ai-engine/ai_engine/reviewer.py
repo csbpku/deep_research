@@ -7,6 +7,7 @@ unverified claim to ``verified``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -1619,6 +1620,19 @@ def _fact_review_batch_timeout_seconds() -> int:
     return min(max(value, 15), 120)
 
 
+def _fact_review_concurrency() -> int:
+    """Number of evidence batches judged in parallel.
+
+    Batches are independent; running 2-3 at a time keeps a 28-batch report
+    inside the review budget without flooding the provider.
+    """
+    try:
+        value = int(os.environ.get("FACT_REVIEW_CONCURRENCY", "3"))
+    except (TypeError, ValueError):
+        value = 3
+    return min(max(value, 1), 4)
+
+
 def _ordered_fact_batches(
     inventory: tuple[ClaimInventoryItem, ...],
 ) -> tuple[tuple[ClaimInventoryItem, ...], ...]:
@@ -1656,6 +1670,57 @@ def _unverified_batch_claims(
         )
         for item in batch
     )
+
+
+async def _run_adjudication_batch(
+    *,
+    batch: tuple[ClaimInventoryItem, ...],
+    batch_index: int,
+    batch_count: int,
+    topic: str,
+    report_type: str,
+    source_text: str,
+    llm_spec: str | None,
+) -> tuple[ReviewResult | None, BaseException | None]:
+    """Run one independent batch with one retry; never raise to the caller."""
+    last_error: BaseException | None = None
+    for attempt in (1, 2):
+        try:
+            adjudication_prompt = (
+                f"主题：{topic}\n报告类型：{report_type}\n"
+                f"当前批次（第 {batch_index}/{batch_count} 批）：\n"
+                f"{json.dumps([asdict(item) for item in batch], ensure_ascii=False)}\n"
+                f"来源证据：\n{source_text}\n"
+                "只判断当前批次中的声明与来源摘录的关系。"
+                f"这是第 {attempt} 次尝试；不得返回当前批次以外的 claim_id。"
+            )
+            generated = await generate_text(
+                user_prompt=adjudication_prompt,
+                system_prompt=_CLAIM_ADJUDICATION_SYSTEM,
+                llm_spec=llm_spec,
+                tier="light",
+                max_tokens=5000,
+                timeout=_fact_review_batch_timeout_seconds(),
+                disable_thinking=True,
+                operation="research.fact_review.adjudication",
+            )
+            parsed = _parse_adjudication_payload(
+                _extract_json_object(generated.text),
+                batch,
+            )
+            if parsed is not None:
+                return parsed, None
+            last_error = ValueError("adjudication payload missing")
+        except Exception as exc:  # provider, timeout, or malformed JSON
+            last_error = exc
+        _review_logger.warning(
+            "adjudication batch failed batch=%s/%s attempt=%s error=%s",
+            batch_index,
+            batch_count,
+            attempt,
+            _review_error_code(last_error or RuntimeError("batch failed")),
+        )
+    return None, last_error
 
 
 async def _adjudicate_fact_batches(
@@ -1699,73 +1764,83 @@ async def _adjudicate_fact_batches(
     judged_count = 0
     last_error: BaseException | None = None
 
-    for batch_index, batch in enumerate(batches, start=1):
-        claim_ids = [item.claim_id for item in batch]
-        await emit_phase("adjudicating", {
-            "inventory": inventory_snapshot,
-            "coverage_status": inventory_coverage,
-            "batch_index": batch_index,
-            "batch_count": len(batches),
-            "active_batch_claim_ids": claim_ids,
-            "completed_batch_count": completed_batches,
-            "failed_batch_count": failed_batches,
-            "judged_claim_count": judged_count,
-            "total_claim_count": total_factual_claims,
-            "batch_status": "running",
-            "settled_claims": [asdict(claim) for claim in judged_claims],
-        })
-
-        batch_result: ReviewResult | None = None
-        batch_error: BaseException | None = None
-        for attempt in range(1, 3):
-            try:
-                adjudication_prompt = (
-                    f"主题：{topic}\n报告类型：{report_type}\n"
-                    f"当前批次（第 {batch_index}/{len(batches)} 批）：\n"
-                    f"{json.dumps([asdict(item) for item in batch], ensure_ascii=False)}\n"
-                    f"来源证据：\n{source_text}\n"
-                    "只判断当前批次中的声明与来源摘录的关系。"
-                    f"这是第 {attempt} 次尝试；不得返回当前批次以外的 claim_id。"
-                )
-                generated = await generate_text(
-                    user_prompt=adjudication_prompt,
-                    system_prompt=_CLAIM_ADJUDICATION_SYSTEM,
-                    llm_spec=llm_spec,
-                    tier="light",
-                    max_tokens=5000,
-                    timeout=_fact_review_batch_timeout_seconds(),
-                    disable_thinking=True,
-                    operation="research.fact_review.adjudication",
-                )
-                batch_result = _parse_adjudication_payload(
-                    _extract_json_object(generated.text),
-                    batch,
-                )
-                batch_error = None
-                break
-            except Exception as exc:  # provider, timeout, or malformed JSON
-                batch_error = exc
-                last_error = exc
-                # Content-free: identifies the failing batch and error class so
-                # a retry that still fails is diagnosable from logs.
-                _review_logger.warning(
-                    "adjudication batch failed batch=%s/%s attempt=%s error=%s",
-                    batch_index,
-                    len(batches),
-                    attempt,
-                    _review_error_code(exc),
-                )
-
-        if batch_result is None:
-            failed_batches += 1
-            reason = (
-                f"第 {batch_index} 批声明的证据判断未完成；这不是事实冲突，"
-                "请重试审核后再决定是否发布。"
-            )
-            judged_claims.extend(_unverified_batch_claims(batch, reason=reason))
+    concurrency = _fact_review_concurrency()
+    for group_start in range(0, len(batches), concurrency):
+        group = list(enumerate(
+            batches[group_start:group_start + concurrency],
+            start=group_start + 1,
+        ))
+        for batch_index, batch in group:
             await emit_phase("adjudicating", {
                 "inventory": inventory_snapshot,
-                "coverage_status": "insufficient",
+                "coverage_status": inventory_coverage,
+                "batch_index": batch_index,
+                "batch_count": len(batches),
+                "active_batch_claim_ids": [item.claim_id for item in batch],
+                "completed_batch_count": completed_batches,
+                "failed_batch_count": failed_batches,
+                "judged_claim_count": judged_count,
+                "total_claim_count": total_factual_claims,
+                "batch_status": "running",
+                "settled_claims": [asdict(claim) for claim in judged_claims],
+            })
+
+        outcomes = await asyncio.gather(*(
+            _run_adjudication_batch(
+                batch=batch,
+                batch_index=batch_index,
+                batch_count=len(batches),
+                topic=topic,
+                report_type=report_type,
+                source_text=source_text,
+                llm_spec=llm_spec,
+            )
+            for batch_index, batch in group
+        ))
+
+        for (batch_index, batch), (batch_result, batch_error) in zip(group, outcomes):
+            claim_ids = [item.claim_id for item in batch]
+            if batch_error is not None:
+                last_error = batch_error
+
+            if batch_result is None:
+                failed_batches += 1
+                reason = (
+                    f"第 {batch_index} 批声明的证据判断未完成；这不是事实冲突，"
+                    "请重试审核后再决定是否发布。"
+                )
+                judged_claims.extend(_unverified_batch_claims(batch, reason=reason))
+                await emit_phase("adjudicating", {
+                    "inventory": inventory_snapshot,
+                    "coverage_status": "insufficient",
+                    "batch_index": batch_index,
+                    "batch_count": len(batches),
+                    "active_batch_claim_ids": claim_ids,
+                    "completed_batch_count": completed_batches,
+                    "failed_batch_count": failed_batches,
+                    "judged_claim_count": judged_count,
+                    "total_claim_count": total_factual_claims,
+                    "batch_status": "failed",
+                    "batch_error_code": _review_error_code(batch_error or RuntimeError("batch failed")),
+                    "settled_claims": [asdict(claim) for claim in judged_claims],
+                })
+                continue
+
+            batch_claims = list(batch_result.claims)
+            missing_count = sum(
+                1 for claim in batch_claims
+                if "没有返回这条声明的结果" in (claim.reason or "")
+            )
+            if batch_result.coverage_status == "insufficient" or missing_count:
+                failed_batches += 1
+            else:
+                completed_batches += 1
+            judged_count += max(0, len(batch) - missing_count)
+            judged_claims.extend(batch_claims)
+            instructions.extend(batch_result.revision_instructions)
+            await emit_phase("adjudicating", {
+                "inventory": inventory_snapshot,
+                "coverage_status": "insufficient" if failed_batches else inventory_coverage,
                 "batch_index": batch_index,
                 "batch_count": len(batches),
                 "active_batch_claim_ids": claim_ids,
@@ -1773,37 +1848,9 @@ async def _adjudicate_fact_batches(
                 "failed_batch_count": failed_batches,
                 "judged_claim_count": judged_count,
                 "total_claim_count": total_factual_claims,
-                "batch_status": "failed",
-                "batch_error_code": _review_error_code(batch_error or RuntimeError("batch failed")),
+                "batch_status": "partial" if missing_count else "completed",
                 "settled_claims": [asdict(claim) for claim in judged_claims],
             })
-            continue
-
-        batch_claims = list(batch_result.claims)
-        missing_count = sum(
-            1 for claim in batch_claims
-            if "没有返回这条声明的结果" in (claim.reason or "")
-        )
-        if batch_result.coverage_status == "insufficient" or missing_count:
-            failed_batches += 1
-        else:
-            completed_batches += 1
-        judged_count += max(0, len(batch) - missing_count)
-        judged_claims.extend(batch_claims)
-        instructions.extend(batch_result.revision_instructions)
-        await emit_phase("adjudicating", {
-            "inventory": inventory_snapshot,
-            "coverage_status": "insufficient" if failed_batches else inventory_coverage,
-            "batch_index": batch_index,
-            "batch_count": len(batches),
-            "active_batch_claim_ids": claim_ids,
-            "completed_batch_count": completed_batches,
-            "failed_batch_count": failed_batches,
-            "judged_claim_count": judged_count,
-            "total_claim_count": total_factual_claims,
-            "batch_status": "partial" if missing_count else "completed",
-            "settled_claims": [asdict(claim) for claim in judged_claims],
-        })
 
     claims = tuple((*non_fact_claims, *judged_claims))
     coverage_status: Literal["complete", "insufficient", "not_applicable"] = (
