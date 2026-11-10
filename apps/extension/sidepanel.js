@@ -5,7 +5,8 @@ import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './
 import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
 import { answerCoverage } from './answer-presentation.js';
 import { estimateAnswer, estimateTokens, estimateTranslation, formatTokens } from './cost-estimate.js';
-import { USAGE_KEY, mergeUsage, pruneUsage, recordUsage, usageDay, usageSummary } from './usage-meter.js';
+import { USAGE_KEY, mergeUsage, pruneUsage, usageDay, usageSummary } from './usage-meter.js';
+import { isBundledDemoUrl, requestDemoContext } from './reader-demo.js';
 import { SITE_RULES_KEY, normalizeSiteRules, setSiteRule, siteRuleFor } from './site-rules.js';
 import { glossaryPrompt, parseGlossary, serializeGlossary } from './glossary.js';
 import { detectLocalModels } from './local-models.js';
@@ -295,6 +296,7 @@ function setWorkspaceView(view) {
     button?.classList.toggle('active', name === view);
     button?.setAttribute('aria-pressed', String(name === view));
   }
+  renderGuide();
 }
 
 function setupWorkspaceLayout() {
@@ -588,6 +590,10 @@ function textModelReady() {
   return readingMode === 'platform' ? platformConnected : providerReady(provider);
 }
 
+function platformDemoUnsupported(context) {
+  return readingMode === 'platform' && isBundledDemoUrl(context?.url, chrome.runtime.getURL('demo.html'));
+}
+
 function updateAiAvailabilityBanner() {
   const banner = $('ai-availability-banner');
   const message = $('ai-availability-message');
@@ -596,9 +602,15 @@ function updateAiAvailabilityBanner() {
   const hasReadableContext = contextHasReadableBody(pageContext || documentContext)
     || Boolean(selectionContext?.selection?.quote)
     || Boolean(imageContext?.image);
-  const ready = textModelReady();
+  const demoUnsupported = platformDemoUnsupported(pageContext || documentContext || selectionContext);
+  const ready = textModelReady() && !demoUnsupported;
   show(banner, hasReadableContext && !ready);
   if (!hasReadableContext || ready) return;
+  if (demoUnsupported) {
+    message.textContent = t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。");
+    action.textContent = t("切换独立模式");
+    return;
+  }
   const platform = readingMode === 'platform';
   message.textContent = platform
     ? t("平台模式尚未连接，问答、总结和翻译暂不可用。")
@@ -671,6 +683,7 @@ async function setReadingMode(mode) {
   await syncSearchPermissions();
   updateReadingModeUi();
   renderEmptyState();
+  renderLibraryAskAvailability();
   if (readingMode === 'platform' && !platformConnected) showSettings();
   try {
     await readerStore.setSetting('readingMode', readingMode);
@@ -1288,7 +1301,10 @@ function renderGuide() {
   const card = $('guide-card');
   if (!card) return;
   const complete = guideState.demo && guideState.translate && guideState.ask;
-  const visible = textModelReady() && !guideState.dismissed && !complete;
+  const settingsOpen = $('settings-view') && !$('settings-view').classList.contains('hidden');
+  const visible = readingMode !== 'platform' && providerReady(provider)
+    && document.querySelector('.shell')?.dataset.workspaceView === 'chat'
+    && !settingsOpen && !guideState.dismissed && !complete;
   show(card, visible);
   if (!visible) return;
   const steps = [
@@ -1311,20 +1327,21 @@ async function saveGuideState(patch) {
 }
 
 async function openDemoArticle() {
+  if (readingMode === 'platform') {
+    setNotice(t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。"));
+    return;
+  }
   const url = chrome.runtime.getURL('demo.html');
   const tab = await chrome.tabs.create({ url, active: true });
   // The demo page loads content.js itself; extension pages cannot be injected
   // by chrome.scripting, so the panel asks for the page context directly.
   if (Number.isInteger(tab?.id)) {
-    // The content script is part of the demo page; a resolved sendMessage
-    // means it is listening, so stop retrying immediately.
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
-        break;
-      } catch {
-        await new Promise((resolve) => { setTimeout(resolve, 250); });
-      }
+    const ready = await requestDemoContext(tab.id, {
+      sendMessage: (tabId, message) => chrome.tabs.sendMessage(tabId, message),
+    });
+    if (!ready) {
+      setNotice(t("示例文章暂未准备好，请稍后重新打开。"));
+      return;
     }
   }
   await saveGuideState({ demo: true });
@@ -1682,6 +1699,7 @@ async function applyAnnotationsForContext(context) {
 }
 
 async function updateLibrary() {
+  renderLibraryAskAvailability();
   void updatePageKnowledge({ refresh: true });
   const request = ++libraryRenderRequest;
   const list = $('library-list');
@@ -1744,6 +1762,19 @@ function renderLibraryTagOptions(tags) {
   select.value = current;
 }
 
+async function loadUsageSettings() {
+  translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
+  const storedPricing = await readerStore.getSetting('pricing', null);
+  pricing = {
+    inputPerMillion: Math.max(0, Number(storedPricing?.inputPerMillion) || 0),
+    outputPerMillion: Math.max(0, Number(storedPricing?.outputPerMillion) || 0),
+  };
+  const stored = (await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY];
+  // Initialization is read-only. The worker may have committed another event
+  // while settings loaded; no panel may write back its pruned snapshot.
+  usageState = pruneUsage(mergeUsage(usageState, stored), { keepDays: 120 });
+}
+
 function renderUsageSettings() {
   if (!$('usage-summary')) return;
   renderUsageSummary();
@@ -1766,12 +1797,14 @@ async function saveUsageSettings() {
 async function recordUsageEvent(kind, { requests = 0, chars = 0, tokens = 0 } = {}) {
   if (!requests && !chars && !tokens) return;
   try {
-    const stored = (await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY];
-    // Read-modify-write with a max merge: two panels racing on the same day
-    // must not double-count, and a losing writer must not erase the winner.
-    const next = recordUsage(stored, { day: usageDay(), kind, requests, chars, tokens });
-    usageState = mergeUsage(stored, next);
-    await chrome.storage.local.set({ [USAGE_KEY]: usageState });
+    // The service worker serializes writes from every panel. A local fallback
+    // read/modify/write would recreate the lost-update race.
+    const result = await chrome.runtime.sendMessage({
+      type: 'deep-research:record-usage',
+      event: { day: usageDay(), kind, requests, chars, tokens },
+    });
+    if (!result?.ok || !result.usage) return;
+    usageState = mergeUsage(usageState, result.usage);
     renderUsageSummary();
   } catch { /* usage is best-effort */ }
 }
@@ -1925,12 +1958,27 @@ async function copyText(text) {
   }
 }
 
+function renderLibraryAskAvailability() {
+  const button = $('library-ask');
+  const status = $('library-ask-status');
+  if (!button || !status) return;
+  const unsupported = readingMode === 'platform';
+  button.disabled = unsupported;
+  button.setAttribute('aria-describedby', 'library-ask-status');
+  if (unsupported) status.textContent = t("问收藏仅支持独立模式；请在设置中切换并配置模型。");
+  else if (status.textContent === t("问收藏仅支持独立模式；请在设置中切换并配置模型。")) status.textContent = '';
+}
+
 async function askLibrary() {
   const input = $('library-ask-input');
   const status = $('library-ask-status');
   const answerHost = $('library-ask-answer');
   const citationsHost = $('library-ask-citations');
   const button = $('library-ask');
+  if (readingMode === 'platform') {
+    status.textContent = t("问收藏仅支持独立模式；请在设置中切换并配置模型。");
+    return;
+  }
   const question = String(input?.value || '').trim() || String($('library-search')?.value || '').trim();
   if (!question) {
     status.textContent = t("先输入一个具体问题，例如“我之前记过哪些关于背压的结论？”。");
@@ -1996,7 +2044,7 @@ function renderLibraryCitations(host, citations) {
   label.className = 'small';
   label.textContent = t("引用：");
   host.append(label);
-  list.forEach((citation, index) => {
+  list.forEach((citation) => {
     const link = document.createElement('a');
     link.href = citation.href;
     link.target = '_blank';
@@ -2004,7 +2052,7 @@ function renderLibraryCitations(host, citations) {
     link.className = 'library-citation';
     let hostname = '';
     try { hostname = new URL(citation.href).hostname; } catch { hostname = ''; }
-    link.textContent = `[${index + 1}] ${citation.title || hostname || t("来源")}`;
+    link.textContent = `[${citation.number}] ${citation.title || hostname || t("来源")}`;
     link.title = String(citation.quote || '').slice(0, 200);
     host.append(link);
   });
@@ -2989,6 +3037,10 @@ async function saveSettings() {
 
 async function startFullTranslation() {
   setWorkspaceView('chat');
+  if (platformDemoUnsupported(pageContext || documentContext || selectionContext)) {
+    setNotice(t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。"));
+    return;
+  }
   if (!textModelReady()) {
     showModelSetupGuidance(t("全文翻译"));
     return;
@@ -3126,7 +3178,15 @@ async function processDocument(context, runId = activeTranslationRun) {
     ? t("选段翻译完成。可以选择、复制或放大原文旁的译文。")
     : t("全文翻译完成。可以滚动阅读，或选择一段文字继续追问。");
   const usePlatform = platformModeReady();
+  if (platformDemoUnsupported(context)) {
+    translationRunning = false;
+    translationRequested = false;
+    setNotice(t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。"));
+    return;
+  }
   context = boundTaskContext({ ...context, targetLanguage: currentTranslationLanguage() }, { preserveAllBlocks: true });
+  const blocks = Array.isArray(context.blocks) ? context.blocks : [];
+  const images = Array.isArray(context.images) ? context.images : [];
   const usageEstimate = estimateTranslation({ blocks: context.blocks, body: context.body });
   documentContext = context;
   updatePageContextUi(context);
@@ -3137,32 +3197,36 @@ async function processDocument(context, runId = activeTranslationRun) {
   // If the worker cannot accept the task, retain the local fallback below so
   // a browser with an unusual extension runtime still remains usable.
   if (!usePlatform && job?.id && Number.isInteger(activeTabId)) {
+    let accepted;
     try {
-      const accepted = await chrome.runtime.sendMessage({
+      accepted = await chrome.runtime.sendMessage({
         type: 'deep-research:translation-start',
         jobId: job.id,
         tabId: activeTabId,
         context,
         reapply: job.status === 'completed',
         glossaryPrompt: currentGlossaryPrompt(),
+        translationModel: String(translationModel || '').trim(),
       });
-      if (accepted?.ok) {
+    } catch {
+      // Only a failed hand-off may use the panel executor below.
+    }
+    if (accepted?.ok) {
+      try {
         persistJobPatch(job, { workerManaged: true, status: job.status === 'completed' ? 'queued' : job.status || 'queued' });
         void recordUsageEvent('translation', {
           requests: usageEstimate.requests + images.length,
           chars: usageEstimate.chars,
           tokens: usageEstimate.tokens,
         });
-        void saveGuideState({ translate: true });
-        return;
+      } catch {
+        // The background owns this task now. Panel bookkeeping cannot start
+        // another model pipeline; a recreated panel can read worker progress.
       }
-    } catch {
-      // Fall through to the panel-local executor below.
+      return;
     }
   }
   const document = makeDocument(context);
-  const blocks = Array.isArray(context.blocks) ? context.blocks : [];
-  const images = Array.isArray(context.images) ? context.images : [];
   failedTranslationItems = mergeTranslationFailures(failedTranslationItems, [], [], context);
   const cachedTranslations = (job?.targetLanguage === context.targetLanguage && Array.isArray(job?.textTranslations) ? job.textTranslations : []).filter((item) => item.text && blocks.some((block) => block.id === item.id && block.text === item.sourceText));
   const pageTranslatedIds = context.displayedTranslationLanguage === context.targetLanguage ? (context.translatedBlockIds || []) : [];
@@ -3252,7 +3316,6 @@ async function processDocument(context, runId = activeTranslationRun) {
       chars: usageEstimate.chars,
       tokens: usageEstimate.tokens,
     });
-    void saveGuideState({ translate: true });
     const finalResults = await applyTranslations([...cachedTranslations, ...translations.filter((item) => item.text)]);
     const renderedById = new Map(finalResults.map((item) => [item.id, item]));
     translations = [...cachedTranslations, ...translations].map((item) => renderedById.get(item.id) || item);
@@ -3321,6 +3384,9 @@ async function processDocument(context, runId = activeTranslationRun) {
       failedItems: failedTranslationItems,
       completedAt: new Date().toISOString(),
     });
+    if (runId === activeTranslationRun && !failedTranslationItems.length) {
+      void saveGuideState({ translate: true }).catch(() => {});
+    }
   } catch (error) {
     if (runId === activeTranslationRun) {
       if (error instanceof DOMException && error.name === 'AbortError') setNotice(t("翻译已暂停。再次点击全文翻译会从缓存结果继续。"));
@@ -3520,6 +3586,10 @@ async function resumeBackgroundAnswer(context) {
 
 async function explainOrAsk(question = '', scope = discussionScope, intent = discussionIntent) {
   if (discussionRunning) { setNotice(t("当前回答仍在继续。可以选择下一段，或点击停止回答后再发起新问题。")); return; }
+  if (platformDemoUnsupported(scope === 'selection' ? selectionContext : (documentContext || pageContext || selectionContext))) {
+    setNotice(t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。"));
+    return;
+  }
   const imagePermission = scope === 'image' && imageContext?.image && !imageContext.image.dataUrl ? requestImageOrigins([imageContext.image]) : Promise.resolve(true);
   const current = pageContext || documentContext || selectionContext;
   if (current) await resumeSession(current);
@@ -3878,6 +3948,7 @@ function handleEmptyPrimary() {
 }
 
 function showSettings() {
+  show($('guide-card'), false);
   show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); renderSiteRule(); renderUsageSettings(); updateReadingModeUi();
   if (readingMode === 'local') scheduleModelDiscovery({ markDirty: false });
 }
@@ -4169,6 +4240,9 @@ chrome.runtime.onMessage.addListener((message) => {
     translationPaused = Boolean(message.cancelled && translationPaused);
     renderProgress(activeJobRecord.textDone || 0, activeJobRecord.textTotal || 0, activeJobRecord.imageDone || 0, activeJobRecord.imageTotal || 0);
     const failures = failedTranslationItems.length;
+    if (!message.cancelled && !failures && activeJobRecord.status === 'completed') {
+      void saveGuideState({ translate: true }).catch(() => {});
+    }
     const workerWarnings = Array.isArray(message.warnings) ? message.warnings : (Array.isArray(activeJobRecord.warnings) ? activeJobRecord.warnings : []);
     const explicitCancellation = cancellationRequested || message.job?.error === t("用户取消了翻译");
     cancellationRequested = false;
@@ -4331,7 +4405,10 @@ async function init() {
   $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('detect-local-models')?.addEventListener('click', () => void detectLocalServices()); $('guide-demo')?.addEventListener('click', () => void openDemoArticle()); $('guide-translate')?.addEventListener('click', () => void guideTranslate()); $('guide-ask')?.addEventListener('click', () => void guideAsk()); $('dismiss-guide')?.addEventListener('click', () => void saveGuideState({ dismissed: true })); $('empty-platform')?.addEventListener('click', () => { showSettings(); void setReadingMode('platform'); }); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
   $('mode-local')?.addEventListener('click', () => void setReadingMode('local'));
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
-  $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读")));
+  $('ai-availability-action')?.addEventListener('click', () => {
+    if (platformDemoUnsupported(pageContext || documentContext || selectionContext)) void setReadingMode('local');
+    else showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读"));
+  });
   $('provider-kind')?.addEventListener('change', changeProviderKind);
   $('provider-region').addEventListener('change', () => {
     $('provider-kind').value = $('provider-region').value;
@@ -4357,14 +4434,12 @@ async function init() {
     renderSiteRule();
     maybeAutoTranslate();
   });
-  usageState = pruneUsage((await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY], { keepDays: 120 });
-  translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
-  const storedPricing = await readerStore.getSetting('pricing', null);
-  pricing = {
-    inputPerMillion: Math.max(0, Number(storedPricing?.inputPerMillion) || 0),
-    outputPerMillion: Math.max(0, Number(storedPricing?.outputPerMillion) || 0),
-  };
-  await chrome.storage.local.set({ [USAGE_KEY]: usageState });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[USAGE_KEY]) return;
+    usageState = pruneUsage(mergeUsage(usageState, changes[USAGE_KEY].newValue), { keepDays: 120 });
+    renderUsageSummary();
+  });
+  await loadUsageSettings();
   await loadGlossary();
   renderSiteRule();
   $('site-rule-mode').addEventListener('change', event => void saveSiteRule(event.target.value));

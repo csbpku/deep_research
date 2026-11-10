@@ -8,8 +8,8 @@ import { readerStore } from './reader-store.js';
 const t = (message, ...values) => message.replace(/\{(\d+)\}/gu, (_, index) => String(values[index] ?? ''));
 const vm = {
   ...nodeVm,
-  createContext: sandbox => nodeVm.createContext(Object.assign(sandbox, { t, responseLanguageInstruction, currentTranslationLanguage: sandbox.currentTranslationLanguage || sandbox.currentReadingLanguage || (() => 'zh-CN'), updateTranslationLanguageUi: () => {} })),
-  runInNewContext: (source, sandbox, options) => nodeVm.runInNewContext(source, Object.assign(sandbox, { t, responseLanguageInstruction, currentTranslationLanguage: sandbox.currentTranslationLanguage || sandbox.currentReadingLanguage || (() => 'zh-CN'), updateTranslationLanguageUi: () => {} }), options),
+  createContext: sandbox => nodeVm.createContext(Object.assign(sandbox, { t, responseLanguageInstruction, currentTranslationLanguage: sandbox.currentTranslationLanguage || sandbox.currentReadingLanguage || (() => 'zh-CN'), updateTranslationLanguageUi: () => {}, platformDemoUnsupported: sandbox.platformDemoUnsupported || (() => false), renderGuide: sandbox.renderGuide || (() => {}), saveGuideState: sandbox.saveGuideState || (async () => {}), translationModel: sandbox.translationModel || '' })),
+  runInNewContext: (source, sandbox, options) => nodeVm.runInNewContext(source, Object.assign(sandbox, { t, responseLanguageInstruction, currentTranslationLanguage: sandbox.currentTranslationLanguage || sandbox.currentReadingLanguage || (() => 'zh-CN'), updateTranslationLanguageUi: () => {}, platformDemoUnsupported: sandbox.platformDemoUnsupported || (() => false), renderGuide: sandbox.renderGuide || (() => {}), saveGuideState: sandbox.saveGuideState || (async () => {}), translationModel: sandbox.translationModel || '' }), options),
 };
 const panel = readFileSync(new URL('./sidepanel.js', import.meta.url), 'utf8');
 const content = readFileSync(new URL('./content.js', import.meta.url), 'utf8');
@@ -849,6 +849,7 @@ test('a second translation start during the job-record read is queued instead of
   const translationJobs = new Map();
   const sandbox = {
     translationJobs, AbortController, DOMException,
+    translationConfiguration: async () => ({ glossaryPrompt: '', translationModel: '' }),
     boundTaskContext: (context) => context,
     mergeTranslationFailures,
     readerStore: { getJob: async () => { await gate; return null; }, saveJob: async () => { throw new Error('stop'); } },

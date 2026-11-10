@@ -5,6 +5,7 @@ import { readerStore } from '../reader-store.js';
 import { activationReason } from '../activation.js';
 import { isBundledDemoUrl, requestDemoContext } from '../reader-demo.js';
 import { GLOSSARY_MAX_PROMPT_CHARS, glossaryPrompt as buildGlossaryPrompt, parseGlossary } from '../glossary.js';
+import { createUsageRecorder } from '../usage-persistence.js';
 
 const source = readFileSync(new URL('../background.js', import.meta.url), 'utf8')
   .replace(/^import .*;\s*$/gmu, '');
@@ -57,7 +58,7 @@ export function createBackgroundHarness(overrides = {}) {
   };
   const globals = {
     ...core, readerStore, activationReason, isBundledDemoUrl, requestDemoContext,
-    GLOSSARY_MAX_PROMPT_CHARS, buildGlossaryPrompt, parseGlossary,
+    GLOSSARY_MAX_PROMPT_CHARS, buildGlossaryPrompt, parseGlossary, createUsageRecorder,
     chrome, console, AbortController, DOMException, URL, crypto: globalThis.crypto,
     setTimeout, clearTimeout, queueMicrotask,
     t: (message, ...values) => message.replace(/\{(\d+)\}/gu, (_, index) => String(values[Number(index)] ?? '')),

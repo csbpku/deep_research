@@ -176,6 +176,7 @@ test('late collection reads cannot overwrite a newer filter result', async () =>
   const pending = [];
   const rendered = [];
   const sandbox = { $, t, libraryPage, libraryItems, libraryFacets, LIBRARY_PAGE_SIZE,
+    readingMode: 'local',
     // The tag menu builds native <option> elements; the panel always has DOM,
     // this harness models just enough of it.
     Option: class { constructor(text, value) { this.text = text; this.value = value; } }, libraryView: { query: '', kind: 'all', page: 1, tag: '' }, libraryRenderRequest: 0,

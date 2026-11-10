@@ -125,7 +125,9 @@
       ));
       if (index !== -1) {
         const chosen = selected[index];
-        const articleInside = candidate.element.tagName === 'ARTICLE' && chosen.element.contains(candidate.element);
+        const articleInside = candidate.element.tagName === 'ARTICLE'
+          && chosen.element.tagName !== 'ARTICLE'
+          && chosen.element.contains(candidate.element);
         if (articleInside && candidate.chars >= chosen.chars * ARTICLE_SHARE) selected[index] = candidate;
         continue;
       }

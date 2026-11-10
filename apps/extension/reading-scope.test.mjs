@@ -63,6 +63,18 @@ test('an article nested in <main> that carries nearly all prose is still the rea
   assert.deepEqual(Array.from(scope.roots, label), ['article']);
 });
 
+test('a nested article cannot discard its outer article introduction and conclusion', () => {
+  const introduction = 'Important introduction. '.repeat(10);
+  const conclusion = 'Important limiting conclusion. '.repeat(10);
+  const body = 'Detailed article evidence. '.repeat(240);
+  const doc = documentFrom(`<main><article id="outer"><h1>Full article</h1><p>${introduction}</p><article id="inner"><p>${body}</p></article><p>${conclusion}</p></article></main>`);
+  const scope = selectReadingRoots(doc);
+  assert.deepEqual(Array.from(scope.roots, label), ['#outer']);
+  assert.ok(scope.roots[0].textContent.includes(introduction));
+  assert.ok(scope.roots[0].textContent.includes(conclusion));
+  assert.equal(scope.coverage, 1);
+});
+
 test('a div-only blog post with no semantic container falls back to the page body', () => {
   const doc = documentFrom(`<div class="post-body"><div>${paragraph(1)}</div><div>${paragraph(2)}</div></div>`);
   const scope = selectReadingRoots(doc);

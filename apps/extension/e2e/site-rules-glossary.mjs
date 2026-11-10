@@ -57,6 +57,18 @@ await context.route('http://127.0.0.1:8799/**', async (route) => {
   const system = String(body.messages?.find((message) => message.role === 'system')?.content || '');
   const user = String(body.messages?.at(-1)?.content || '');
   requests.push({ system, user });
+  if (Array.isArray(body.messages?.at(-1)?.content)) {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'access-control-allow-origin': '*' },
+      body: JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        hasReadableText: true, regions: [], confidence: 0.99,
+        fallbackTranslation: '队列图示的旁侧译文。', note: '',
+      }) } }] }),
+    });
+    return;
+  }
   const batch = system.includes('只返回严格 JSON') && system.includes('"translations"');
   if (batch) {
     const ids = [...user.matchAll(/"id"\s*:\s*"([^"]+)"/gu)].map((match) => match[1]);
@@ -128,6 +140,9 @@ try {
 
   const article = await context.newPage();
   await article.goto(`http://127.0.0.1:${port}/fixture.html`, { waitUntil: 'domcontentloaded' });
+  // This fixture appends a paragraph after 300 ms. Exercise site rules on a
+  // stable snapshot; dynamic recovery has its own browser regression.
+  await article.waitForFunction(() => document.body.textContent.includes('Dynamic content arrived after the initial page load.'));
   await inject(worker, article);
 
   // 1. The "always" rule starts the translation with no click.
@@ -143,7 +158,35 @@ try {
   assert.match(withGlossary.system, /must take priority/i, '术语表说明应要求优先使用给定译法');
   assert.ok(withGlossary.system.length < 20_000, '注入术语表后 prompt 仍应有界');
 
-  // 3. Switching the same site to "never" stops automatic translation.
+  // First translated text is not completion: image requests may still be in
+  // flight. Wait for the complete durable job before measuring new navigation.
+  const readTaskState = () => panel.evaluate(() => new Promise((resolve, reject) => {
+    const open = indexedDB.open('deep-research-reader', 4);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction(['jobs', 'taskInputs'], 'readonly');
+      const jobs = transaction.objectStore('jobs').getAll();
+      const inputs = transaction.objectStore('taskInputs').getAll();
+      transaction.oncomplete = () => {
+        database.close();
+        resolve({ jobs: jobs.result, inputs: inputs.result });
+      };
+      transaction.onerror = () => reject(transaction.error);
+    };
+  }));
+  const deadline = Date.now() + 60_000;
+  let settled = false;
+  let taskState;
+  while (Date.now() < deadline) {
+    taskState = await readTaskState();
+    settled = taskState.jobs.length > 0 && taskState.jobs.every(job => job.status === 'completed') && taskState.inputs.length === 0;
+    if (settled) break;
+    await panel.waitForTimeout(50);
+  }
+  assert.ok(settled, `规则切换前原任务应完整结束：${JSON.stringify(taskState)}`);
+
+  // 3. Switching the same site to "never" prevents a new automatic job.
   const before = requests.length;
   await panel.evaluate(async () => chrome.storage.local.set({ readerSiteRules: { '127.0.0.1': 'never' } }));
   await panel.reload({ waitUntil: 'domcontentloaded' });

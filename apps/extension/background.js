@@ -6,6 +6,7 @@ import { activationReason } from './activation.js';
 import { DEFAULT_WEB_APP_URL, resolvePlatformOrigin } from './platform-config.js';
 import { getTrustedReaderPlatformOrigin, validateRadarSourceUrl } from './reader-platform-bridge-utils.js';
 import { resumePendingInstall } from './reader-install-resume.js';
+import { createUsageRecorder } from './usage-persistence.js';
 import { GLOSSARY_MAX_PROMPT_CHARS, glossaryPrompt as buildGlossaryPrompt, parseGlossary } from './glossary.js';
 import { isBundledDemoUrl, requestDemoContext } from './reader-demo.js';
 
@@ -13,6 +14,7 @@ const CONTENT_SCRIPT = 'content.js';
 const RESUME_ALARM = 'deep-research-reader-resume';
 const READING_WINDOW_PREFIX = 'readingWindow:';
 const translationJobs = new Map();
+const recordReaderUsage = createUsageRecorder(chrome.storage.local);
 // A window enters reading mode only after the user has clicked the extension
 // action once.  Keeping this state per window gives us a safe second stage:
 // switching tabs while the panel is open can follow the user, but opening a
@@ -679,6 +681,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.tabs.get(requestedTabId).then((tab) => activateTabForReading(tab, { engageWindow: true }))
       .then((result) => sendResponse?.(result))
       .catch((error) => sendResponse?.({ ok: false, reason: activationReason({}), error: error instanceof Error ? error.message : '页面无法启用阅读' }));
+    return true;
+  }
+  if (message?.type === 'deep-research:record-usage') {
+    if (sender.id !== chrome.runtime.id || !message.event || typeof message.event !== 'object') {
+      sendResponse?.({ ok: false, error: 'invalid-usage-event' });
+      return false;
+    }
+    void recordReaderUsage(message.event)
+      .then(usage => sendResponse?.({ ok: true, usage }))
+      .catch(() => sendResponse?.({ ok: false, error: 'usage-storage-unavailable' }));
     return true;
   }
   if (message?.type === 'deep-research:translation-start') {

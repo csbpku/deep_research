@@ -902,5 +902,9 @@
   "来源": "Source",
   "正文可能不完整": "Article text may be incomplete",
   "已读取 {0} 个正文块，页面其余正文可能不在已识别区域内；请以选段或原文为准。": "Read {0} text blocks. The rest of the page may be outside the detected article area; rely on selections or the original page.",
-  "正文可能不完整：页面的大部分文字不在已识别的正文区域内。全文问答、翻译和总结可能缺少内容，可以选择原文段落后操作。": "Article text may be incomplete: most of the page text is outside the detected article area. Full-page answers, translation and summaries may miss content; select the original passage and act on that instead."
+  "正文可能不完整：页面的大部分文字不在已识别的正文区域内。全文问答、翻译和总结可能缺少内容，可以选择原文段落后操作。": "Article text may be incomplete: most of the page text is outside the detected article area. Full-page answers, translation and summaries may miss content; select the original passage and act on that instead.",
+  "示例文章仅支持独立模式；平台模式请打开普通网页后阅读。": "The demo article requires standalone mode. In platform mode, open a regular web page to read.",
+  "切换独立模式": "Switch to standalone mode",
+  "示例文章暂未准备好，请稍后重新打开。": "The demo article is not ready yet. Try opening it again shortly.",
+  "问收藏仅支持独立模式；请在设置中切换并配置模型。": "Ask library requires standalone mode. Switch modes and configure a model in Settings."
 }
