@@ -47,23 +47,27 @@ def _clean_inline(text: str) -> str:
 def _split_sections(body: str) -> tuple[str, list[tuple[str, str]]]:
     """Return (lead, [(heading, text), ...]) for level-2/3 headings."""
     lead_lines: list[str] = []
-    sections: list[tuple[str, list[str]]] = []
-    current: list[str] | None = None
+    sections: list[tuple[str, str]] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
+
     for raw in body.splitlines():
         line = raw.rstrip()
         match = _HEADING.match(line)
         if match and len(match.group(1)) >= 2:
-            if current is not None:
-                sections.append((current[0], current[1]))
-            current = [match.group(2), []]
+            if current_title is not None:
+                sections.append((current_title, "\n".join(current_lines)))
+            current_title = match.group(2)
+            current_lines = []
             continue
-        if current is None:
+        if current_title is None:
             lead_lines.append(line)
         else:
-            current[1].append(line)
-    if current is not None:
-        sections.append((current[0], current[1]))
-    return "\n".join(lead_lines), [(title, "\n".join(lines)) for title, lines in sections]
+            current_lines.append(line)
+
+    if current_title is not None:
+        sections.append((current_title, "\n".join(current_lines)))
+    return "\n".join(lead_lines), sections
 
 
 def _paragraphs(text: str) -> list[str]:
