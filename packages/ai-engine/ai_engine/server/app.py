@@ -479,7 +479,11 @@ def _fact_review_timeout_seconds(report_chars: int = 0) -> int:
         base = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "180"))
     except (TypeError, ValueError):
         base = 180
-    scaled = base + max(0, report_chars) // 100
+    # Observed: a 31k-character report needs ~8 minutes end to end
+    # (6 inventory chunks + 28 adjudication batches). 1s per 60 characters
+    # leaves headroom without letting a stalled review hold the queue for the
+    # full upper bound.
+    scaled = base + max(0, report_chars) // 60
     return min(max(scaled, 30), 900)
 
 

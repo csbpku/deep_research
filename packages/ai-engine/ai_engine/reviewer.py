@@ -1613,9 +1613,9 @@ def _fact_review_batch_size() -> int:
 def _fact_review_batch_timeout_seconds() -> int:
     """Keep one batch bounded so later batches can still make progress."""
     try:
-        value = int(os.environ.get("FACT_REVIEW_BATCH_TIMEOUT_SECONDS", "45"))
+        value = int(os.environ.get("FACT_REVIEW_BATCH_TIMEOUT_SECONDS", "75"))
     except (TypeError, ValueError):
-        value = 45
+        value = 75
     return min(max(value, 15), 120)
 
 
@@ -1746,6 +1746,15 @@ async def _adjudicate_fact_batches(
             except Exception as exc:  # provider, timeout, or malformed JSON
                 batch_error = exc
                 last_error = exc
+                # Content-free: identifies the failing batch and error class so
+                # a retry that still fails is diagnosable from logs.
+                _review_logger.warning(
+                    "adjudication batch failed batch=%s/%s attempt=%s error=%s",
+                    batch_index,
+                    len(batches),
+                    attempt,
+                    _review_error_code(exc),
+                )
 
         if batch_result is None:
             failed_batches += 1

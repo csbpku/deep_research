@@ -741,5 +741,5 @@ def test_fact_review_timeout_scales_with_report_length(monkeypatch):
 
     monkeypatch.delenv("FACT_REVIEW_TIMEOUT_SECONDS", raising=False)
     assert _fact_review_timeout_seconds(0) == 180
-    assert _fact_review_timeout_seconds(31_000) == 490
+    assert _fact_review_timeout_seconds(31_000) == 696
     assert _fact_review_timeout_seconds(10_000_000) == 900
