@@ -39,9 +39,32 @@ function ReaderPanel() {
       <section id="empty-view" className="empty">
         <div className="eyebrow">{t("原网页阅读助手")}</div>
         <Typography component="h1" variant="h1" id="empty-title">{t("先准备阅读模型。")}</Typography>
-        <p id="empty-description">{t("独立模式配置自己的模型；平台模式登录调研平台后直接使用平台 AI Engine。")}</p>
-        <div className="actions"><ReaderButton id="empty-settings" variant="contained">{t("配置模型")}</ReaderButton><ReaderButton id="empty-history" variant="outlined">{t("查看聊天记录")}</ReaderButton></div>
+        <p id="empty-description">{t("Reader 不自带模型：它调用你选择的模型服务。正文只在你发起翻译或提问时发送。")}</p>
+        <div id="first-run-paths" className="first-run-paths">
+          <Paper component="section" variant="outlined" elevation={0} id="first-run-local" className="first-run-card">
+            <div className="first-run-card-head"><strong>{t("本机模型")}</strong><span className="first-run-tag">{t("无需 API Key")}</span></div>
+            <p className="small">{t("已经运行 Ollama、LM Studio 或本地 API 代理时，直接检测并连接。")}</p>
+            <ReaderButton id="detect-local-models" type="button" variant="outlined">{t("检测本机模型")}</ReaderButton>
+            <div id="local-models-result" className="local-models-result hidden" role="status" aria-live="polite" />
+          </Paper>
+          <Paper component="section" variant="outlined" elevation={0} id="first-run-key" className="first-run-card">
+            <div className="first-run-card-head"><strong>{t("自己的模型服务")}</strong><span className="first-run-tag">{t("22 家服务商")}</span></div>
+            <p className="small">{t("OpenAI、Anthropic、DeepSeek、Kimi 等；也支持任意 OpenAI / Anthropic 兼容地址。")}</p>
+            <p className="small">{t("已有调研平台账号时，可在设置里改为平台模式，使用平台 AI Engine。")}</p>
+          </Paper>
+        </div>
+        <div className="actions"><ReaderButton id="empty-settings" variant="contained">{t("配置模型")}</ReaderButton><ReaderButton id="empty-history" variant="outlined">{t("查看聊天记录")}</ReaderButton><ReaderButton id="empty-platform" variant="text">{t("已有调研平台账号？连接平台")}</ReaderButton></div>
       </section>
+
+      <Paper component="section" variant="outlined" elevation={0} id="guide-card" className="guide-card hidden" sx={{ mx: space.lg, flexShrink: 0 }}>
+        <div className="guide-head"><strong>{t("60 秒上手")}</strong><ReaderButton id="dismiss-guide" type="button" control="icon" variant="text" aria-label={t("隐藏引导")} title={t("隐藏引导")}><ComposerIcon kind="close" size={16} /></ReaderButton></div>
+        <p className="small">{t("用自带的示例文章走一遍：翻译、提问、回到原文证据。")}</p>
+        <div className="guide-steps">
+          <ReaderButton id="guide-demo" type="button" variant="outlined">{t("1. 打开示例文章")}</ReaderButton>
+          <ReaderButton id="guide-translate" type="button" variant="text">{t("2. 翻译这篇文章")}</ReaderButton>
+          <ReaderButton id="guide-ask" type="button" variant="text">{t("3. 问一个问题")}</ReaderButton>
+        </div>
+      </Paper>
 
       <section id="page-view" className="reader-page-view hidden">
         <div id="page-overview-scroll" className="page-overview-scroll">
@@ -64,10 +87,10 @@ function ReaderPanel() {
 
 
         <section id="reading-section">
-          <div className="section-label"><Typography component="h2" variant="h3">{t("收藏与标注")}</Typography><div className="section-actions"><ReaderButton id="refresh-library" variant="text">{t("刷新")}</ReaderButton></div></div>
+          <div className="section-label"><Typography component="h2" variant="h3">{t("收藏与标注")}</Typography><div className="section-actions"><ReaderSelect id="library-export-format" defaultValue="markdown" className="compact-select"><option value="markdown">{t("Markdown")}</option><option value="obsidian">{t("Obsidian")}</option><option value="notion">{t("Notion")}</option></ReaderSelect><ReaderButton id="library-export" variant="text" title={t("按所选格式导出收藏")}>{t("导出")}</ReaderButton><ReaderButton id="refresh-library" variant="text">{t("刷新")}</ReaderButton></div></div>
           <p className="library-description">{t("只展示你确认保存的摘录、结论和标注。")}</p>
           <Paper component="div" variant="outlined" id="saved-insight-banner" className="saved-insight-banner hidden">
-            <div>
+            <div className="saved-insight-text">
               <strong id="saved-insight-title">{t("已保存阅读结论")}</strong>
               <span id="saved-insight-detail">{t("可以回到当前会话继续讨论。")}</span>
             </div>
@@ -85,10 +108,20 @@ function ReaderPanel() {
           <div className="library-filters">
             <div className="field"><label htmlFor="library-search">{t("搜索收藏")}</label><ReaderTextField id="library-search" type="search" placeholder={t("标题、原文、笔记或结论")} /></div>
             <div className="field"><label htmlFor="library-kind">{t("内容类型")}</label><ReaderSelect id="library-kind" defaultValue="all"><option value="all">{t("全部类型")}</option><option value="insight">{t("摘录与结论")}</option><option value="annotation">{t("原文标注")}</option></ReaderSelect></div>
+            <div className="field"><label htmlFor="library-tag">{t("标签")}</label><ReaderSelect id="library-tag" defaultValue=""><option value="">{t("全部标签")}</option></ReaderSelect></div>
           </div>
           <ReaderButton id="clear-library-filters" className="hidden" type="button">{t("清除筛选")}</ReaderButton>
           <Alert id="library-notice" className="library-notice hidden" role="status" aria-live="polite" icon={false} action={<ReaderButton id="undo-library-delete" className="hidden" type="button">{t("撤销删除")}</ReaderButton>}><span id="library-notice-text" /></Alert>
           <p id="library-summary" className="small library-summary" role="status" aria-live="polite" />
+          <Paper component="section" variant="outlined" id="library-ask-panel" className="library-ask-panel">
+            <div className="library-ask-row">
+              <ReaderTextField id="library-ask-input" placeholder={t("问收藏：例如“我之前记过哪些关于背压的结论？”")} autoComplete="off" />
+              <ReaderButton id="library-ask" type="button" variant="outlined" title={t("只依据已保存的收藏回答")}>{t("问收藏")}</ReaderButton>
+            </div>
+            <p id="library-ask-status" className="small" role="status" aria-live="polite" />
+            <div id="library-ask-answer" className="library-ask-answer hidden" />
+            <div id="library-ask-citations" className="library-citations hidden" />
+          </Paper>
           <div id="library-list" className="small" style={{ paddingTop: 10 }}>{t("还没有本地保存的成果。")}</div>
           <nav id="library-pagination" className="library-pagination hidden" aria-label={t("收藏分页")}><ReaderButton id="library-previous" type="button" variant="outlined">{t("上一页")}</ReaderButton><span id="library-page" className="small" /><ReaderButton id="library-next" type="button" variant="outlined">{t("下一页")}</ReaderButton></nav>
         </section>
@@ -148,6 +181,7 @@ function ReaderPanel() {
                 <ReaderButton id="save-answer" className="answer-action answer-save" type="button" startIcon={<ComposerIcon kind="bookmark" />} title={t("保存原文摘录、AI 结论和笔记")} variant="text" control="tonal">{t("保存结论")}</ReaderButton>
               </div>
               <div id="answer-structured" className="answer-structured hidden">
+                <p id="answer-coverage" className="answer-coverage small hidden" role="status" aria-live="polite" />
                 <div id="answer-evidence" className="answer-part response-section hidden" data-answer-section="evidence"><div className="response-section-label">{t("原文证据")}</div><div id="answer-evidence-list" className="evidence-list" /></div>
                 <ReaderDisclosure id="answer-more" className="response-more hidden" label={<>{t("补充说明")}<span id="answer-more-summary" className="response-more-summary" /></>}>
                 <div id="answer-background" className="answer-part response-section hidden" data-answer-section="background"><div className="response-section-label">{t("必要背景")}</div><div id="answer-background-text" /></div>
@@ -273,14 +307,42 @@ function ReaderPanel() {
           <ReaderButton id="refresh-models" className="provider-connect" type="button" variant="contained">{t("读取模型列表")}</ReaderButton>
           <div id="model-discovery-status" className="provider-feedback" role="status" aria-live="polite" />
           <div className="field provider-model-field"><label htmlFor="provider-model-search">{t("选择模型")}</label><SettingsModelPicker /><p id="model-list-help" className="small">{t('列表由当前服务返回，可按名称或 ID 搜索；实际可用范围取决于账号权限。')}</p><ReaderDisclosure id="manual-model-settings" label={<>{t("手动指定模型 ID")}</>}><label htmlFor="provider-model">{t("模型 ID")}</label><ReaderTextField id="provider-model" className="reader-settings-field" placeholder={t("填写服务商提供的模型 ID")} slotProps={{ htmlInput: { spellCheck: false } }} /></ReaderDisclosure></div>
-          <div className="actions provider-save-actions"><ReaderButton id="save-settings" type="button" variant="contained">{t("保存配置")}</ReaderButton><ReaderButton id="test-provider" type="button" variant="outlined">{t("测试连接")}</ReaderButton></div>
+          <div className="actions provider-save-actions settings-save-bar"><ReaderButton id="save-settings" type="button" variant="contained">{t("保存配置")}</ReaderButton><ReaderButton id="test-provider" type="button" variant="outlined">{t("测试连接")}</ReaderButton></div>
           <div id="provider-test-status" className="provider-feedback" role="status" aria-live="polite" />
           <ReaderDisclosure className="provider-extra-checks" label={<>{t("图片能力")}</>}><ReaderButton id="test-vision" type="button" variant="outlined">{t("检测图片能力")}</ReaderButton></ReaderDisclosure>
         </section>
               <Alert id="settings-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
+        <section id="reading-translation-settings" className="settings-card">
+          <div className="settings-card-heading">
+            <Typography component="h3" variant="h3">{t("阅读与翻译")}</Typography>
+          </div>
+          <div className="field"><label htmlFor="translation-layout">{t("翻译版式")}</label><ReaderSelect id="translation-layout" defaultValue="replace"><option value="replace">{t("替换原文")}</option><option value="stacked">{t("原文与译文对照")}</option></ReaderSelect></div>
+          <p className="small">{t("对照版式保留原文；代码块和表格单元格仍按替换处理。")}</p>
+          <div className="field"><label htmlFor="type-scale">{t("阅读排版")}</label><ReaderSelect id="type-scale" defaultValue="comfortable"><option value="compact">{t("紧凑")}</option><option value="comfortable">{t("舒适")}</option><option value="large">{t("大")}</option></ReaderSelect></div>
+          <p className="small">{t("只影响侧栏与历史页的回答正文；网页译文保持原网页字号。")}</p>
+          <div className="field"><label htmlFor="site-rule-mode">{t("本站翻译规则")}</label><ReaderSelect id="site-rule-mode" defaultValue="ask"><option value="ask">{t("每次询问")}</option><option value="always">{t("总是自动翻译")}</option><option value="never">{t("从不自动翻译")}</option></ReaderSelect></div>
+          <p id="site-rule-hint" className="small" />
+          <div className="field"><label htmlFor="glossary-input">{t("术语表")}</label><ReaderTextField id="glossary-input" multiline minRows={3} placeholder={t("每行一条：source => 译法")} /></div>
+          <div className="actions"><ReaderButton id="save-glossary" type="button" variant="outlined">{t("保存术语表")}</ReaderButton></div>
+          <p id="glossary-status" className="small" role="status" aria-live="polite" />
+        </section>
+        <section id="usage-settings" className="settings-card">
+          <div className="settings-card-heading">
+            <Typography component="h3" variant="h3">{t("用量")}</Typography>
+          </div>
+          <p id="usage-summary" className="small" role="status" aria-live="polite">{t("本月还没有调用模型。")}</p>
+          <div className="field"><label htmlFor="translation-model">{t("翻译模型（可选）")}</label><ReaderTextField id="translation-model" placeholder={t("留空则与聊天使用同一个模型")} autoComplete="off" /></div>
+          <div className="field"><label htmlFor="price-input">{t("输入单价（每百万 token）")}</label><ReaderTextField id="price-input" type="number" slotProps={{ htmlInput: { min: 0, step: '0.01' } }} autoComplete="off" placeholder="0" /></div>
+          <div className="field"><label htmlFor="price-output">{t("输出单价（每百万 token）")}</label><ReaderTextField id="price-output" type="number" slotProps={{ htmlInput: { min: 0, step: '0.01' } }} autoComplete="off" placeholder="0" /></div>
+          <p className="small">{t("价格留空时不显示预估费用。")}</p>
+          <div className="actions"><ReaderButton id="save-usage-settings" type="button" variant="outlined">{t("保存用量设置")}</ReaderButton></div>
+          <p id="usage-settings-status" className="small" role="status" aria-live="polite" />
+        </section>
         <section className="settings-card">
           <div className="field"><label htmlFor="interface-language">{t('界面语言')}</label><ReaderSelect id="interface-language" defaultValue="system"><option value="system">{t('跟随浏览器')}</option><option value="zh-CN">简体中文</option><option value="en">English</option></ReaderSelect></div>
           <p className="small">{t('回答跟随提问语言；翻译可在输入区旁选择目标语言，并自动记住。')}</p>
+          <div className="field"><label htmlFor="color-scheme">{t('外观')}</label><ReaderSelect id="color-scheme" defaultValue="system"><option value="system">{t('跟随系统')}</option><option value="light">{t('浅色')}</option><option value="dark">{t('深色')}</option></ReaderSelect></div>
+          <p className="small">{t('侧栏和网页内的阅读控件使用同一套配色；深色模式适合夜间阅读。')}</p>
         </section>
         <div className="section-label"><Typography component="h2" variant="h3">{t("本地数据")}</Typography></div>
         <div className="actions"><ReaderButton id="export-data" variant="outlined">{t("导出阅读数据")}</ReaderButton><ReaderButton id="import-data" variant="outlined">{t("导入数据")}</ReaderButton><ReaderButton id="clear-cache" variant="outlined" color="error">{t("清除翻译缓存")}</ReaderButton><ReaderButton id="clear-data" variant="outlined" color="error">{t("清除本地数据")}</ReaderButton></div>
@@ -293,13 +355,17 @@ function ReaderPanel() {
         <div className="eyebrow">{t("保存阅读成果")}</div>
         <Typography component="h2" variant="h2">{t("保存摘录与笔记")}</Typography>
         <p id="save-mode-note" className="small" style={{ marginTop: 8 }} />
-        <div className="card"><div className="card-title"><label htmlFor="save-quote">{t("原文摘录")}</label><span id="save-source-title">{t("当前页面")}</span></div><ReaderTextField id="save-quote" style={{ marginTop: 9, minHeight: 100 }}  multiline minRows={3} /></div>
-        <div className="field"><label htmlFor="save-note">{t("我的笔记")}</label><ReaderTextField id="save-note" placeholder={t("补充自己的判断、待验证问题或使用场景")}  multiline minRows={3} /></div>
-        <ReadingSaveOptions />
-        <div id="save-ai-answer-field" className="field hidden"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} /></div>
-        <div className="field"><label htmlFor="save-tags">{t("标签（用逗号分隔，最多 10 个）")}</label><ReaderTextField id="save-tags" placeholder={t("架构, 性能, 待验证")}  /></div>
-        <Alert id="save-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
-        <div className="actions"><ReaderButton id="confirm-save" variant="contained">{t("保存到阅读库")}</ReaderButton><ReaderButton id="cancel-save" variant="outlined">{t("取消")}</ReaderButton></div>
+        <div className="save-dialog-fields">
+          <div className="card"><div className="card-title"><label htmlFor="save-quote">{t("原文摘录")}</label><span id="save-source-title">{t("当前页面")}</span></div><ReaderTextField id="save-quote" style={{ marginTop: 9, minHeight: 100 }}  multiline minRows={3} maxRows={6} /></div>
+          <div className="field"><label htmlFor="save-note">{t("我的笔记")}</label><ReaderTextField id="save-note" placeholder={t("补充自己的判断、待验证问题或使用场景")}  multiline minRows={3} maxRows={4} /></div>
+          <ReaderDisclosure id="save-more-options" className="save-more-options" label={t("更多选项：AI 结论、标签、同步")}>
+            <ReadingSaveOptions />
+            <div id="save-ai-answer-field" className="field hidden"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} maxRows={4} /></div>
+            <div className="field"><label htmlFor="save-tags">{t("标签（用逗号分隔，最多 10 个）")}</label><ReaderTextField id="save-tags" placeholder={t("架构, 性能, 待验证")}  /></div>
+          </ReaderDisclosure>
+          <Alert id="save-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
+        </div>
+        <div className="save-action-bar"><ReaderButton id="confirm-save" className="save-action-primary" variant="contained">{t("保存到阅读库")}</ReaderButton><ReaderButton id="cancel-save" className="save-action-secondary" variant="outlined">{t("取消")}</ReaderButton></div>
       </section>
 
       <div id="mode-data-note" className="footer">{t("独立模式：模型请求与阅读成果保存在本地，可导出或清除。")}</div>

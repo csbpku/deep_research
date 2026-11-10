@@ -49,7 +49,9 @@ const testExtensionPath = `${await mkdtemp(join(tempDir(), 'deep-research-reader
 await cp(extensionPath, testExtensionPath, { recursive: true });
 const testManifestPath = `${testExtensionPath}/manifest.json`;
 const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
-testManifest.host_permissions = [...new Set([...(testManifest.host_permissions || []), `http://127.0.0.1:${port}/*`])];
+// The fixture and the spawned fake provider use different ports; grant the
+// loopback origin once so saving the provider does not need a prompt.
+testManifest.host_permissions = [...new Set([...(testManifest.host_permissions || []), 'http://127.0.0.1/*'])];
 await writeFile(testManifestPath, JSON.stringify(testManifest));
 const profilePath = tempPath(`deep-research-reader-history-${Date.now()}`);
 const context = await chromium.launchPersistentContext(profilePath, {

@@ -1,172 +1,319 @@
 import React from 'react';
 import CssBaseline from '@mui/material/CssBaseline';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
+import type { Theme } from '@mui/material/styles';
 import token from '@deep-research/design-system/tokens.json';
 import { designAppearance, designThemeOptions } from '@deep-research/design-system/theme';
+import { READER_COLOR_SCHEME_KEY, normalizeColorSchemePreference, resolveColorScheme } from '../color-scheme.js';
+import { READER_TYPE_SCALE_KEY, normalizeTypeScale, typeScaleVariables } from '../reader-typography.js';
 
 // The Reader reads the same generated stylesheet the platform uses, only
-// under the `--reader-*` prefix. Colour therefore comes from one source.
-const appearance = designAppearance('light', 'reader');
-const text = appearance['color-text'];
-const muted = appearance['color-text-muted'];
-const primary = appearance['color-primary'];
-const outline = appearance['color-outline'];
-const fieldOutline = appearance['color-outline-strong'];
-const radius = token['radius-small'];
-const focus = { outline: `2px solid ${primary}`, outlineOffset: '2px' };
-const caption = { fontSize: token['type-caption'], lineHeight: token['line-height-body'], color: muted };
+// under the `--reader-*` prefix. Colour therefore comes from one source: every
+// painted colour resolves through a `--reader-*` variable, and the contract
+// from `designAppearance` is that the scheme block in `tokens.css` supplies the
+// other palette.
+const DARK_QUERY = '(prefers-color-scheme: dark)';
+type ReaderColorScheme = 'light' | 'dark';
+type ReaderColorSchemePreference = 'light' | 'dark' | 'system';
+
+function systemPrefersDark() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(DARK_QUERY).matches;
+}
+
+// `chrome` has no ambient type in the extension tsconfig, and this module only
+// needs one storage area, so the surface it uses is declared here. Both
+// preferences (colour scheme, type scale) read the same two members.
+interface ReaderStorageChange { newValue?: unknown }
+interface ReaderStorage {
+  local?: { get?: (key: string) => Promise<Record<string, unknown>> };
+  onChanged?: {
+    addListener?: (listener: (changes: Record<string, ReaderStorageChange>, area: string) => void) => void;
+    removeListener?: (listener: (changes: Record<string, ReaderStorageChange>, area: string) => void) => void;
+  };
+}
+
+function readerStorage(): ReaderStorage | undefined {
+  return (globalThis as { chrome?: { storage?: ReaderStorage } }).chrome?.storage;
+}
 
 /**
  * All extension control skins live here. Page CSS owns layout only.
  *
- * The Reader renders one scheme. The palette comes from the shared token
- * file, and the CSS-variable bridge in `designAppearance` points at the
- * generated `--reader-*` custom properties. The panel, the history page and
- * the in-page controls therefore read the same palette the platform uses.
+ * One theme per scheme is built and cached. `designThemeOptions` needs a
+ * concrete palette mode for MUI's own defaults, and MUI's `alpha()` helpers
+ * cannot parse `var()` colours, so the palette stays literal per mode. The
+ * explicit colours in the overrides still point at the generated `--reader-*`
+ * custom properties, which means the panel, the history page and the in-page
+ * controls read the same palette the platform uses.
  */
-const options = designThemeOptions('light', 'reader');
+function createReaderTheme(mode: ReaderColorScheme): Theme {
+  const appearance = designAppearance(mode, 'reader');
+  const text = appearance['color-text'];
+  const muted = appearance['color-text-muted'];
+  const primary = appearance['color-primary'];
+  const outline = appearance['color-outline'];
+  const fieldOutline = appearance['color-outline-strong'];
+  const radius = token['radius-small'];
+  const focus = { outline: `2px solid ${primary}`, outlineOffset: '2px' };
+  const caption = { fontSize: token['type-caption'], lineHeight: token['line-height-body'], color: muted };
+  // Reading size is a document-level preference (three steps), so answer text
+  // reads it through the custom properties the provider publishes. The token
+  // stays as the fallback: a host without the provider, and the default step,
+  // render exactly what the Reader rendered before the scale existed.
+  const readingSize = `var(--reader-reading-size, ${token['type-reading']})`;
+  const readingLeading = `var(--reader-reading-leading, ${token['line-height-reading']})`;
+  const options = designThemeOptions(mode, 'reader');
 
-// No `cssVariables` and no `colorSchemes`: MUI stays on its plain theme path,
-// so the provider never writes a `light`/`dark` class onto <html>. One
-// scheme means there is nothing to switch and nothing to disagree about.
-export const readerTheme = createTheme({
-  ...options,
-  // Reader is a compact panel; its top heading uses the shared panel scale.
-  typography: { ...options.typography, h1: options.typography?.panelTitle },
-  components: {
-    MuiCssBaseline: { styleOverrides: {
-      body: { color: text, background: appearance['color-surface'], fontFamily: token['font-family'], fontSize: token['type-body'], lineHeight: token['line-height-body'] },
-      'h1,h2': { margin: 0, fontSize: token['type-title-large'], fontWeight: token['weight-semibold'], lineHeight: token['line-height-heading'] },
-      'h3,h4': { margin: 0, fontSize: token['type-title-small'], fontWeight: token['weight-semibold'], lineHeight: token['line-height-heading'] },
-      p: { margin: 0 }, 'button,input,textarea,select': { fontFamily: 'inherit' },
-      'a': { color: primary, textUnderlineOffset: '3px' },
-      '.small,.eyebrow,.settings-kicker,.tool-help,.source,.discussion-source-main,.conversation-message-header,.composer-scope-label,.discussion-scope-label,.image-preview-meta,.provider-feedback,.mode-guidance,.progress-line,.response-more-summary,.history-summary,.history-card-source,.history-detail-meta': caption,
-      '.eyebrow,.settings-kicker': { fontWeight: token['weight-semibold'] },
-      '.field > label,.card-title label,.composer-model-menu > label': { display: 'block', marginBottom: token['space-2'], color: appearance['color-text-secondary'], fontSize: token['type-label'], fontWeight: token['weight-medium'] },
-      '.settings-card': { borderTop: `1px solid ${outline}` },
-      '.MuiFormControl-root:has(input.hidden)': { display: 'none' },
-      '.provider-picker-group h4': { ...caption, fontWeight: token['weight-semibold'] },
-      '.reader-composer-field textarea': { fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
-      '.conversation-message-body,.history-detail-message-body': { color: text, fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
-      '.pending-turn .conversation-message.user': { padding: '12px', backgroundColor: appearance['color-surface-container'], borderRadius: '12px 12px 4px 12px' },
-      '.pending-turn .conversation-message-header': { marginBottom: '8px' },
-      '.mark': { borderRadius: radius, background: text, color: appearance['color-inverse-text'], fontSize: token['type-title-small'], fontWeight: token['weight-semibold'] },
-      '.wordmark > span:last-child': { fontSize: token['type-title-small'], fontWeight: token['weight-semibold'] },
-      '.masthead': { borderBottom: `1px solid ${outline}` },
-      '.discussion-source-card': { borderBottom: `1px solid ${outline}`, backgroundColor: appearance['color-surface-container'] },
-      '.discussion-source-main strong': { color: text, fontSize: token['type-label'], fontWeight: token['weight-medium'], lineHeight: token['line-height-control'] },
-      '.history-tab strong': { fontSize: token['type-caption'], fontVariantNumeric: 'tabular-nums' },
-      '.mode-option-content strong': { fontSize: token['type-body'], fontWeight: token['weight-semibold'], lineHeight: token['line-height-control'], color: text },
-      '.mode-option-content > span': caption,
-      '.mode-option-check,.provider-picker-check': { color: primary },
-      '.provider-picker-selected strong,.provider-picker-option strong': { fontSize: token['type-label'], fontWeight: token['weight-semibold'], lineHeight: token['line-height-control'] },
-      '.provider-picker-selected > span,.provider-picker-option small,.provider-picker-group h4': caption,
-      '.provider-logo-dark': { padding: '3px', borderRadius: '4px', background: text },
-      '.provider-feedback[data-state="error"]': { color: appearance['color-danger'] },
-      '.provider-feedback[data-state="ready"],.provider-feedback[data-state="verified"]': { color: appearance['color-success'] },
-      '.page-notice-container': { background: appearance['color-primary-container'], borderRadius: radius },
-      '.page-notice-container .MuiAlert-root': { p: 0, bgcolor: 'transparent' },
-      '.connection-badge': { ...caption, padding: '4px 8px', borderRadius: radius, background: appearance['color-surface-container'] },
-      '.connection-badge.connected': { color: appearance['color-success'], background: appearance['color-success-container'] },
-      '.composer-resize span': { borderRadius: '4px', background: fieldOutline },
-      '.composer-resize:hover span,.composer-resize:focus-visible span': { background: primary },
-      '.keyboard-navigation .chat-composer:has(textarea:focus-visible)': focus,
-      '#settings-notice[data-result="success"]': { backgroundColor: appearance['color-success-container'], color: appearance['color-success'] },
-      '.dismiss-notice': { color: muted },
-      '.history-toast': { ...caption, background: appearance['color-surface-raised'], border: `1px solid ${outline}`, borderRadius: radius, boxShadow: 'var(--reader-elevation-2)' },
-      '.track': { height: '4px', borderRadius: '4px', background: appearance['color-surface-container'] },
-      '.bar': { background: primary }, '.bar.image': { background: appearance['color-success'] },
-      '.response-section': { border: `1px solid ${outline}`, borderRadius: token['radius-medium'], background: appearance['color-surface-container'], color: text, fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
-      '.response-section-label': { fontSize: token['type-label'], fontWeight: token['weight-semibold'], color: primary },
-      // Each labelled section carries its own semantic fill, the same
-      // vocabulary the platform uses for evidence, context, inference and
-      // open questions.
-      '.response-section[data-answer-section="evidence"]': { background: appearance['color-evidence-container'] },
-      '.response-section[data-answer-section="background"]': { background: appearance['color-background-container'] },
-      '.response-section[data-answer-section="inference"]': { background: appearance['color-inference-container'] },
-      '.response-section[data-answer-section="limitations"]': { background: appearance['color-limitations-container'] },
-      '.response-section[data-answer-section="background"] .response-section-label': { color: appearance['color-background-context'] },
-      '.response-section[data-answer-section="inference"] .response-section-label': { color: appearance['color-inference'] },
-      '.response-section[data-answer-section="limitations"] .response-section-label': { color: appearance['color-limitations'] },
-      '.response-section p,.response-section li': { fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
-      ':is(button,a,[tabindex]):focus-visible': focus,
-      '::selection': { background: appearance['color-primary-container'], color: text },
-    } },
-    MuiButtonBase: { defaultProps: { disableRipple: true }, styleOverrides: { root: {
-      fontFamily: token['font-family'], '&.Mui-focusVisible': focus,
-      '&[data-reader-control="navigation"]': { minWidth: '44px', minHeight: '44px', padding: '6px 8px', gap: '6px', borderBottom: '2px solid transparent', color: muted, fontSize: token['type-label'], whiteSpace: 'nowrap',
-        '&:hover': { bgcolor: 'action.hover' }, '&[aria-pressed="true"],&[aria-current="page"]': { color: primary, borderBottomColor: primary, fontWeight: token['weight-semibold'] } },
-    } } },
-    MuiButton: { defaultProps: { disableElevation: true, disableRipple: true, size: 'small' }, styleOverrides: { root: {
-      minWidth: 0, minHeight: token['control-height'], padding: `${token['space-2']} ${token['space-3']}`, borderRadius: radius, fontSize: token['type-label'], fontWeight: token['weight-medium'], lineHeight: token['line-height-control'], textTransform: 'none',
-      transition: `background-color ${token['motion-fast']}, color ${token['motion-fast']}, border-color ${token['motion-fast']}`,
-      '&:disabled': { opacity: .45, pointerEvents: 'none' }, '&.Mui-disabled:not(:disabled)': { pointerEvents: 'auto', opacity: 1 },
-      '&[data-reader-control="tonal"]': { color: primary, background: appearance['color-primary-container'], '&:hover': { background: appearance['color-primary-container-hover'] } },
-      '&[data-reader-control="mode"]': { position: 'relative', justifyContent: 'flex-start', alignItems: 'flex-start', minHeight: '88px', padding: token['space-3'], textAlign: 'left', whiteSpace: 'normal', width: '100%', color: text,
-        '&[aria-pressed="true"]': { borderColor: primary, background: appearance['color-primary-container'], '& .mode-option-check': { visibility: 'visible' } } },
-      '&[data-reader-control="scope"]': { padding: '4px 8px', minHeight: '32px', color: muted, '&[aria-pressed="true"]': { color: primary, background: appearance['color-primary-container'] } },
-      // Icon-only composer tools. The label lives in the tooltip and the
-      // accessible name, so the toolbar can stay a dense strip of glyphs.
-      '&[data-reader-control="tool"]': { width: '32px', height: '32px', minHeight: '32px', padding: 0, flexShrink: 0, color: appearance['color-text-secondary'],
-        '& svg': { fontSize: '18px', width: '18px', height: '18px' },
-        '&:hover': { background: appearance['color-surface-container'], color: text },
-        '&[aria-pressed="true"]': { color: primary, background: appearance['color-primary-container'] } },
-      // One chip states what the answer will be based on; the menu below it
-      // carries the alternatives.
-      '&[data-reader-control="scope-chip"]': { display: 'inline-flex', alignItems: 'center', gap: '4px', minHeight: '32px', padding: '2px 6px 2px 8px', border: `1px solid ${fieldOutline}`, borderRadius: token['radius-medium'], color: appearance['color-text-secondary'],
-        '& svg': { fontSize: '14px', width: '14px', height: '14px', flexShrink: 0 },
-        '& #composer-scope-label': { fontSize: token['type-label'], lineHeight: token['line-height-control'], whiteSpace: 'nowrap' },
-        '&[aria-expanded="true"]': { borderColor: primary, color: primary, background: appearance['color-primary-container'] },
-        '&[disabled]': { color: muted, opacity: 1, cursor: 'default' } },
-      // The send affordance is the one filled shape in the composer.
-      '&[data-reader-control="submit"]': { width: '34px', height: '34px', minHeight: '34px', padding: 0, borderRadius: '50%', flexShrink: 0, '& svg': { fontSize: '18px', width: '18px', height: '18px' } },
-      '&[data-reader-control="icon"]': { width: '40px', height: '40px', minHeight: '40px', padding: 0, flexShrink: 0 },
-      '&[data-reader-control="compact"]': { minHeight: '32px', padding: '4px 8px' },
-      '&[data-reader-control="provider"]': { display: 'flex', justifyContent: 'flex-start', textAlign: 'left', gap: '12px', width: '100%', minHeight: '64px', padding: '12px', border: `1px solid ${fieldOutline}`, color: text,
-        '&[aria-selected="true"],&[aria-expanded="true"]': { borderColor: primary, background: appearance['color-primary-container'], '& .provider-picker-check': { visibility: 'visible' } } },
-      '&[data-reader-control="followup"]': { justifyContent: 'space-between', gap: '12px', minHeight: '44px', padding: '8px', textAlign: 'left', whiteSpace: 'normal', color: text,
-        '& > span:first-of-type': { minWidth: 0, overflowWrap: 'anywhere' },
-        '& .MuiButton-endIcon': { flexShrink: 0, margin: 0, color: primary },
-        '&:hover': { backgroundColor: appearance['color-surface-container'] } },
-      '&[data-reader-control="model"]': { marginLeft: 'auto', minHeight: '36px', padding: '4px 8px', gap: '8px',
-        '& #composer-model-label': { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-        '& .MuiButton-endIcon': { display: 'flex', flexShrink: 0, margin: 0, transition: `transform ${token['motion-fast']}` },
-        '& .MuiButton-endIcon > svg': { fontSize: '20px', width: '20px', height: '20px' },
-        '&[aria-expanded="true"] .MuiButton-endIcon': { transform: 'rotate(180deg)' },
-        '&:disabled': { color: appearance['color-text-muted'], opacity: 1 },
-        '&:disabled .MuiButton-endIcon': { display: 'none' } },
-    }, startIcon: { marginLeft: 0, marginRight: '8px' } }, variants: [
-      { props: { variant: 'outlined' }, style: { borderColor: fieldOutline, color: appearance['color-text-secondary'], '&:hover': { borderColor: primary, background: appearance['color-surface-container'] } } },
-      { props: { color: 'error' }, style: { color: appearance['color-danger'], borderColor: appearance['color-danger'] } },
-    ] },
-    MuiOutlinedInput: { styleOverrides: { root: { minHeight: token['touch-target'], borderRadius: radius, fontSize: token['type-body'], backgroundColor: appearance['color-surface'],
-      '& .MuiOutlinedInput-notchedOutline': { borderColor: fieldOutline }, '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: muted },
-      '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: primary, borderWidth: '1px' },
-      'html.keyboard-navigation &.Mui-focused': focus,
-      '&.Mui-error .MuiOutlinedInput-notchedOutline': { borderColor: appearance['color-danger'] },
-      '&:has([aria-invalid="true"]) .MuiOutlinedInput-notchedOutline': { borderColor: appearance['color-danger'] },
-    }, input: { padding: `${token['space-2']} ${token['space-3']}`, fontSize: token['type-body'], lineHeight: token['line-height-body'] }, multiline: { padding: token['space-3'] } } },
-    MuiInputBase: { styleOverrides: { root: { fontSize: token['type-body'], fontFamily: token['font-family'] }, input: { '&::placeholder': { color: muted, opacity: .8 } } } },
-    MuiNativeSelect: { styleOverrides: { select: { padding: '10px 32px 10px 12px', '&:focus': { backgroundColor: 'transparent' } } } },
-    MuiPaper: { defaultProps: { elevation: 0 }, styleOverrides: { root: { borderRadius: token['radius-medium'], backgroundImage: 'none' }, outlined: { borderColor: outline } } },
-    MuiAccordion: { styleOverrides: { root: { background: 'transparent', borderRadius: '0 !important', '&::before': { display: 'none' }, '&.Mui-expanded': { margin: 0 } } } },
-    MuiAccordionSummary: { styleOverrides: { root: { minHeight: token['touch-target'], padding: `0 ${token['space-3']}`, border: `1px solid ${outline}`, borderRadius: radius,
-      '&:hover,&.Mui-expanded': { backgroundColor: appearance['color-surface-container'] }, '&.Mui-expanded': { minHeight: token['touch-target'] } },
-      content: { minWidth: 0, margin: '8px 0', '&.Mui-expanded': { margin: '8px 0' } },
-      expandIconWrapper: { color: appearance['color-text-secondary'], flexShrink: 0, marginLeft: '12px', '& > svg': { fontSize: '20px', width: '20px', height: '20px' } } } },
-    MuiAccordionDetails: { styleOverrides: { root: { padding: '8px 0 12px' } } },
-    MuiAlert: { styleOverrides: { root: { padding: `${token['space-2']} ${token['space-3']}`, borderRadius: radius, fontSize: token['type-label'], lineHeight: token['line-height-body'], color: appearance['color-text-secondary'], background: appearance['color-primary-container'] }, message: { padding: 0, minWidth: 0 } } },
-    MuiMenuItem: { styleOverrides: { root: { minHeight: token['control-height-row'], fontSize: token['type-label'], borderRadius: radius } } },
-    MuiListItemButton: { styleOverrides: { root: { minHeight: token['control-height-row'], fontSize: token['type-label'] } } },
-    MuiChip: { styleOverrides: { root: { fontSize: token['type-caption'], height: token['chip-height'], borderRadius: token['radius-xs'] } } },
-  },
-});
+  // No `cssVariables` and no `colorSchemes`: MUI stays on its plain theme path,
+  // so the provider never writes a `light`/`dark` class onto <html>. The scheme
+  // lives in `data-reader-scheme`, the attribute `tokens.css` keys its dark
+  // block on, so the palette and the theme cannot disagree.
+  return createTheme({
+    ...options,
+    // Reader is a compact panel; its top heading uses the shared panel scale.
+    typography: { ...options.typography, h1: options.typography?.panelTitle },
+    components: {
+      MuiCssBaseline: { styleOverrides: {
+        body: { color: text, background: appearance['color-surface'], fontFamily: token['font-family'], fontSize: token['type-body'], lineHeight: token['line-height-body'] },
+        'h1,h2': { margin: 0, fontSize: token['type-title-large'], fontWeight: token['weight-semibold'], lineHeight: token['line-height-heading'] },
+        'h3,h4': { margin: 0, fontSize: token['type-title-small'], fontWeight: token['weight-semibold'], lineHeight: token['line-height-heading'] },
+        p: { margin: 0 }, 'button,input,textarea,select': { fontFamily: 'inherit' },
+        'a': { color: primary, textUnderlineOffset: '3px' },
+        '.small,.eyebrow,.settings-kicker,.tool-help,.source,.discussion-source-main,.conversation-message-header,.composer-scope-label,.discussion-scope-label,.image-preview-meta,.provider-feedback,.mode-guidance,.progress-line,.response-more-summary,.history-summary,.history-card-source,.history-detail-meta': caption,
+        '.eyebrow,.settings-kicker': { fontWeight: token['weight-semibold'] },
+        '.field > label,.card-title label,.composer-model-menu > label': { display: 'block', marginBottom: token['space-2'], color: appearance['color-text-secondary'], fontSize: token['type-label'], fontWeight: token['weight-medium'] },
+        '.settings-card': { borderTop: `1px solid ${outline}` },
+        '.MuiFormControl-root:has(input.hidden)': { display: 'none' },
+        '.provider-picker-group h4': { ...caption, fontWeight: token['weight-semibold'] },
+        '.reader-composer-field textarea': { fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
+        '.conversation-message-body,.history-detail-message-body': { color: text, fontSize: readingSize, lineHeight: readingLeading },
+        '.pending-turn .conversation-message.user': { padding: '12px', backgroundColor: appearance['color-surface-container'], borderRadius: '12px 12px 4px 12px' },
+        '.pending-turn .conversation-message-header': { marginBottom: '8px' },
+        '.mark': { borderRadius: radius, background: text, color: appearance['color-inverse-text'], fontSize: token['type-title-small'], fontWeight: token['weight-semibold'] },
+        '.wordmark > span:last-child': { fontSize: token['type-title-small'], fontWeight: token['weight-semibold'] },
+        '.masthead': { borderBottom: `1px solid ${outline}` },
+        '.discussion-source-card': { borderBottom: `1px solid ${outline}`, backgroundColor: appearance['color-surface-container'] },
+        '.discussion-source-main strong': { color: text, fontSize: token['type-label'], fontWeight: token['weight-medium'], lineHeight: token['line-height-control'] },
+        '.history-tab strong': { fontSize: token['type-caption'], fontVariantNumeric: 'tabular-nums' },
+        '.mode-option-content strong': { fontSize: token['type-body'], fontWeight: token['weight-semibold'], lineHeight: token['line-height-control'], color: text },
+        '.mode-option-content > span': caption,
+        '.mode-option-check,.provider-picker-check': { color: primary },
+        '.provider-picker-selected strong,.provider-picker-option strong': { fontSize: token['type-label'], fontWeight: token['weight-semibold'], lineHeight: token['line-height-control'] },
+        '.provider-picker-selected > span,.provider-picker-option small,.provider-picker-group h4': caption,
+        '.provider-logo-dark': { padding: '3px', borderRadius: '4px', background: text },
+        '.provider-feedback[data-state="error"]': { color: appearance['color-danger'] },
+        '.provider-feedback[data-state="ready"],.provider-feedback[data-state="verified"]': { color: appearance['color-success'] },
+        '.first-run-tag': { ...caption, padding: '2px 8px', borderRadius: radius, background: appearance['color-surface-container'], whiteSpace: 'nowrap' },
+        '.first-run-card .small': { color: muted },
+        '.local-model-option': { border: `1px solid ${fieldOutline}`, borderRadius: radius, background: appearance['color-surface'], color: text, fontFamily: token['font-family'], fontSize: token['type-label'], cursor: 'pointer', transition: `border-color ${token['motion-fast']}, background-color ${token['motion-fast']}` },
+        '.local-model-option:hover': { borderColor: primary, background: appearance['color-primary-container'] },
+        '.local-model-option:disabled': { opacity: .55, cursor: 'default' },
+        '.local-model-option strong': { fontSize: token['type-label'], fontWeight: token['weight-semibold'] },
+        '.local-model-option span': { ...caption },
+        '.local-models-result[data-state="error"]': { color: appearance['color-danger'] },
+        '.local-models-result[data-state="ready"] > p': { color: muted },
+        '.settings-save-bar': { background: appearance['color-surface'], borderTop: `1px solid ${outline}` },
+        '.page-notice-container': { background: appearance['color-primary-container'], borderRadius: radius },
+        '.page-notice-container .MuiAlert-root': { p: 0, bgcolor: 'transparent' },
+        '.connection-badge': { ...caption, padding: '4px 8px', borderRadius: radius, background: appearance['color-surface-container'] },
+        '.connection-badge.connected': { color: appearance['color-success'], background: appearance['color-success-container'] },
+        '.composer-resize span': { borderRadius: '4px', background: fieldOutline },
+        '.composer-resize:hover span,.composer-resize:focus-visible span': { background: primary },
+        '.keyboard-navigation .chat-composer:has(textarea:focus-visible)': focus,
+        '#settings-notice[data-result="success"]': { backgroundColor: appearance['color-success-container'], color: appearance['color-success'] },
+        '.dismiss-notice': { color: muted },
+        '.history-toast': { ...caption, background: appearance['color-surface-raised'], border: `1px solid ${outline}`, borderRadius: radius, boxShadow: 'var(--reader-elevation-2)' },
+        '.track': { height: '4px', borderRadius: '4px', background: appearance['color-surface-container'] },
+        '.bar': { background: primary }, '.bar.image': { background: appearance['color-success'] },
+        '.response-section': { border: `1px solid ${outline}`, borderRadius: token['radius-medium'], background: appearance['color-surface-container'], color: text, fontSize: token['type-reading'], lineHeight: token['line-height-reading'] },
+        '.response-section-label': { fontSize: token['type-label'], fontWeight: token['weight-semibold'], color: primary },
+        // Each labelled section carries its own semantic fill, the same
+        // vocabulary the platform uses for evidence, context, inference and
+        // open questions.
+        '.response-section[data-answer-section="evidence"]': { background: appearance['color-evidence-container'] },
+        '.response-section[data-answer-section="background"]': { background: appearance['color-background-container'] },
+        '.response-section[data-answer-section="inference"]': { background: appearance['color-inference-container'] },
+        '.response-section[data-answer-section="limitations"]': { background: appearance['color-limitations-container'] },
+        '.response-section[data-answer-section="background"] .response-section-label': { color: appearance['color-background-context'] },
+        '.response-section[data-answer-section="inference"] .response-section-label': { color: appearance['color-inference'] },
+        '.response-section[data-answer-section="limitations"] .response-section-label': { color: appearance['color-limitations'] },
+        '.response-section p,.response-section li': { fontSize: readingSize, lineHeight: readingLeading },
+        ':is(button,a,[tabindex]):focus-visible': focus,
+        '::selection': { background: appearance['color-primary-container'], color: text },
+      } },
+      MuiButtonBase: { defaultProps: { disableRipple: true }, styleOverrides: { root: {
+        fontFamily: token['font-family'], '&.Mui-focusVisible': focus,
+        '&[data-reader-control="navigation"]': { minWidth: '44px', minHeight: '44px', padding: '6px 8px', gap: '6px', borderBottom: '2px solid transparent', color: muted, fontSize: token['type-label'], whiteSpace: 'nowrap',
+          '&:hover': { bgcolor: 'action.hover' }, '&[aria-pressed="true"],&[aria-current="page"]': { color: primary, borderBottomColor: primary, fontWeight: token['weight-semibold'] } },
+      } } },
+      MuiButton: { defaultProps: { disableElevation: true, disableRipple: true, size: 'small' }, styleOverrides: { root: {
+        minWidth: 0, minHeight: token['control-height'], padding: `${token['space-2']} ${token['space-3']}`, borderRadius: radius, fontSize: token['type-label'], fontWeight: token['weight-medium'], lineHeight: token['line-height-control'], textTransform: 'none',
+        transition: `background-color ${token['motion-fast']}, color ${token['motion-fast']}, border-color ${token['motion-fast']}`,
+        '&:disabled': { opacity: .45, pointerEvents: 'none' }, '&.Mui-disabled:not(:disabled)': { pointerEvents: 'auto', opacity: 1 },
+        '&[data-reader-control="tonal"]': { color: primary, background: appearance['color-primary-container'], '&:hover': { background: appearance['color-primary-container-hover'] } },
+        '&[data-reader-control="mode"]': { position: 'relative', justifyContent: 'flex-start', alignItems: 'flex-start', minHeight: '88px', padding: token['space-3'], textAlign: 'left', whiteSpace: 'normal', width: '100%', color: text,
+          '&[aria-pressed="true"]': { borderColor: primary, background: appearance['color-primary-container'], '& .mode-option-check': { visibility: 'visible' } } },
+        '&[data-reader-control="scope"]': { padding: '4px 8px', minHeight: '32px', color: muted, '&[aria-pressed="true"]': { color: primary, background: appearance['color-primary-container'] } },
+        // Icon-only composer tools. The label lives in the tooltip and the
+        // accessible name, so the toolbar can stay a dense strip of glyphs.
+        '&[data-reader-control="tool"]': { width: '32px', height: '32px', minHeight: '32px', padding: 0, flexShrink: 0, color: appearance['color-text-secondary'],
+          '& svg': { fontSize: '18px', width: '18px', height: '18px' },
+          '&:hover': { background: appearance['color-surface-container'], color: text },
+          '&[aria-pressed="true"]': { color: primary, background: appearance['color-primary-container'] } },
+        // One chip states what the answer will be based on; the menu below it
+        // carries the alternatives.
+        '&[data-reader-control="scope-chip"]': { display: 'inline-flex', alignItems: 'center', gap: '4px', minHeight: '32px', padding: '2px 6px 2px 8px', border: `1px solid ${fieldOutline}`, borderRadius: token['radius-medium'], color: appearance['color-text-secondary'],
+          '& svg': { fontSize: '14px', width: '14px', height: '14px', flexShrink: 0 },
+          '& #composer-scope-label': { fontSize: token['type-label'], lineHeight: token['line-height-control'], whiteSpace: 'nowrap' },
+          '&[aria-expanded="true"]': { borderColor: primary, color: primary, background: appearance['color-primary-container'] },
+          '&[disabled]': { color: muted, opacity: 1, cursor: 'default' } },
+        // The send affordance is the one filled shape in the composer.
+        '&[data-reader-control="submit"]': { width: '34px', height: '34px', minHeight: '34px', padding: 0, borderRadius: '50%', flexShrink: 0, '& svg': { fontSize: '18px', width: '18px', height: '18px' } },
+        '&[data-reader-control="icon"]': { width: '40px', height: '40px', minHeight: '40px', padding: 0, flexShrink: 0 },
+        '&[data-reader-control="compact"]': { minHeight: '32px', padding: '4px 8px' },
+        '&[data-reader-control="provider"]': { display: 'flex', justifyContent: 'flex-start', textAlign: 'left', gap: '12px', width: '100%', minHeight: '64px', padding: '12px', border: `1px solid ${fieldOutline}`, color: text,
+          '&[aria-selected="true"],&[aria-expanded="true"]': { borderColor: primary, background: appearance['color-primary-container'], '& .provider-picker-check': { visibility: 'visible' } } },
+        '&[data-reader-control="followup"]': { justifyContent: 'space-between', gap: '12px', minHeight: '44px', padding: '8px', textAlign: 'left', whiteSpace: 'normal', color: text,
+          '& > span:first-of-type': { minWidth: 0, overflowWrap: 'anywhere' },
+          '& .MuiButton-endIcon': { flexShrink: 0, margin: 0, color: primary },
+          '&:hover': { backgroundColor: appearance['color-surface-container'] } },
+        '&[data-reader-control="model"]': { marginLeft: 'auto', minHeight: '36px', padding: '4px 8px', gap: '8px',
+          '& #composer-model-label': { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+          '& .MuiButton-endIcon': { display: 'flex', flexShrink: 0, margin: 0, transition: `transform ${token['motion-fast']}` },
+          '& .MuiButton-endIcon > svg': { fontSize: '20px', width: '20px', height: '20px' },
+          '&[aria-expanded="true"] .MuiButton-endIcon': { transform: 'rotate(180deg)' },
+          '&:disabled': { color: appearance['color-text-muted'], opacity: 1 },
+          '&:disabled .MuiButton-endIcon': { display: 'none' } },
+      }, startIcon: { marginLeft: 0, marginRight: '8px' } }, variants: [
+        { props: { variant: 'outlined' }, style: { borderColor: fieldOutline, color: appearance['color-text-secondary'], '&:hover': { borderColor: primary, background: appearance['color-surface-container'] } } },
+        { props: { color: 'error' }, style: { color: appearance['color-danger'], borderColor: appearance['color-danger'] } },
+      ] },
+      MuiOutlinedInput: { styleOverrides: { root: { minHeight: token['touch-target'], borderRadius: radius, fontSize: token['type-body'], backgroundColor: appearance['color-surface'],
+        '& .MuiOutlinedInput-notchedOutline': { borderColor: fieldOutline }, '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: muted },
+        '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: primary, borderWidth: '1px' },
+        'html.keyboard-navigation &.Mui-focused': focus,
+        '&.Mui-error .MuiOutlinedInput-notchedOutline': { borderColor: appearance['color-danger'] },
+        '&:has([aria-invalid="true"]) .MuiOutlinedInput-notchedOutline': { borderColor: appearance['color-danger'] },
+      }, input: { padding: `${token['space-2']} ${token['space-3']}`, fontSize: token['type-body'], lineHeight: token['line-height-body'] }, multiline: { padding: token['space-3'] } } },
+      MuiInputBase: { styleOverrides: { root: { fontSize: token['type-body'], fontFamily: token['font-family'] }, input: { '&::placeholder': { color: muted, opacity: .8 } } } },
+      MuiNativeSelect: { styleOverrides: { select: { padding: '10px 32px 10px 12px', '&:focus': { backgroundColor: 'transparent' } } } },
+      // Cards render from their own React roots (`material-runtime.tsx`), which
+      // do not re-render on a scheme change. The outlined variant is the one
+      // those cards use, so its surface stays variable-backed and repaints
+      // immediately; keeping it off `root` leaves Alert/severity fills alone.
+      MuiPaper: { defaultProps: { elevation: 0 }, styleOverrides: {
+        root: { borderRadius: token['radius-medium'], backgroundImage: 'none' },
+        outlined: { borderColor: outline, backgroundColor: appearance['color-surface'] },
+      } },
+      MuiDivider: { styleOverrides: { root: { borderColor: outline } } },
+      MuiAccordion: { styleOverrides: { root: { background: 'transparent', borderRadius: '0 !important', '&::before': { display: 'none' }, '&.Mui-expanded': { margin: 0 } } } },
+      MuiAccordionSummary: { styleOverrides: { root: { minHeight: token['touch-target'], padding: `0 ${token['space-3']}`, border: `1px solid ${outline}`, borderRadius: radius,
+        '&:hover,&.Mui-expanded': { backgroundColor: appearance['color-surface-container'] }, '&.Mui-expanded': { minHeight: token['touch-target'] } },
+        content: { minWidth: 0, margin: '8px 0', '&.Mui-expanded': { margin: '8px 0' } },
+        expandIconWrapper: { color: appearance['color-text-secondary'], flexShrink: 0, marginLeft: '12px', '& > svg': { fontSize: '20px', width: '20px', height: '20px' } } } },
+      MuiAccordionDetails: { styleOverrides: { root: { padding: '8px 0 12px' } } },
+      MuiAlert: { styleOverrides: { root: { padding: `${token['space-2']} ${token['space-3']}`, borderRadius: radius, fontSize: token['type-label'], lineHeight: token['line-height-body'], color: appearance['color-text-secondary'], background: appearance['color-primary-container'] }, message: { padding: 0, minWidth: 0 } } },
+      MuiMenuItem: { styleOverrides: { root: { minHeight: token['control-height-row'], fontSize: token['type-label'], borderRadius: radius } } },
+      MuiListItemButton: { styleOverrides: { root: { minHeight: token['control-height-row'], fontSize: token['type-label'] } } },
+      MuiChip: { styleOverrides: { root: { fontSize: token['type-caption'], height: token['chip-height'], borderRadius: token['radius-xs'] } } },
+    },
+  });
+}
+
+const themes = new Map<ReaderColorScheme, Theme>();
+
+export function readerThemeFor(mode: ReaderColorScheme): Theme {
+  let theme = themes.get(mode);
+  if (!theme) {
+    theme = createReaderTheme(mode);
+    themes.set(mode, theme);
+  }
+  return theme;
+}
+
+/**
+ * Material roots mounted by `material-runtime.tsx` sit outside the provider, so
+ * they cannot subscribe to the preference. They read this live binding again on
+ * every render; a module-level live binding is the only hook available without
+ * giving those roots their own theme provider.
+ */
+export let readerTheme = readerThemeFor('light');
+
+// Set the attribute before the first render so a dark operating system never
+// paints the light `:root` block for one frame. The provider replaces it with
+// the stored preference as soon as storage answers.
+if (typeof document !== 'undefined') {
+  document.documentElement.dataset.readerScheme = resolveColorScheme('system', systemPrefersDark());
+}
+
 export function ReaderThemeProvider({ children }: { children: React.ReactNode }) {
-  // One scheme, one theme, no mode storage. The theme carries no colour
-  // schemes, so the provider never writes a `light`/`dark` class onto
-  // <html>: the panel, the history page and the in-page controls cannot
-  // disagree about which palette is active.
-  return <ThemeProvider theme={readerTheme}>
+  const [mode, setMode] = React.useState<ReaderColorScheme>(() => resolveColorScheme('system', systemPrefersDark()));
+
+  React.useEffect(() => {
+    let preference: ReaderColorSchemePreference = 'system';
+    const apply = () => {
+      const resolved = resolveColorScheme(preference, systemPrefersDark());
+      // `tokens.css` keeps the dark overrides behind this attribute, so the MUI
+      // theme and the CSS-variable bridge must always name the same mode.
+      document.documentElement.dataset.readerScheme = resolved;
+      readerTheme = readerThemeFor(resolved);
+      setMode(resolved);
+    };
+    apply();
+    const query = typeof window.matchMedia === 'function' ? window.matchMedia(DARK_QUERY) : null;
+    query?.addEventListener?.('change', apply);
+    const storage = readerStorage();
+    void Promise.resolve(storage?.local?.get?.(READER_COLOR_SCHEME_KEY)).then(stored => {
+      preference = normalizeColorSchemePreference(stored?.[READER_COLOR_SCHEME_KEY]);
+      apply();
+    }).catch(() => {});
+    const onChanged = (changes: Record<string, ReaderStorageChange>, area: string) => {
+      if (area !== 'local' || !changes[READER_COLOR_SCHEME_KEY]) return;
+      preference = normalizeColorSchemePreference(changes[READER_COLOR_SCHEME_KEY].newValue);
+      apply();
+    };
+    storage?.onChanged?.addListener?.(onChanged);
+    return () => {
+      query?.removeEventListener?.('change', apply);
+      storage?.onChanged?.removeListener?.(onChanged);
+    };
+  }, []);
+
+  // Reading typography is a separate axis from colour: it never re-themes the
+  // provider, it only republishes three custom properties on <html>. Writing
+  // them at document level means both provider hosts (the side panel and the
+  // history page) feed one source to the MUI CssBaseline and to the plain
+  // `reader-ui.css` markdown rules, without threading a prop through either.
+  React.useEffect(() => {
+    const root = document.documentElement;
+    const apply = (value: unknown) => {
+      const scale = normalizeTypeScale(value);
+      // The attribute is the stable hook for rules that want to react to the
+      // step; the variables are what the existing stylesheets actually read.
+      root.dataset.readerTypeScale = scale;
+      for (const [name, cssValue] of Object.entries(typeScaleVariables(scale))) {
+        root.style.setProperty(name, cssValue);
+      }
+    };
+    // Applying the default before storage answers is a no-op visually: its
+    // values are what the token fallbacks already resolve to, so there is no
+    // flash of a different size on first paint.
+    apply(undefined);
+    const storage = readerStorage();
+    void Promise.resolve(storage?.local?.get?.(READER_TYPE_SCALE_KEY)).then(stored => {
+      apply(stored?.[READER_TYPE_SCALE_KEY]);
+    }).catch(() => {});
+    const onChanged = (changes: Record<string, ReaderStorageChange>, area: string) => {
+      if (area !== 'local' || !changes[READER_TYPE_SCALE_KEY]) return;
+      apply(changes[READER_TYPE_SCALE_KEY].newValue);
+    };
+    storage?.onChanged?.addListener?.(onChanged);
+    return () => storage?.onChanged?.removeListener?.(onChanged);
+  }, []);
+
+  return <ThemeProvider theme={readerThemeFor(mode)}>
     <CssBaseline enableColorScheme />
     {children}
   </ThemeProvider>;

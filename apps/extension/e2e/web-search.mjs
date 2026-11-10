@@ -52,8 +52,15 @@ const context = await chromium.launchPersistentContext(`${root}/profile`, {
   args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
 });
 await context.route('https://search.brave.com/**', async route => {
-  networkRequests.push({ url: route.request().url(), headers: route.request().headers() });
+  networkRequests.push({ url: route.request().url(), headers: route.request().headers(), provider: 'brave' });
   await route.fulfill({ status: 200, contentType: 'text/html', body: '<div data-type="web"><a href="https://react.dev/learn"><div class="title snippet">React official docs</div></a><div class="content snippet">React builds interfaces from components.</div></div>' });
+});
+// Both providers are started at once, so the fallback has to be routed too.
+// An empty result keeps Brave the deterministic winner instead of letting a
+// real Bing request decide the assertion.
+await context.route('https://www.bing.com/**', async route => {
+  networkRequests.push({ url: route.request().url(), headers: route.request().headers(), provider: 'bing' });
+  await route.fulfill({ status: 200, contentType: 'application/rss+xml', body: '<rss version="2.0"><channel></channel></rss>' });
 });
 try {
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
@@ -142,9 +149,10 @@ try {
   await panel.locator('#question-input').fill('Find the current React documentation.'); await panel.locator('#send-question').click();
   await panel.locator('#conversation-list').getByText('Standalone answer with external context', { exact: false }).waitFor({ timeout: 15000 });
   assert.equal(standalonePlans, 1);
-  assert.equal(networkRequests.length, 1);
-  assert.equal(networkRequests[0].headers.authorization, undefined, 'search request has no model API key');
-  assert.equal(new URL(networkRequests[0].url).searchParams.get('q'), 'React documentation');
+  const braveRequests = networkRequests.filter((item) => item.provider === 'brave');
+  assert.equal(braveRequests.length, 1, `brave 应只请求一次：${JSON.stringify(networkRequests.map((item) => item.provider))}`);
+  assert.equal(networkRequests.every((item) => item.headers.authorization === undefined), true, '搜索请求不带模型 API Key');
+  assert.equal(new URL(braveRequests[0].url).searchParams.get('q'), 'React documentation');
   assert.equal(await panel.locator('.answer-web-sources a').last().getAttribute('href'), 'https://react.dev/learn');
-  console.log(JSON.stringify({ ok: true, standalonePlans, standaloneSearches: networkRequests.length, searches, answers: answers.length, screenshot: `${root}/web-search-en.png`, root }));
+  console.log(JSON.stringify({ ok: true, standalonePlans, standaloneSearches: networkRequests.filter((item) => item.provider === 'brave').length, searches, answers: answers.length, screenshot: `${root}/web-search-en.png`, root }));
 } finally { await context.close(); await new Promise(resolve => server.close(resolve)); }

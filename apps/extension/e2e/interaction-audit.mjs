@@ -300,6 +300,22 @@ try {
     if (selector === '#chat-translate') { await openScopeMenu(page); await page.locator('#scope-page').click(); }
     await page.locator(selector).click();
   };
+  // The content script drops the last selection whenever page mutations
+  // settle (400ms debounce). Pressing the shortcut inside that window does
+  // nothing, so wait for quiet before using it.
+  const waitForPageQuiet = async (windowMs = 500) => {
+    await article.evaluate(async (quietMs) => {
+      await new Promise((resolve) => {
+        let timer = setTimeout(() => { observer.disconnect(); resolve(); }, quietMs);
+        const observer = new MutationObserver(() => {
+          clearTimeout(timer);
+          timer = setTimeout(() => { observer.disconnect(); resolve(); }, quietMs);
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        setTimeout(() => { observer.disconnect(); resolve(); }, quietMs * 8);
+      });
+    }, windowMs);
+  };
   const selection = async () => {
     await article.locator('#source').evaluate(el => {
       const range = document.createRange(); range.selectNodeContents(el);
@@ -408,9 +424,41 @@ try {
   const auditSelectionPopup = async () => {
   if (await page.locator('#restore-page').isVisible()) await page.locator('#restore-page').click();
   await selection();
-  await article.keyboard.press('Alt+Shift+t');
   const translation = article.locator('[data-deep-research-selection-translation]');
-  await translation.waitFor();
+  const openPopup = async () => {
+    await waitForPageQuiet();
+    await article.keyboard.press('Alt+Shift+t');
+    try {
+      await translation.waitFor({ timeout: 8_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // One bounded retry: a mutation that lands between the quiet check and the
+  // keypress still clears the stored selection.
+  if (!(await openPopup())) {
+    await selection();
+    assert.equal(await openPopup(), true, '再次选中后选段翻译仍未出现');
+  }
+  await translation.waitFor({ timeout: 30_000 });
+  // Click through the page instead of Playwright's actionability checks: a
+  // page refresh may replace the host at any moment, and this assertion is
+  // about theme colours, not hit-testing.
+  const clickPopupControl = async (selector) => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const clicked = await article.evaluate((sel) => {
+        const host = document.querySelector('[data-deep-research-selection-translation]');
+        const button = host?.shadowRoot?.querySelector(sel);
+        if (!button) return false;
+        button.click();
+        return true;
+      }, selector);
+      if (clicked) return;
+      await article.waitForTimeout(250);
+    }
+    throw new Error(`选段翻译浮层缺少 ${selector}`);
+  };
   const inspectTranslation = () => translation.evaluate(host => ({
     token: host.style.getPropertyValue('--reader-color-surface-raised'),
     background: getComputedStyle(host.shadowRoot.querySelector('.panel')).backgroundColor,
@@ -420,12 +468,29 @@ try {
   assert.ok(normal.token);
   assert.notEqual(normal.background, 'rgba(0, 0, 0, 0)');
   assert.equal(normal.opacity, '1');
-  await translation.locator('.expand').click();
+  // The panel may re-apply the same translation after a page refresh. Wait for
+  // the panel box to stop moving before clicking a control inside it.
+  await article.waitForFunction(() => {
+    const host = document.querySelector('[data-deep-research-selection-translation]');
+    if (!host) return false;
+    const rect = host.getBoundingClientRect();
+    const stamp = `${Math.round(rect.top)}:${Math.round(rect.left)}:${Math.round(rect.height)}`;
+    const previous = host.dataset.stableStamp;
+    host.dataset.stableStamp = stamp;
+    return previous === stamp;
+  }, null, { timeout: 10_000 });
+  await clickPopupControl('.expand');
   assert.deepEqual(await inspectTranslation(), normal, '放大时保留同一组主题颜色');
-  await translation.locator('.expand').click();
+  await clickPopupControl('.expand');
   assert.deepEqual(await inspectTranslation(), normal, '恢复尺寸后仍为不透明背景');
   await article.screenshot({ path: `${artifacts}/selection-translation-opacity.png` });
-  await translation.locator('.close').click();
+  // A page refresh during the test clears the overlay by design; recreate it
+  // once so the close control is still exercised instead of skipping it.
+  if (!(await translation.count())) {
+    await selection();
+    assert.equal(await openPopup(), true, '重新创建浮层失败');
+  }
+  await clickPopupControl('.close');
   checks.push('选段翻译浮窗初始、放大、恢复尺寸均保留不透明主题背景');
   };
 
@@ -438,6 +503,8 @@ try {
   await page.locator('#confirm-save').click();
   await page.locator('#save-notice').filter({ hasText: '原文摘录' }).waitFor();
   await page.locator('#save-quote').fill(source);
+  await page.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await page.locator('#save-highlight').waitFor({ state: 'visible' });
   await page.locator('#save-highlight').check();
   await page.locator('#save-note').fill('audit note');
   await page.locator('#confirm-save').dblclick();
@@ -452,6 +519,8 @@ try {
   await page.locator('#save-dialog').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#save-note').inputValue(), 'audit note', '再次保存相同选段会编辑原记录');
   await page.locator('#save-note').fill('audit updated note');
+  await page.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await page.locator('#save-highlight').waitFor({ state: 'visible' });
   await page.locator('#save-highlight').uncheck();
   await page.locator('#confirm-save').dblclick();
   await page.locator('#save-dialog').waitFor({ state: 'hidden' });

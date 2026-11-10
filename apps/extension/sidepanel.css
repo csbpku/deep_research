@@ -14,7 +14,13 @@ h1, h2, h3, p { margin:0 }
 .shell[data-workspace-view="library"] .discussion-panel, .shell[data-workspace-view="library"] .page-overview-scroll > :not(#reading-section) { display:none }
 .source { overflow-wrap:anywhere }
 .section-label { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:var(--reader-space-5) }
-.section-actions { display:flex; align-items:center; gap:8px }
+.section-actions { display:flex; align-items:center; gap:8px; min-width:0 }
+/* The library header carries a format picker plus two actions. In a 320px
+   English panel they must wrap instead of pushing the last action off-panel. */
+#reading-section > .section-label { flex-wrap:wrap; row-gap:var(--reader-space-1) }
+#reading-section .section-actions { flex:1 1 auto; flex-wrap:wrap; justify-content:flex-end }
+#reading-section .section-actions > .MuiFormControl-root { flex:0 1 auto; width:auto; min-width:0; max-width:40% }
+
 #reading-section > .section-label { margin-top:0 }
 .discussion-panel { display:flex; flex-direction:column; min-height:0; flex:1 }
 .discussion-heading { display:none }
@@ -52,6 +58,7 @@ h1, h2, h3, p { margin:0 }
 .stream-answer { margin-top:var(--reader-space-2) }
 .answer-structured { margin-top:var(--reader-space-4) }
 .answer-part { margin-top:var(--reader-space-3) }
+.answer-coverage { margin-top:var(--reader-space-2) }
 .answer-part > :last-child { margin-top:var(--reader-space-2) }
 .answer-part ul { padding-left:var(--reader-space-5) }
 .evidence-list { display:grid; gap:8px }
@@ -136,10 +143,16 @@ h1, h2, h3, p { margin:0 }
 .library-filters { display:grid; grid-template-columns:minmax(0, 1fr); gap:var(--reader-space-3); margin-top:var(--reader-space-4) }
 .library-filters .field { margin-top:0 }
 .library-summary, .library-notice { margin-top:var(--reader-space-3) }
+.library-ask-panel { margin-top:var(--reader-space-3); padding:var(--reader-space-3) }
+.library-ask-row { display:flex; align-items:center; gap:var(--reader-space-2) }
+.library-ask-row > :first-child { flex:1; min-width:0 }
+.library-ask-answer { margin-top:var(--reader-space-2); user-select:text; overflow-wrap:anywhere }
+.library-citations { display:flex; flex-wrap:wrap; align-items:center; gap:var(--reader-space-2); margin-top:var(--reader-space-2) }
+.library-citation { font-size:var(--reader-type-caption); text-decoration:none; color:var(--reader-color-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100% }
 .library-pagination { display:flex; align-items:center; justify-content:space-between; gap:var(--reader-space-2); margin-block:var(--reader-space-4) }
 .library-pagination span { font-variant-numeric:tabular-nums; text-align:center }
 .platform-data-details { margin-top:var(--reader-space-4) }
-@media (min-width: 520px) { .library-filters { grid-template-columns:minmax(0, 1fr) minmax(140px, 0.55fr); align-items:end } }
+@media (min-width: 520px) { .library-filters { grid-template-columns:minmax(0, 1fr) minmax(120px, 0.45fr) minmax(120px, 0.45fr); align-items:end } }
 .actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:var(--reader-space-4) }
 .field { margin-top:var(--reader-space-4) }
 .field label { display:block; margin-bottom:var(--reader-space-2) }
@@ -191,9 +204,40 @@ h1, h2, h3, p { margin:0 }
 .card-title { display:flex; justify-content:space-between; gap:8px }
 .quote { margin-top:var(--reader-space-2); max-height:min(180px,24dvh); overflow:auto; padding:var(--reader-space-2) var(--reader-space-3); white-space:pre-wrap; overflow-wrap:anywhere; user-select:text }
 .image-preview { margin-top:var(--reader-space-2) }
-.sync-strip, .saved-insight-banner { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; margin-top:var(--reader-space-3); padding:var(--reader-space-3) }
-.sync-strip strong, .sync-strip span, .saved-insight-banner strong, .saved-insight-banner span { display:block }
-.sync-strip span, .saved-insight-banner span { margin-top:var(--reader-space-1) }
+/* Save dialog: excerpt and note stay visible, secondary fields collapse into
+   one disclosure, and the two actions live in a sticky footer that is visible
+   before any scrolling. The bar sits in normal flow, so its own height is
+   always reserved; short panels additionally pad the scroll content. */
+#save-dialog { --save-action-bar-height: calc(var(--reader-control-height) + var(--reader-space-2) * 2 + 1px); display:flex; flex-direction:column; overflow-x:hidden; padding-bottom:0 }
+/* Focus scrolling must leave the sticky bar uncovered. `scroll-padding` is
+   deliberately not used here: it also shrinks the sticky view rectangle and
+   would lift the bar off the bottom edge. */
+#save-dialog :is(input, textarea) { scroll-margin-bottom: calc(var(--save-action-bar-height) + var(--reader-space-2)) }
+#save-dialog > * { flex-shrink:0 }
+.save-dialog-fields { flex:1 0 auto; min-height:0 }
+#save-quote { max-height:min(180px, 28dvh); overflow-y:auto; resize:none }
+#save-note { max-height:min(140px, 22dvh); overflow-y:auto; resize:none }
+#save-more-options { margin-top:var(--reader-space-4) }
+.save-more-options .MuiAccordionSummary-content { align-items:center; min-width:0 }
+.save-more-options .MuiAccordionSummary-content > span { overflow-wrap:anywhere }
+.save-action-bar { position:sticky; bottom:0; z-index:3; display:flex; flex:none; align-items:center; flex-wrap:nowrap; gap:var(--reader-space-2); margin:var(--reader-space-4) calc(-1 * var(--reader-space-4)) 0; padding:var(--reader-space-2) var(--reader-space-4); border-top:1px solid var(--reader-color-outline); background:var(--reader-color-surface) }
+.save-action-bar .save-action-primary { flex:1 1 auto }
+.save-action-bar .save-action-secondary { flex:0 0 auto }
+.save-action-bar button { white-space:nowrap }
+@media (min-width: 600px) { .save-action-bar { margin-inline:calc(-1 * var(--reader-space-6)); padding-inline:var(--reader-space-6) } }
+@media (max-height: 700px) { .save-dialog-fields { padding-bottom:var(--save-action-bar-height) } }
+.sync-strip { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; margin-top:var(--reader-space-3); padding:var(--reader-space-3) }
+.sync-strip strong, .sync-strip span { display:block }
+.sync-strip span { margin-top:var(--reader-space-1) }
+/* One status row, not a card: the banner repeats the item that already sits
+   in the list below, so it must not take the top half of the first screen.
+   Both text ids stay in the DOM (the controller writes them) and truncate
+   instead of pushing the button off the row. */
+.saved-insight-banner { display:flex; flex-wrap:nowrap; justify-content:space-between; align-items:center; gap:var(--reader-space-2); max-height:56px; margin-top:var(--reader-space-3); padding:var(--reader-space-1) var(--reader-space-2) var(--reader-space-1) var(--reader-space-3); overflow:hidden }
+.saved-insight-text { display:grid; flex:1 1 auto; min-width:0; gap:0 }
+.saved-insight-banner strong { display:block; font-size:var(--reader-type-label); font-weight:var(--reader-weight-semibold); line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.saved-insight-banner span { display:block; margin:0; font-size:var(--reader-type-caption); line-height:1.4; color:var(--reader-color-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.saved-insight-banner button { flex:none; white-space:nowrap }
 .sync-actions { display:flex; flex-wrap:wrap; gap:8px }
 .row-main { flex:1; min-width:0 }
 .row-meta { margin-top:var(--reader-space-1) }
@@ -221,10 +265,33 @@ h1, h2, h3, p { margin:0 }
 
 .MuiFormControl-root:has(input.hidden) { display: none; }
 .dismiss-notice { grid-column: 2; grid-row: 1; }
+.guide-card { display:grid; gap:var(--reader-space-2); margin-top:var(--reader-space-4); padding:var(--reader-space-3) }
+.guide-head { display:flex; align-items:center; justify-content:space-between; gap:var(--reader-space-2) }
+.guide-steps { display:grid; gap:var(--reader-space-1); justify-items:start }
+.guide-steps > button { justify-self:start; text-align:left }
+.guide-steps > button.is-done { color:var(--reader-color-success) }
+.guide-steps > button.is-done::before { content:'✓ '; }
+.first-run-paths { display:grid; gap:var(--reader-space-2); margin-top:var(--reader-space-4) }
+.first-run-card { display:grid; gap:var(--reader-space-2); padding:var(--reader-space-3) }
+.first-run-card p { margin:0 }
+.first-run-card-head { display:flex; align-items:center; justify-content:space-between; gap:var(--reader-space-2) }
+.first-run-card > button { justify-self:start }
+.local-models-result { display:grid; gap:var(--reader-space-1) }
+.local-model-option { display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; min-height:44px; padding:6px 10px; text-align:left }
+.local-model-option > * { min-width:0; overflow-wrap:anywhere }
+.settings-save-bar { position:sticky; bottom:0; z-index:2; margin-top:var(--reader-space-4); padding-block:var(--reader-space-3) var(--reader-space-2) }
 .page-notice-container { grid-template-columns: minmax(0,1fr) 40px; }
 .chat-selection-card blockquote { line-height: 20px; }
 .translation-failure-row { display: block; }
 .insight-row .actions { margin-top: var(--reader-space-3); }
+/* Library cards: one scannable block of title, source, time and tags. The
+   controller renders these nodes, so only their type scale and colour are
+   adjusted here; no id, label or action is removed. */
+.insight-row .row-title { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; font-size:var(--reader-type-reading); font-weight:var(--reader-weight-semibold); line-height:var(--reader-line-height-heading); overflow-wrap:anywhere }
+.insight-row .history-card-source { font-size:var(--reader-type-caption); line-height:var(--reader-line-height-control); color:var(--reader-color-text-muted) }
+.insight-row .row-meta { font-size:var(--reader-type-caption); line-height:var(--reader-line-height-control); color:var(--reader-color-text-muted); font-variant-numeric:tabular-nums }
+.insight-row .MuiChip-root { max-width:100%; border:1px solid var(--reader-color-outline); background:var(--reader-color-surface-container); color:var(--reader-color-text-secondary); font-size:var(--reader-type-micro); font-weight:var(--reader-weight-medium) }
+.insight-row .MuiChip-label { min-width:0; padding-inline:var(--reader-space-2); overflow:hidden; text-overflow:ellipsis }
 
 #image-preview-thumbnail { float:left; width:64px; height:48px; object-fit:contain; margin:0 var(--reader-space-2) var(--reader-space-1) 0; border-radius:4px }
 .image-preview { min-height:48px }

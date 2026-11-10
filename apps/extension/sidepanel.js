@@ -3,8 +3,18 @@ import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecor
 import { t, getUiLanguage, setUiLanguage } from './i18n.js';
 import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './answer-task.js';
 import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
+import { answerCoverage } from './answer-presentation.js';
+import { estimateAnswer, estimateTokens, estimateTranslation, formatTokens } from './cost-estimate.js';
+import { USAGE_KEY, mergeUsage, pruneUsage, usageDay, usageSummary } from './usage-meter.js';
+import { isBundledDemoUrl, requestDemoContext } from './reader-demo.js';
+import { SITE_RULES_KEY, normalizeSiteRules, setSiteRule, siteRuleFor } from './site-rules.js';
+import { glossaryPrompt, parseGlossary, serializeGlossary } from './glossary.js';
+import { detectLocalModels } from './local-models.js';
 import { readerStore } from './reader-store.js';
-import { createLibraryDeletion, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
+import { createLibraryDeletion, libraryFacets, libraryItems, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
+import { libraryFileName, libraryMarkdown } from './reader-export.js';
+import { buildLibraryAnswerMessages, parseLibraryAnswer, selectLibraryEvidence } from './library-answer.js';
+import { exportNotion, exportObsidian, exportSingleRecord } from './export-formats.js';
 import {
   prepareVisionImage,
   applyTextTranslations,
@@ -13,7 +23,9 @@ import {
   translationContext,
   translationBatches,
   readingAnswerText,
+  messageText,
   boundTaskContext,
+  answerCitationText,
   buildAnnotationUrl,
   loadProvider,
   makeDocument,
@@ -117,7 +129,21 @@ let activationNeeded = null;
 let pageReadState = 'idle';
 let lastSavedInsight = null;
 let insightSyncFailed = false;
-const libraryView = { query: '', kind: 'all', page: 1 };
+const libraryView = { query: '', kind: 'all', page: 1, tag: '' };
+// Site rules and the glossary are small, user-visible preferences. They are
+// kept in memory for the panel session and persisted separately: rules in
+// chrome.storage (shared with the content script), glossary in the reader
+// store so it travels with export/import.
+let siteRules = {};
+// Local, counter-only usage. Nothing here may carry page text or credentials.
+let usageState = { days: {}, totals: {} };
+let translationModel = '';
+let pricing = { inputPerMillion: 0, outputPerMillion: 0 };
+let glossaryEntries = [];
+let currentSiteHost = '';
+let libraryShelf = [];
+// First-run guide: three concrete actions against the bundled demo article.
+let guideState = { demo: false, translate: false, ask: false, dismissed: false };
 const libraryDeletion = createLibraryDeletion(readerStore);
 let libraryRenderRequest = 0;
 let libraryMutationBusy = false;
@@ -270,6 +296,7 @@ function setWorkspaceView(view) {
     button?.classList.toggle('active', name === view);
     button?.setAttribute('aria-pressed', String(name === view));
   }
+  renderGuide();
 }
 
 function setupWorkspaceLayout() {
@@ -462,6 +489,13 @@ function pageReadDescriptor(context = pageContext || documentContext) {
   const bounded = context.bodyTruncated || context.blocksTruncated;
   const details = [t("{0} 个正文块", blocks), t("{0} 字符", chars.toLocaleString())];
   if (bounded) details.push(t("已按上下文上限截取"));
+  if (context.scopePartial) {
+    return {
+      state: 'partial',
+      label: t("正文可能不完整"),
+      detail: t("已读取 {0} 个正文块，页面其余正文可能不在已识别区域内；请以选段或原文为准。", blocks),
+    };
+  }
   return { state: 'ready', label: t("正文已读取"), detail: details.join(' · ') };
 }
 
@@ -473,6 +507,7 @@ function updatePageContextUi(context = pageContext || documentContext || selecti
     status.textContent = descriptor.label;
     status.classList.toggle('is-ready', descriptor.state === 'ready');
     status.classList.toggle('is-error', descriptor.state === 'error');
+    status.classList.toggle('is-partial', descriptor.state === 'partial');
     status.classList.toggle('is-loading', descriptor.state === 'loading' || descriptor.state === 'idle');
   }
   if (meta) meta.textContent = descriptor.detail;
@@ -555,6 +590,10 @@ function textModelReady() {
   return readingMode === 'platform' ? platformConnected : providerReady(provider);
 }
 
+function platformDemoUnsupported(context) {
+  return readingMode === 'platform' && isBundledDemoUrl(context?.url, chrome.runtime.getURL('demo.html'));
+}
+
 function updateAiAvailabilityBanner() {
   const banner = $('ai-availability-banner');
   const message = $('ai-availability-message');
@@ -563,9 +602,15 @@ function updateAiAvailabilityBanner() {
   const hasReadableContext = contextHasReadableBody(pageContext || documentContext)
     || Boolean(selectionContext?.selection?.quote)
     || Boolean(imageContext?.image);
-  const ready = textModelReady();
+  const demoUnsupported = platformDemoUnsupported(pageContext || documentContext || selectionContext);
+  const ready = textModelReady() && !demoUnsupported;
   show(banner, hasReadableContext && !ready);
   if (!hasReadableContext || ready) return;
+  if (demoUnsupported) {
+    message.textContent = t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。");
+    action.textContent = t("切换独立模式");
+    return;
+  }
   const platform = readingMode === 'platform';
   message.textContent = platform
     ? t("平台模式尚未连接，问答、总结和翻译暂不可用。")
@@ -638,6 +683,7 @@ async function setReadingMode(mode) {
   await syncSearchPermissions();
   updateReadingModeUi();
   renderEmptyState();
+  renderLibraryAskAvailability();
   if (readingMode === 'platform' && !platformConnected) showSettings();
   try {
     await readerStore.setSetting('readingMode', readingMode);
@@ -678,7 +724,10 @@ async function changeTranslationLanguage(value) {
 }
 
 function readingProvider(language = currentTranslationLanguage()) {
-  return provider ? { ...provider, language } : provider;
+  // Translation may use a cheaper model than chat; an empty override keeps
+  // the single-model setup unchanged.
+  const model = String(translationModel || '').trim();
+  return provider ? { ...provider, language, ...(model ? { model } : {}) } : provider;
 }
 
 function providerPreset(kind) {
@@ -736,6 +785,16 @@ function renderStructuredAnswer(result) {
     onLocate: item.anchor?.quote ? () => focusReadingAnchor(item.anchor) : undefined,
   })));
   show(evidencePart, evidenceList.childElementCount > 0);
+  // Tell the reader how much of the article the evidence actually covers.
+  // A "no evidence" note would duplicate the existing warning, so only a
+  // positive count or a truncation notice is shown here.
+  const coverageNode = $('answer-coverage');
+  if (coverageNode) {
+    const coverage = answerCoverage(latestAnswerContext || {}, answer, { translate: t });
+    const coverageVisible = Boolean(coverage.note) && (coverage.evidenceCount > 0 || coverage.truncated);
+    coverageNode.textContent = coverageVisible ? coverage.note : '';
+    show(coverageNode, coverageVisible);
+  }
   renderMarkdown($('answer-background-text'), answer.background || '');
   bindCitationReferences($('answer-background-text'), evidenceItems);
   show(backgroundPart, Boolean(answer.background));
@@ -768,19 +827,16 @@ function answerClipboardText() {
   const answer = latestStructuredAnswer && typeof latestStructuredAnswer === 'object'
     ? latestStructuredAnswer
     : { answer: latestAnswer };
-  const lines = [String(answer.answer || latestAnswer || '').trim()];
+  // The shared builder keeps the answer and its grounded quotes together, so
+  // a pasted conclusion still carries what it was based on. Web sources and
+  // the inference stay outside it: they are not original-page evidence.
+  const lines = [answerCitationText(
+    { answer: answer.answer || latestAnswer || '', evidence: Array.isArray(answer.evidence) ? answer.evidence : [] },
+    { url: contextUrl(), translate: t },
+  )];
   if (answer.searchStatus === 'unavailable') lines.push('', t('联网搜索暂不可用，本次依据原文回答，未核实最新网络信息。'));
   if (answer.webSources?.length) lines.push('', t('网络来源 · 搜索摘要'), ...answer.webSources.map((item, i) => `[W${i + 1}] ${item.title} ${item.url}`));
-  const evidence = Array.isArray(answer.evidence) ? answer.evidence : [];
-  if (evidence.length) {
-    lines.push('', t("原文证据"));
-    evidence.forEach((item, index) => {
-      const quote = String(item?.quote || '').trim();
-      const claim = String(item?.claim || '').trim();
-      if (quote) lines.push(`[${index + 1}] ${quote}${claim ? `：${claim}` : ''}`);
-    });
-  }
-  if (answer.inference) lines.push('', t("AI 推断：{0}", answer.inference));
+  if (answer.inference) lines.push('', t('AI 推断：{0}', answer.inference));
   return lines.join('\n').trim();
 }
 
@@ -893,6 +949,7 @@ function translationCoverageWarning(context) {
 
 function saveLocalSession() {
   if (!contextUrl()) return;
+  hasReadingHistory = true;
   const pageVersion = documentContext?.contentHash || pageContext?.contentHash || selectionContext?.contentHash || null;
   const snapshot = {
     url: contextUrl(),
@@ -1177,16 +1234,22 @@ function syncConversationEmptyState(noMessages = discussionHistory.every((item) 
 }
 
 function renderEmptyState() {
+  renderEmptyStateContent();
+  renderFirstRunPaths();
+  renderGuide();
+}
+
+function renderEmptyStateContent() {
   const title = $('empty-title');
   const description = $('empty-description');
   const primary = $('empty-settings');
   if (!title || !description || !primary) return;
   if (!textModelReady()) {
-    title.textContent = readingMode === 'platform' ? t("平台模式尚未连接。") : t("独立模式尚未配置模型。");
+    title.textContent = readingMode === 'platform' ? t("平台模式尚未连接。") : t("先准备阅读模型。");
     description.textContent = readingMode === 'platform'
       ? t("连接并登录调研平台后，问答与全文翻译即可使用平台 AI Engine。")
-      : t("配置本地模型，或在设置中切换到平台模式并连接调研平台。");
-    primary.textContent = readingMode === 'platform' ? t("连接调研平台") : t("配置独立模型");
+      : t("Reader 不自带模型：它调用你选择的模型服务。正文只在你发起翻译或提问时发送。");
+    primary.textContent = readingMode === 'platform' ? t("连接调研平台") : t("配置模型");
     primary.disabled = false;
     show(primary, true);
     return;
@@ -1218,6 +1281,204 @@ function renderEmptyState() {
   primary.textContent = t("开始阅读当前页");
   primary.disabled = false;
   show(primary, true);
+}
+
+// First-run block: the primary action and the loopback probe live together,
+// so a user without an API key still has a path that ends in a working model.
+let localModelFindings = null;
+let localModelDetection = 'idle';
+let localModelError = '';
+let hasReadingHistory = false;
+
+function boundedPromise(promise, timeoutMs, fallback) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise((resolve) => { setTimeout(() => resolve(fallback), timeoutMs); }),
+  ]);
+}
+
+function renderGuide() {
+  const card = $('guide-card');
+  if (!card) return;
+  const complete = guideState.demo && guideState.translate && guideState.ask;
+  const context = pageContext || documentContext || selectionContext;
+  const settingsOpen = $('settings-view') && !$('settings-view').classList.contains('hidden');
+  const visible = readingMode !== 'platform' && providerReady(provider)
+    && (!context?.url || isBundledDemoUrl(context.url, chrome.runtime.getURL('demo.html')))
+    && document.querySelector('.shell')?.dataset.workspaceView === 'chat'
+    && !settingsOpen && !guideState.dismissed && !complete;
+  show(card, visible);
+  if (!visible) return;
+  const steps = [
+    ['guide-demo', guideState.demo],
+    ['guide-translate', guideState.translate],
+    ['guide-ask', guideState.ask],
+  ];
+  for (const [id, done] of steps) {
+    const button = $(id);
+    if (!button) continue;
+    button.classList.toggle('is-done', done);
+    button.setAttribute('aria-pressed', String(done));
+  }
+}
+
+async function saveGuideState(patch) {
+  guideState = { ...guideState, ...patch };
+  await chrome.storage.local.set({ readerGuide: guideState });
+  renderGuide();
+}
+
+async function openDemoArticle() {
+  if (readingMode === 'platform') {
+    setNotice(t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。"));
+    return;
+  }
+  const url = chrome.runtime.getURL('demo.html');
+  const tab = await chrome.tabs.create({ url, active: true });
+  // The demo page loads content.js itself; extension pages cannot be injected
+  // by chrome.scripting, so the panel asks for the page context directly.
+  if (Number.isInteger(tab?.id)) {
+    const ready = await requestDemoContext(tab.id, {
+      sendMessage: (tabId, message) => chrome.tabs.sendMessage(tabId, message),
+    });
+    if (!ready) {
+      setNotice(t("示例文章暂未准备好，请稍后重新打开。"));
+      return;
+    }
+  }
+  await saveGuideState({ demo: true });
+  setNotice(t("示例文章已打开：点击“翻译”或直接在下方提问。"));
+}
+
+async function guideTranslate() {
+  if (!pageContext?.url) {
+    await openDemoArticle();
+    return;
+  }
+  if (!textModelReady()) { showModelSetupGuidance(t("全文翻译")); return; }
+  void startFullTranslation();
+}
+
+async function guideAsk() {
+  if (!pageContext?.url) {
+    await openDemoArticle();
+    return;
+  }
+  const input = $('question-input');
+  if (!input) return;
+  input.value = t("这篇文章为什么说有界队列的限制不是为了降低性能？");
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.focus();
+}
+
+function renderFirstRunPaths() {
+  const paths = $('first-run-paths');
+  if (!paths) return;
+  // Platform mode has its own single path (connect the platform), so the
+  // local/API-key pair must not appear next to it.
+  const firstRun = !textModelReady() && readingMode !== 'platform';
+  show(paths, firstRun);
+  if ($('empty-history')) show($('empty-history'), hasReadingHistory);
+  if (!firstRun) return;
+  const button = $('detect-local-models');
+  const result = $('local-models-result');
+  if (!button || !result) return;
+  const loading = localModelDetection === 'loading';
+  button.disabled = loading;
+  button.textContent = loading
+    ? t("正在检测本机服务…")
+    : localModelFindings?.length ? t("重新检测本机模型") : t("检测本机模型");
+  show(result, localModelDetection !== 'idle');
+  if (!loading && localModelDetection !== 'idle') renderLocalModelFindings();
+}
+
+function renderLocalModelFindings() {
+  const result = $('local-models-result');
+  if (!result) return;
+  if (localModelError) {
+    result.dataset.state = 'error';
+    result.textContent = localModelError;
+    return;
+  }
+  const findings = localModelFindings || [];
+  if (!findings.length) {
+    result.dataset.state = 'empty';
+    result.textContent = t("没有检测到本机模型服务。先启动 Ollama 或 LM Studio，或在下方用 API Key 配置云端服务。");
+    return;
+  }
+  result.dataset.state = 'ready';
+  const nodes = findings.map((finding) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'local-model-option';
+    option.dataset.localModel = finding.id;
+    const name = document.createElement('strong');
+    name.textContent = finding.label;
+    const detail = document.createElement('span');
+    detail.textContent = t("{0} 个模型 · 默认 {1}", finding.count, finding.model);
+    option.append(name, detail);
+    option.addEventListener('click', () => void connectLocalModel(finding, option));
+    return option;
+  });
+  const hint = document.createElement('p');
+  hint.className = 'small';
+  hint.textContent = t("选择一项即可直接使用；之后可以在设置里更换模型。");
+  result.replaceChildren(...nodes, hint);
+}
+
+async function detectLocalServices() {
+  if (localModelDetection === 'loading') return;
+  localModelDetection = 'loading';
+  localModelFindings = null;
+  localModelError = '';
+  renderFirstRunPaths();
+  try {
+    // A single gesture covers every loopback origin. Probing without it would
+    // be blocked by Chrome's optional host-permission model.
+    // One origin only: Chrome shows a single prompt, and every loopback
+    // candidate resolves to the same host. A browser that never settles the
+    // prompt must not leave the panel stuck on "checking".
+    const granted = !chrome.permissions?.request || await boundedPromise(
+      chrome.permissions.request({ origins: ['http://127.0.0.1/*'] }),
+      15_000,
+      false,
+    );
+    if (!granted) throw new ModelConnectionError('PERMISSION', t("未允许访问本机服务，检测已取消"));
+    localModelFindings = await detectLocalModels((baseUrl) => discoverModels(
+      { providerKind: 'custom', baseUrl, apiKey: '' },
+      { timeoutMs: 2_000 },
+    ));
+    localModelDetection = localModelFindings.length ? 'ready' : 'empty';
+  } catch (error) {
+    localModelDetection = 'error';
+    localModelFindings = [];
+    localModelError = error instanceof Error ? error.message : t("没有检测到本机模型服务");
+  } finally {
+    renderFirstRunPaths();
+  }
+}
+
+async function connectLocalModel(finding, option) {
+  if (option) option.disabled = true;
+  try {
+    provider = await saveProvider({
+      providerKind: finding.providerKind,
+      baseUrl: finding.baseUrl,
+      model: finding.model,
+      apiKey: '',
+    });
+    providerFieldsDirty = false;
+    await setReadingMode('local');
+    applyProviderFields();
+    renderPersistentComposer();
+    renderEmptyState();
+    setNotice(t("已连接 {0}：{1}。打开文章后即可翻译和提问。", finding.label, finding.model));
+  } catch (error) {
+    localModelError = error instanceof Error ? error.message : t("连接本机模型失败");
+    renderFirstRunPaths();
+  } finally {
+    if (option) option.disabled = false;
+  }
 }
 
 function renderSavedInsightBanner() {
@@ -1305,6 +1566,7 @@ function renderPage() {
   show($('empty-view'), !context);
   show($('page-view'), Boolean(context));
   updateAiAvailabilityBanner();
+  renderGuide();
   if (!context) {
     show($('discussion-section'), false);
     show($('persistent-composer'), false);
@@ -1440,6 +1702,7 @@ async function applyAnnotationsForContext(context) {
 }
 
 async function updateLibrary() {
+  renderLibraryAskAvailability();
   void updatePageKnowledge({ refresh: true });
   const request = ++libraryRenderRequest;
   const list = $('library-list');
@@ -1450,6 +1713,10 @@ async function updateLibrary() {
     const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
     if (request !== libraryRenderRequest) return;
     const visibleAnnotations = annotations.filter(annotation => !annotation.insightId);
+    libraryShelf = libraryItems(insights, visibleAnnotations);
+    // Facets describe the whole shelf, not the current page, so the tag menu
+    // stays stable while the user narrows the list.
+    renderLibraryTagOptions(libraryFacets(libraryShelf).tags);
     const result = libraryPage(insights, visibleAnnotations, libraryView);
     libraryView.page = result.page;
     const records = result.items.map(({ kind, record }) => kind === 'insight'
@@ -1457,12 +1724,14 @@ async function updateLibrary() {
         source: record.url || record.document?.url, detail: record.quote, answer: record.note || record.aiAnswer, tags: record.tags,
         meta: new Date(record.createdAt).toLocaleString(), actions: [
           { label: t("编辑"), action: 'edit', run: () => openSaveDialog(record) },
+          { label: t("复制"), action: 'copy', run: () => void copyRecord({ kind, record }) },
           { label: t("删除"), action: 'delete', danger: true, run: () => void deleteLibraryRecord(kind, record) },
         ] }
       : { key: `${kind}:${record.id}`, className: 'insight-row annotation-row',
         title: record.note || record.document?.title || t("未命名标注"), source: record.document?.url, detail: record.anchor?.quote,
         meta: t("标注 · {0}", new Date(record.updatedAt || record.createdAt).toLocaleString()), actions: [
           { label: t("编辑"), action: 'edit', run: () => void openAnnotationDialog(record) },
+          { label: t("复制"), action: 'copy', run: () => void copyRecord({ kind, record }) },
           { label: t("回到原文"), action: 'focus', run: async () => { try { await chrome.tabs.create({ url: buildAnnotationUrl(record.document.url, record.anchor), active: true }); } catch { setLibraryNotice(t("无法打开原文，请复制来源地址后重试。")); } } },
           { label: t("删除"), action: 'delete', danger: true, run: () => void deleteLibraryRecord(kind, record) },
         ] });
@@ -1475,12 +1744,322 @@ async function updateLibrary() {
     $('library-previous').disabled = result.page === 1;
     $('library-next').disabled = result.page === result.pages;
     show($('library-pagination'), result.pages > 1);
-    show($('clear-library-filters'), Boolean(libraryView.query.trim() || libraryView.kind !== 'all'));
+    show($('clear-library-filters'), Boolean(libraryView.query.trim() || libraryView.kind !== 'all' || libraryView.tag));
   } catch {
     if (request === libraryRenderRequest) setLibraryNotice(t("收藏读取失败，请点击“刷新”重试。"));
   } finally {
     if (request === libraryRenderRequest) list.setAttribute('aria-busy', 'false');
   }
+}
+
+function renderLibraryTagOptions(tags) {
+  const select = $('library-tag');
+  if (!select) return;
+  const current = libraryView.tag;
+  const options = [new Option(t("全部标签"), ''), ...tags.map(tag => new Option(t("{0}（{1} 条）", tag.value, tag.count), tag.value))];
+  if (current && !tags.some(tag => tag.value.toLocaleLowerCase() === current.toLocaleLowerCase())) {
+    // Keep an active filter visible even after its last record is deleted.
+    options.push(new Option(t("{0}（已无匹配）", current), current));
+  }
+  select.replaceChildren(...options);
+  select.value = current;
+}
+
+async function loadUsageSettings() {
+  translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
+  const storedPricing = await readerStore.getSetting('pricing', null);
+  pricing = {
+    inputPerMillion: Math.max(0, Number(storedPricing?.inputPerMillion) || 0),
+    outputPerMillion: Math.max(0, Number(storedPricing?.outputPerMillion) || 0),
+  };
+  const stored = (await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY];
+  // Initialization is read-only. The worker may have committed another event
+  // while settings loaded; no panel may write back its pruned snapshot.
+  usageState = pruneUsage(mergeUsage(usageState, stored), { keepDays: 120 });
+}
+
+function renderUsageSettings() {
+  if (!$('usage-summary')) return;
+  renderUsageSummary();
+  if ($('translation-model')) $('translation-model').value = translationModel;
+  if ($('price-input')) $('price-input').value = pricing.inputPerMillion ? String(pricing.inputPerMillion) : '';
+  if ($('price-output')) $('price-output').value = pricing.outputPerMillion ? String(pricing.outputPerMillion) : '';
+}
+
+async function saveUsageSettings() {
+  const model = String($('translation-model')?.value || '').trim();
+  const input = Math.max(0, Number($('price-input')?.value) || 0);
+  const output = Math.max(0, Number($('price-output')?.value) || 0);
+  translationModel = model;
+  pricing = { inputPerMillion: input, outputPerMillion: output };
+  await readerStore.setSetting('translationModel', model);
+  await readerStore.setSetting('pricing', pricing);
+  $('usage-settings-status').textContent = t("用量设置已保存。");
+}
+
+async function recordUsageEvent(kind, { requests = 0, chars = 0, tokens = 0 } = {}) {
+  if (!requests && !chars && !tokens) return;
+  try {
+    // The service worker serializes writes from every panel. A local fallback
+    // read/modify/write would recreate the lost-update race.
+    const result = await chrome.runtime.sendMessage({
+      type: 'deep-research:record-usage',
+      event: { day: usageDay(), kind, requests, chars, tokens },
+    });
+    if (!result?.ok || !result.usage) return;
+    usageState = mergeUsage(usageState, result.usage);
+    renderUsageSummary();
+  } catch { /* usage is best-effort */ }
+}
+
+function recordAnswerUsage(context, question, answer) {
+  const estimate = estimateAnswer(context || {}, question || '');
+  const outputTokens = estimateTokens(String(answer?.answer || ''));
+  void recordUsageEvent('answer', { requests: 1, chars: estimate.chars, tokens: estimate.inputTokens + outputTokens });
+}
+
+function usageMonthToDate(kind) {
+  const today = usageDay();
+  const [year, month] = today.split('-');
+  return usageSummary(usageState, { from: `${year}-${month}-01`, to: today, kind });
+}
+
+function renderUsageSummary() {
+  const target = $('usage-summary');
+  if (!target) return;
+  const translation = usageMonthToDate('translation');
+  const answer = usageMonthToDate('answer');
+  if (!translation.requests && !answer.requests) {
+    target.textContent = t("本月还没有调用模型。");
+    return;
+  }
+  target.textContent = t("本月：翻译 {0} 次请求 / {1} 字符；问答 {2} 次。", translation.requests,
+    formatTokens(translation.chars), answer.requests);
+}
+
+function renderSiteRule() {
+  const select = $('site-rule-mode');
+  const hint = $('site-rule-hint');
+  if (!select || !hint) return;
+  const url = pageContext?.url || documentContext?.url || '';
+  const rule = siteRuleFor(url, siteRules);
+  currentSiteHost = rule.host;
+  select.value = rule.mode;
+  select.disabled = !rule.host;
+  if (!rule.host) {
+    hint.textContent = t("没有打开可读取的网页，站点规则会在打开文章后生效。");
+    return;
+  }
+  hint.textContent = rule.matched === 'suffix'
+    ? t("当前站点：{0}（由通配规则 {1} 匹配）", rule.host, `*.${rule.host.split('.').slice(-2).join('.')}`)
+    : t("当前站点：{0}", rule.host);
+}
+
+async function saveSiteRule(mode) {
+  if (!currentSiteHost) return;
+  siteRules = setSiteRule(siteRules, currentSiteHost, mode);
+  await chrome.storage.local.set({ [SITE_RULES_KEY]: normalizeSiteRules(siteRules) });
+  renderSiteRule();
+}
+
+async function loadGlossary() {
+  const stored = await readerStore.getSetting('glossary', '');
+  glossaryEntries = parseGlossary(typeof stored === 'string' ? stored : '');
+  const input = $('glossary-input');
+  if (input) input.value = serializeGlossary(glossaryEntries);
+}
+
+async function saveGlossary() {
+  const input = $('glossary-input');
+  if (!input) return;
+  const entries = parseGlossary(input.value);
+  glossaryEntries = entries;
+  await readerStore.setSetting('glossary', serializeGlossary(entries));
+  input.value = serializeGlossary(entries);
+  $('glossary-status').textContent = t("术语表已保存（{0} 条）。", entries.length);
+}
+
+function currentGlossaryPrompt() {
+  return glossaryEntries.length ? glossaryPrompt(glossaryEntries, currentTranslationLanguage()) : '';
+}
+
+// A site marked "always" starts one translation per page automatically. The
+// set keeps a re-rendered panel from re-requesting the same article.
+const autoTranslatedPages = new Set();
+function maybeAutoTranslate() {
+  const url = pageContext?.url;
+  if (!url || !textModelReady() || translationRunning || translatedTextIds.size) return;
+  if (siteRuleFor(url, siteRules).mode !== 'always') return;
+  if (autoTranslatedPages.has(url)) return;
+  autoTranslatedPages.add(url);
+  void startFullTranslation();
+}
+
+async function libraryExportItems() {
+  const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
+  return libraryItems(insights, annotations.filter(annotation => !annotation.insightId));
+}
+
+async function exportLibrary() {
+  const format = $('library-export-format')?.value || 'markdown';
+  try {
+    const items = await libraryExportItems();
+    if (!items.length) {
+      setLibraryNotice(t("还没有收藏内容可以导出。"));
+      return;
+    }
+    if (format === 'notion') {
+      // Notion takes paste, not files: keep it on the clipboard.
+      await copyText(exportNotion(items, { title: t("Reader 收藏") }));
+      setLibraryNotice(t("已复制 {0} 条收藏，可直接粘贴到 Notion。", items.length));
+      return;
+    }
+    if (format === 'obsidian') {
+      const files = exportObsidian(items);
+      const names = Object.keys(files);
+      if (!names.length) {
+        setLibraryNotice(t("还没有收藏内容可以导出。"));
+        return;
+      }
+      // Chrome asks once for permission to download several files; keep a
+      // small gap so the prompt is not treated as a download storm.
+      for (const name of names) {
+        downloadText(files[name], name, 'text/markdown;charset=utf-8');
+        await new Promise((resolve) => { setTimeout(resolve, 160); });
+      }
+      setLibraryNotice(t("已导出 {0} 个页面到下载目录的 Reader 文件夹；浏览器可能询问是否允许多文件下载。", names.length));
+      return;
+    }
+    downloadText(libraryMarkdown(items, { title: t("Reader 收藏") }), libraryFileName());
+    setLibraryNotice(t("已导出 {0} 条收藏。", items.length));
+  } catch {
+    setLibraryNotice(t("导出失败，请稍后重试。"));
+  }
+}
+
+async function copyRecord(item) {
+  try {
+    await copyText(exportSingleRecord(item, { includeTitle: true }));
+    setLibraryNotice(t("已复制这一条收藏。"));
+  } catch {
+    setLibraryNotice(t("浏览器没有开放剪贴板权限，请手动选择内容复制。"));
+  }
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.cssText = 'position:fixed;top:-1000px;left:-1000px;';
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+}
+
+function renderLibraryAskAvailability() {
+  const button = $('library-ask');
+  const status = $('library-ask-status');
+  if (!button || !status) return;
+  const unsupported = readingMode === 'platform';
+  button.disabled = unsupported;
+  button.setAttribute('aria-describedby', 'library-ask-status');
+  if (unsupported) status.textContent = t("问收藏仅支持独立模式；请在设置中切换并配置模型。");
+  else if (status.textContent === t("问收藏仅支持独立模式；请在设置中切换并配置模型。")) status.textContent = '';
+}
+
+async function askLibrary() {
+  const input = $('library-ask-input');
+  const status = $('library-ask-status');
+  const answerHost = $('library-ask-answer');
+  const citationsHost = $('library-ask-citations');
+  const button = $('library-ask');
+  if (readingMode === 'platform') {
+    status.textContent = t("问收藏仅支持独立模式；请在设置中切换并配置模型。");
+    return;
+  }
+  const question = String(input?.value || '').trim() || String($('library-search')?.value || '').trim();
+  if (!question) {
+    status.textContent = t("先输入一个具体问题，例如“我之前记过哪些关于背压的结论？”。");
+    return;
+  }
+  if (!textModelReady()) {
+    showModelSetupGuidance(t("问收藏"));
+    return;
+  }
+  const selection = selectLibraryEvidence(libraryShelf, question);
+  if (!selection.terms.length) {
+    status.textContent = t("这个问题没有可用于检索的关键词，换一个具体主题试试。");
+    return;
+  }
+  if (!selection.evidence.length) {
+    status.textContent = t("收藏库里没有匹配“{0}”的条目，换更具体的关键词试试。", selection.terms.slice(0, 3).join('、'));
+    show(answerHost, false);
+    show(citationsHost, false);
+    return;
+  }
+  button.disabled = true;
+  status.textContent = t("正在从 {0} 条相关收藏中整理答案…", selection.evidence.length);
+  try {
+    const messages = buildLibraryAnswerMessages(question, selection.evidence);
+    const payload = await requestChat(provider, messages, { temperature: 0.2, maxTokens: 1_200 });
+    const result = parseLibraryAnswer(messageText(payload), selection.evidence);
+    renderMarkdown(answerHost, result.answer || '');
+    show(answerHost, Boolean(result.answer));
+    renderLibraryCitations(citationsHost, result.citations);
+    const warnings = [];
+    if (result.warnings.includes('本次回答没有引用收藏条目') || !result.citations.length) {
+      warnings.push(t("本次回答没有引用收藏条目，请谨慎采信。"));
+    }
+    status.textContent = warnings.join(' ') || t("来自 {0} 条收藏证据。", selection.evidence.length);
+    void recordUsageEvent('answer', {
+      requests: 1,
+      chars: question.length + selection.evidence.reduce((sum, item) => sum + String(item.quote || '').length + String(item.note || '').length, 0),
+    });
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : t("收藏问答失败，请稍后重试。");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function safeCitationUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function renderLibraryCitations(host, citations) {
+  if (!host) return;
+  host.replaceChildren();
+  // Imported records are untrusted input: never render a non-http(s) href in
+  // an extension page.
+  const list = (citations || []).map((item) => ({ ...item, href: safeCitationUrl(item?.url) })).filter((item) => item.href).slice(0, 6);
+  if (!list.length) { show(host, false); return; }
+  const label = document.createElement('span');
+  label.className = 'small';
+  label.textContent = t("引用：");
+  host.append(label);
+  list.forEach((citation) => {
+    const link = document.createElement('a');
+    link.href = citation.href;
+    link.target = '_blank';
+    link.rel = 'noreferrer noopener';
+    link.className = 'library-citation';
+    let hostname = '';
+    try { hostname = new URL(citation.href).hostname; } catch { hostname = ''; }
+    link.textContent = `[${citation.number}] ${citation.title || hostname || t("来源")}`;
+    link.title = String(citation.quote || '').slice(0, 200);
+    host.append(link);
+  });
+  show(host, true);
 }
 
 function setLibraryNotice(message) {
@@ -2461,6 +3040,10 @@ async function saveSettings() {
 
 async function startFullTranslation() {
   setWorkspaceView('chat');
+  if (platformDemoUnsupported(pageContext || documentContext || selectionContext)) {
+    setNotice(t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。"));
+    return;
+  }
   if (!textModelReady()) {
     showModelSetupGuidance(t("全文翻译"));
     return;
@@ -2552,7 +3135,7 @@ async function retryTranslationItem(item) {
       if (!block) throw new Error(t("正文已变化，请重新开启全文翻译"));
       const results = platformModeReady()
         ? await requestPlatformTranslations(context, [block], { signal: controller.signal })
-        : await translateBlocks(readingProvider(context.targetLanguage), document, [block], { signal: controller.signal });
+        : await translateBlocks(readingProvider(context.targetLanguage), document, [block], { signal: controller.signal, glossaryPrompt: currentGlossaryPrompt() });
       const [translated] = results;
       if (!translated?.text) throw new Error(translated?.error || t("正文翻译结果为空"));
       const [applied] = await applyTextTranslations([{ ...translated, targetLanguage: context.targetLanguage }], payload => sendToPage({ ...payload, documentUrl: context.url }));
@@ -2598,7 +3181,16 @@ async function processDocument(context, runId = activeTranslationRun) {
     ? t("选段翻译完成。可以选择、复制或放大原文旁的译文。")
     : t("全文翻译完成。可以滚动阅读，或选择一段文字继续追问。");
   const usePlatform = platformModeReady();
+  if (platformDemoUnsupported(context)) {
+    translationRunning = false;
+    translationRequested = false;
+    setNotice(t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。"));
+    return;
+  }
   context = boundTaskContext({ ...context, targetLanguage: currentTranslationLanguage() }, { preserveAllBlocks: true });
+  const blocks = Array.isArray(context.blocks) ? context.blocks : [];
+  const images = Array.isArray(context.images) ? context.images : [];
+  const usageEstimate = estimateTranslation({ blocks: context.blocks, body: context.body });
   documentContext = context;
   updatePageContextUi(context);
   const coverageWarning = translationCoverageWarning(context);
@@ -2608,25 +3200,36 @@ async function processDocument(context, runId = activeTranslationRun) {
   // If the worker cannot accept the task, retain the local fallback below so
   // a browser with an unusual extension runtime still remains usable.
   if (!usePlatform && job?.id && Number.isInteger(activeTabId)) {
+    let accepted;
     try {
-      const accepted = await chrome.runtime.sendMessage({
+      accepted = await chrome.runtime.sendMessage({
         type: 'deep-research:translation-start',
         jobId: job.id,
         tabId: activeTabId,
         context,
         reapply: job.status === 'completed',
+        glossaryPrompt: currentGlossaryPrompt(),
+        translationModel: String(translationModel || '').trim(),
       });
-      if (accepted?.ok) {
-        persistJobPatch(job, { workerManaged: true, status: job.status === 'completed' ? 'queued' : job.status || 'queued' });
-        return;
-      }
     } catch {
-      // Fall through to the panel-local executor below.
+      // Only a failed hand-off may use the panel executor below.
+    }
+    if (accepted?.ok) {
+      try {
+        persistJobPatch(job, { workerManaged: true, status: job.status === 'completed' ? 'queued' : job.status || 'queued' });
+        void recordUsageEvent('translation', {
+          requests: usageEstimate.requests + images.length,
+          chars: usageEstimate.chars,
+          tokens: usageEstimate.tokens,
+        });
+      } catch {
+        // The background owns this task now. Panel bookkeeping cannot start
+        // another model pipeline; a recreated panel can read worker progress.
+      }
+      return;
     }
   }
   const document = makeDocument(context);
-  const blocks = Array.isArray(context.blocks) ? context.blocks : [];
-  const images = Array.isArray(context.images) ? context.images : [];
   failedTranslationItems = mergeTranslationFailures(failedTranslationItems, [], [], context);
   const cachedTranslations = (job?.targetLanguage === context.targetLanguage && Array.isArray(job?.textTranslations) ? job.textTranslations : []).filter((item) => item.text && blocks.some((block) => block.id === item.id && block.text === item.sourceText));
   const pageTranslatedIds = context.displayedTranslationLanguage === context.targetLanguage ? (context.translatedBlockIds || []) : [];
@@ -2674,12 +3277,16 @@ async function processDocument(context, runId = activeTranslationRun) {
   const imageLimitNotice = context.imageTruncated
     ? t("图片超过处理上限，已列出 {0}/{1} 张，未处理部分已明确保留。", images.length, context.imageCandidateCount || images.length)
     : '';
+  const usageLine = usageEstimate.requests
+    ? t("本次约 {0} 段、{1} 字符，预计 {2} 次模型请求。", usageEstimate.blocks, formatTokens(usageEstimate.chars), usageEstimate.requests)
+    : '';
   setNotice(usePlatform
-    ? t("正文与图片文字翻译通过调研平台 AI Engine 处理；图片字节仅在本次操作中由浏览器读取并按需上传，不会上传图片 URL。{0}{1}", coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : '')
-    : t("正文翻译会按块处理；图片无法翻译时保留原图并继续。{0}{1}", coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : ''));
+    ? t("正文与图片文字翻译通过调研平台 AI Engine 处理；图片字节仅在本次操作中由浏览器读取并按需上传，不会上传图片 URL。{0}{1}{2}", usageLine ? `\n${usageLine}` : '', coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : '')
+    : t("正文翻译会按块处理；图片无法翻译时保留原图并继续。{0}{1}{2}", usageLine ? `\n${usageLine}` : '', coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : ''));
   try {
     const translationOptions = {
       signal: controller.signal,
+      glossaryPrompt: currentGlossaryPrompt(),
       // Apply each completed block immediately. Waiting for every paragraph
       // made a long page feel frozen even though the model was already
       // returning usable results.
@@ -2707,6 +3314,11 @@ async function processDocument(context, runId = activeTranslationRun) {
       ...blocks.filter((block) => block.kind === 'code').map((block) => block.id),
     ]);
     if (runId !== activeTranslationRun) return;
+    void recordUsageEvent('translation', {
+      requests: usageEstimate.requests + images.length,
+      chars: usageEstimate.chars,
+      tokens: usageEstimate.tokens,
+    });
     const finalResults = await applyTranslations([...cachedTranslations, ...translations.filter((item) => item.text)]);
     const renderedById = new Map(finalResults.map((item) => [item.id, item]));
     translations = [...cachedTranslations, ...translations].map((item) => renderedById.get(item.id) || item);
@@ -2775,6 +3387,9 @@ async function processDocument(context, runId = activeTranslationRun) {
       failedItems: failedTranslationItems,
       completedAt: new Date().toISOString(),
     });
+    if (runId === activeTranslationRun && !failedTranslationItems.length) {
+      void saveGuideState({ translate: true }).catch(() => {});
+    }
   } catch (error) {
     if (runId === activeTranslationRun) {
       if (error instanceof DOMException && error.name === 'AbortError') setNotice(t("翻译已暂停。再次点击全文翻译会从缓存结果继续。"));
@@ -2974,6 +3589,10 @@ async function resumeBackgroundAnswer(context) {
 
 async function explainOrAsk(question = '', scope = discussionScope, intent = discussionIntent) {
   if (discussionRunning) { setNotice(t("当前回答仍在继续。可以选择下一段，或点击停止回答后再发起新问题。")); return; }
+  if (platformDemoUnsupported(scope === 'selection' ? selectionContext : (documentContext || pageContext || selectionContext))) {
+    setNotice(t("示例文章仅支持独立模式；平台模式请打开普通网页后阅读。"));
+    return;
+  }
   const imagePermission = scope === 'image' && imageContext?.image && !imageContext.image.dataUrl ? requestImageOrigins([imageContext.image]) : Promise.resolve(true);
   const current = pageContext || documentContext || selectionContext;
   if (current) await resumeSession(current);
@@ -3075,6 +3694,8 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     });
     if (!stillVisible()) return;
     latestStructuredAnswer = typeof result === 'string' ? { answer: result, evidence: [], background: '', inference: '', limitations: [], warnings: [] } : result;
+    recordAnswerUsage(requestSource, requestPrompt, latestStructuredAnswer);
+    if (!guideState.ask) void saveGuideState({ ask: true });
     if (requestSource.contentHash && requestSource.contentHash !== (pageContext?.contentHash || documentContext?.contentHash)) latestStructuredAnswer = { ...latestStructuredAnswer, evidence: [], warnings: [...(latestStructuredAnswer.warnings || []), t("页面内容已更新，旧引文定位已撤销。")] };
     latestAnswer = latestStructuredAnswer.answer || '';
     discussionHistory = [
@@ -3180,6 +3801,9 @@ async function openSaveDialog(insight = null, options = {}) {
     includeAI: Boolean(source.aiAnswer), sync: platformModeReady(),
     highlightAvailable, aiAvailable: Boolean(source.aiAnswer), syncAvailable: platformModeReady(),
   });
+  // Editing an existing record with advanced fields must not hide them behind
+  // a collapsed section the user cannot see is populated.
+  if ($('save-more-options')) $('save-more-options').open = Boolean(source.aiAnswer || (source.tags && source.tags.length));
   $('save-notice').textContent = '';
   show($('save-notice'), false);
   if (source.fallbackWarning) setNotice(source.fallbackWarning, $('save-notice'));
@@ -3327,7 +3951,8 @@ function handleEmptyPrimary() {
 }
 
 function showSettings() {
-  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); updateReadingModeUi();
+  show($('guide-card'), false);
+  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); renderSiteRule(); renderUsageSettings(); updateReadingModeUi();
   if (readingMode === 'local') scheduleModelDiscovery({ markDirty: false });
 }
 
@@ -3435,6 +4060,16 @@ async function restorePendingPageAction() {
   }
 }
 
+function downloadText(text, filename, mime = 'text/markdown;charset=utf-8') {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  // Revoking in the same tick can cancel the download before Chrome reads it.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 function downloadJson(data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `deep-research-reading-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url);
@@ -3539,7 +4174,7 @@ chrome.runtime.onMessage.addListener((message) => {
       if (documentChanged) setNotice('');
     }
     applyRadarEntryContext(pageContext);
-    renderPage(); setPlatformConnected(platformConnected); void applyAnnotationsForContext(pageContext);
+    renderPage(); renderSiteRule(); setPlatformConnected(platformConnected); void applyAnnotationsForContext(pageContext);
     // Restore an exact page-version session before persisting the fresh page
     // snapshot. Otherwise the first page-context event could overwrite a
     // renamed session (and its discussion) with an empty default session.
@@ -3551,6 +4186,9 @@ chrome.runtime.onMessage.addListener((message) => {
       if (interactionAtResumeStart !== interactionGeneration || contextForResume !== pageContext) return;
       saveLocalSession();
       await findPendingTranslation(contextForResume);
+      // Only after a resumable job had its chance: a site rule must not start
+      // a second full translation on top of the restored one.
+      maybeAutoTranslate();
     })();
     // When a page appends or edits content during a full translation, the
     // old overlays must be removed before taking the new snapshot. The
@@ -3605,6 +4243,9 @@ chrome.runtime.onMessage.addListener((message) => {
     translationPaused = Boolean(message.cancelled && translationPaused);
     renderProgress(activeJobRecord.textDone || 0, activeJobRecord.textTotal || 0, activeJobRecord.imageDone || 0, activeJobRecord.imageTotal || 0);
     const failures = failedTranslationItems.length;
+    if (!message.cancelled && !failures && activeJobRecord.status === 'completed') {
+      void saveGuideState({ translate: true }).catch(() => {});
+    }
     const workerWarnings = Array.isArray(message.warnings) ? message.warnings : (Array.isArray(activeJobRecord.warnings) ? activeJobRecord.warnings : []);
     const explicitCancellation = cancellationRequested || message.job?.error === t("用户取消了翻译");
     cancellationRequested = false;
@@ -3753,6 +4394,7 @@ async function init() {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); $('send-question').click(); }
   });
   provider = await loadProvider();
+  hasReadingHistory = (await readerStore.listSessions().catch(() => [])).length > 0;
   translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface'));
   updateTranslationLanguageUi();
   window.addEventListener('reader:translation-language-change', event => void changeTranslationLanguage(event.detail));
@@ -3763,10 +4405,13 @@ async function init() {
   await loadPlatformState();
   updateReadingModeUi();
   renderEmptyState();
-  $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
+  $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('detect-local-models')?.addEventListener('click', () => void detectLocalServices()); $('guide-demo')?.addEventListener('click', () => void openDemoArticle()); $('guide-translate')?.addEventListener('click', () => void guideTranslate()); $('guide-ask')?.addEventListener('click', () => void guideAsk()); $('dismiss-guide')?.addEventListener('click', () => void saveGuideState({ dismissed: true })); $('empty-platform')?.addEventListener('click', () => { showSettings(); void setReadingMode('platform'); }); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
   $('mode-local')?.addEventListener('click', () => void setReadingMode('local'));
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
-  $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读")));
+  $('ai-availability-action')?.addEventListener('click', () => {
+    if (platformDemoUnsupported(pageContext || documentContext || selectionContext)) void setReadingMode('local');
+    else showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读"));
+  });
   $('provider-kind')?.addEventListener('change', changeProviderKind);
   $('provider-region').addEventListener('change', () => {
     $('provider-kind').value = $('provider-region').value;
@@ -3775,6 +4420,48 @@ async function init() {
   setupProviderPicker();
   $('stop-answer').addEventListener('click', () => discussionController?.abort());
   $('interface-language').value = (await chrome.storage.local.get('readerUiLanguage')).readerUiLanguage || 'system';
+  const storedScheme = (await chrome.storage.local.get('readerColorScheme')).readerColorScheme;
+  $('color-scheme').value = ['light', 'dark'].includes(storedScheme) ? storedScheme : 'system';
+  const storedLayout = (await chrome.storage.local.get('readerTranslationLayout')).readerTranslationLayout;
+  $('translation-layout').value = storedLayout === 'stacked' ? 'stacked' : 'replace';
+  const storedGuide = (await chrome.storage.local.get('readerGuide')).readerGuide;
+  guideState = { demo: false, translate: false, ask: false, dismissed: false, ...(storedGuide && typeof storedGuide === 'object' ? storedGuide : {}) };
+  const storedTypeScale = (await chrome.storage.local.get('readerTypeScale')).readerTypeScale;
+  $('type-scale').value = ['compact', 'large'].includes(storedTypeScale) ? storedTypeScale : 'comfortable';
+  siteRules = normalizeSiteRules((await chrome.storage.local.get(SITE_RULES_KEY))[SITE_RULES_KEY]);
+  // Rules can change from another panel or a future settings surface; keep the
+  // in-memory copy in sync so auto-translate does not need a reload.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[SITE_RULES_KEY]) return;
+    siteRules = normalizeSiteRules(changes[SITE_RULES_KEY].newValue);
+    renderSiteRule();
+    maybeAutoTranslate();
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[USAGE_KEY]) return;
+    usageState = pruneUsage(mergeUsage(usageState, changes[USAGE_KEY].newValue), { keepDays: 120 });
+    renderUsageSummary();
+  });
+  await loadUsageSettings();
+  await loadGlossary();
+  renderSiteRule();
+  $('site-rule-mode').addEventListener('change', event => void saveSiteRule(event.target.value));
+  $('save-glossary').addEventListener('click', () => void saveGlossary());
+  $('save-usage-settings').addEventListener('click', () => void saveUsageSettings());
+  $('type-scale').addEventListener('change', async event => {
+    // The theme provider subscribes to this key and applies the CSS variables.
+    await chrome.storage.local.set({ readerTypeScale: ['compact', 'large'].includes(event.target.value) ? event.target.value : 'comfortable' });
+  });
+  $('translation-layout').addEventListener('change', async event => {
+    // The content script owns how an applied translation is laid out; the
+    // panel only stores the preference and the script re-lays out live.
+    await chrome.storage.local.set({ readerTranslationLayout: event.target.value === 'stacked' ? 'stacked' : 'replace' });
+  });
+  $('color-scheme').addEventListener('change', async event => {
+    // The theme provider and the content script both read this key, so the
+    // panel only has to persist the choice and let them subscribe.
+    await chrome.storage.local.set({ readerColorScheme: event.target.value });
+  });
   $('interface-language').addEventListener('change', async event => {
     persistQuestionDraft();
     saveLocalSession();
@@ -3893,15 +4580,19 @@ async function init() {
   $('refresh-library').addEventListener('click', () => void updateLibrary());
   $('library-search').addEventListener('input', event => { libraryView.query = event.target.value; libraryView.page = 1; void updateLibrary(); });
   $('library-kind').addEventListener('change', event => { libraryView.kind = event.target.value; libraryView.page = 1; void updateLibrary(); });
+  $('library-tag').addEventListener('change', event => { libraryView.tag = event.target.value; libraryView.page = 1; void updateLibrary(); });
+  $('library-export').addEventListener('click', () => void exportLibrary());
+  $('library-ask').addEventListener('click', () => void askLibrary());
+  $('library-ask-input').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void askLibrary(); } });
   $('clear-library-filters').addEventListener('click', () => {
-    libraryView.query = ''; libraryView.kind = 'all'; libraryView.page = 1;
+    libraryView.query = ''; libraryView.kind = 'all'; libraryView.tag = ''; libraryView.page = 1;
     $('library-search').value = ''; $('library-kind').value = 'all';
     void updateLibrary(); $('library-search').focus();
   });
   $('library-previous').addEventListener('click', () => { libraryView.page -= 1; void updateLibrary(); $('library-summary').scrollIntoView({ block: 'nearest' }); });
   $('library-next').addEventListener('click', () => { libraryView.page += 1; void updateLibrary(); $('library-summary').scrollIntoView({ block: 'nearest' }); });
   $('undo-library-delete').addEventListener('click', () => void undoLibraryDelete());
-  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await libraryDeletion.reset(); await readerStore.clearAll(); show($('library-notice'), false); webSearchEnabled = false; renderWebSearchToggle(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true; await syncSearchPermissions(); renderWebSearchToggle(); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
+  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await libraryDeletion.reset(); await readerStore.clearAll(); show($('library-notice'), false); webSearchEnabled = false; renderWebSearchToggle(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl', SITE_RULES_KEY]); siteRules = {}; await readerStore.setSetting('glossary', ''); glossaryEntries = []; if ($('glossary-input')) $('glossary-input').value = ''; provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true; await syncSearchPermissions(); renderWebSearchToggle(); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
   await updateLibrary();
   void restorePendingPageAction();
   selectionActionsReady = true;

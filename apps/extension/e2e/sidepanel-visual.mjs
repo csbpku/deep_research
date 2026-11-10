@@ -181,7 +181,9 @@ try {
   const dockBounds = await article.locator('[data-deep-research-dock]').boundingBox();
   if (!dockBounds) throw new Error('right dock has no clickable bounds');
   await article.bringToFront();
-  await article.mouse.click(dockBounds.x + dockBounds.width - 27, dockBounds.y + 22);
+  // Address the dock buttons by name: the dock now carries a collapse control
+  // at the top, so fixed offsets no longer identify an action.
+  await article.getByRole('button', { name: '总结本页', exact: true }).click();
   try {
     await panel.waitForFunction(() => document.querySelector('#mode-guidance')?.textContent?.includes('全文总结尚未开始'), null, { timeout: 10_000 });
   } catch (error) {
@@ -231,7 +233,7 @@ try {
   }
 
   await article.bringToFront();
-  await article.mouse.click(dockBounds.x + dockBounds.width - 27, dockBounds.y + 63);
+  await article.getByRole('button', { name: '翻译本页', exact: true }).click();
   await panel.waitForFunction(() => document.querySelector('#mode-guidance')?.textContent?.includes('全文翻译尚未开始'), null, { timeout: 10_000 });
   const translationGuidance = await panel.locator('#mode-guidance').innerText();
   if (!translationGuidance.includes('全文翻译尚未开始') || !translationGuidance.includes('模型服务')) {
@@ -317,6 +319,8 @@ try {
   await panel.locator('#save-selection').click();
   await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
   await panel.locator('#save-note').fill('E2E annotation note');
+  await panel.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await panel.locator('#save-highlight').waitFor({ state: 'visible' });
   await panel.locator('#save-highlight').check();
   await panel.locator('#confirm-save').click();
   await panel.locator('#save-dialog').waitFor({ state: 'hidden', timeout: 10_000 });

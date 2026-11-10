@@ -20,7 +20,7 @@
 
 鼠标停在已翻译的段落或使用 Tab 聚焦后，段落旁显示“查看这一段原文 / 译文”按钮；右键菜单同样显示对应操作，切回原文后可再次切回译文。也可按 **Alt+Shift+O** 或 Alt+单击切换。单段操作保留原文和缓存，不发模型请求、不改正文版本；“恢复原文”则清除整页翻译覆盖。
 
-模型配置交互参考 [Open WebUI 的连接与模型发现](https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/) 和 [LM Studio 默认可无认证的本地服务](https://lmstudio.ai/docs/python/getting-started/authentication)。Reader 的空 Key 规则仅适用于回环地址，云端仍要求 Key。
+设置页的“用量”可以查看本月翻译与问答的请求数、字符数和估算 token（只存计数，不含正文），填写每百万 token 的输入/输出单价后会显示预估费用；也可以单独指定“翻译模型”，留空则与聊天共用同一个模型。全文翻译开始前会提示本次预计的段数、字符数和模型请求数。模型配置交互参考 [Open WebUI 的连接与模型发现](https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/) 和 [LM Studio 默认可无认证的本地服务](https://lmstudio.ai/docs/python/getting-started/authentication)。Reader 的空 Key 规则仅适用于回环地址，云端仍要求 Key。
 
 
 ### 翻译性能验收
@@ -33,14 +33,14 @@
 1. 在仓库根目录运行 `pnpm install`（首次准备依赖），再进入本目录运行 `npm run build`。
 2. 打开 Chrome `chrome://extensions`，开启开发者模式，选择“加载已解压的扩展程序”，选中 `.output/chrome-mv3`，不要选源码目录。
 3. 打开一篇公开技术文章，点击扩展图标。
-4. 在侧栏“设置”选择运行模式：独立模式选择服务商，确认始终可编辑的 API 地址并填写所需 API Key，再点击“连接并获取模型”，在 Chrome 提示时允许该服务。已有站点权限时，修改配置会自动刷新列表；模型支持搜索，需显式选择。Local Proxy 默认 `http://127.0.0.1:8317/v1`、LM Studio 默认 `http://127.0.0.1:1234/v1`、Ollama 默认 `http://127.0.0.1:11434/v1`；localhost、127.0.0.1 和 ::1 回环地址的 Key 选填。服务没有模型列表时可手动指定模型 ID；认证失败不会被当作“不支持列表”。“保存配置”不调用模型，“测试连接”才发送一个有超时的短文本请求，图片能力在折叠项中按需检测。平台模式连接 Deep Research 后直接使用固定平台模型，不需要这些独立模式配置。
+4. 首次打开时，侧栏空状态提供两条路径：配置好模型后还会出现“60 秒上手”，可以直接打开内置示例文章（`demo.html`，不需要授权任何网站）走一遍翻译与提问；本机已运行 Ollama、LM Studio 或本地 API 代理时，点击“检测本机模型”即可一次完成检测与保存，不需要 API Key；否则在“设置”里选择服务商（独立模式），确认始终可编辑的 API 地址并填写所需 API Key，再点击“读取模型列表”，在 Chrome 提示时允许该服务。已有站点权限时，修改配置会自动刷新列表；模型支持搜索，需显式选择。Local Proxy 默认 `http://127.0.0.1:8317/v1`、LM Studio 默认 `http://127.0.0.1:1234/v1`、Ollama 默认 `http://127.0.0.1:11434/v1`；localhost、127.0.0.1 和 ::1 回环地址的 Key 选填。服务没有模型列表时可手动指定模型 ID；认证失败不会被当作“不支持列表”。“保存配置”不调用模型，“测试连接”才发送一个有超时的短文本请求，图片能力在折叠项中按需检测。平台模式连接 Deep Research 后直接使用固定平台模型，不需要这些独立模式配置。
 5. 输入区选择“整篇”后点击“翻译”。正文按块处理，图片会尝试识别文字：坐标可靠且译文能安全容纳时覆盖原文（图表纵向坐标轴使用纵向排版），坐标不足以安全覆盖时保留原图，并在对应文字外侧显示“原文 → 译文”的锚定旁译；完全无法定位时才显示整图旁侧说明。失败项会保留原因，可恢复原文后重试。
-6. 设置页可选择简体中文、English 或跟随浏览器；选中正文后，总结、翻译与输入问题都使用当前选段，复制、标注和保存摘录位于原文预览卡。会话、收藏和有限翻译缓存使用 IndexedDB；“导出阅读数据”可导出本地 JSON，API Key 会被自动剔除；设置页可以清除全部本地会话、收藏、配置和缓存。
-7. 点击顶部“历史”，可按页面查看聊天会话或收藏的知识结论，搜索历史问题，重命名、删除和分别导出；页面版本变化后旧会话会标记为旧版本，不会错误复用原文证据。
+6. 设置页可选择简体中文、English 或跟随浏览器，并在“外观”里选择跟随系统、浅色或深色；深色模式同时作用于侧栏和网页内的阅读控件。选中正文后，总结、翻译与输入问题都使用当前选段，复制、标注和保存摘录位于原文预览卡。会话、收藏和有限翻译缓存使用 IndexedDB；“导出阅读数据”可导出本地 JSON，API Key 会被自动剔除；设置页可以清除全部本地会话、收藏、配置和缓存。
+7. 点击顶部“历史”，可按页面查看聊天会话或收藏的知识结论，搜索历史问题，重命名、删除和分别导出；页面版本变化后旧会话会标记为旧版本，不会错误复用原文证据。收藏页支持按标签筛选和导出（Markdown / Obsidian / Notion）：Markdown 按页面分组，Obsidian 每页一个文件并写 frontmatter，Notion 复制为可直接粘贴的单文档；单条收藏也可以一键复制。收藏页还能“问收藏”：只依据已保存的条目回答并列出引用，没有匹配条目时不会调用模型。设置里的“阅读排版”可以切换紧凑 / 舒适 / 大，只影响侧栏与历史页正文。
 
 ## 共享设计基础
 
-Reader 的基础字体、间距、颜色与 MUI theme 来自 [`packages/design-system`](../../packages/design-system/README.md)。`components/reader-theme.tsx` 只保留紧凑侧栏和既有 DOM 控件的专属覆盖；不另维护基础 palette/typography。传统 DOM 的 `design-system/tokens.css` 与 `--reader-*` 别名由 `scripts/generate-design-system.mjs` 从同一共享 JSON 生成，content-script 同步脚本也读取共享源。
+Reader 的基础字体、间距、颜色与 MUI theme 来自 [`packages/design-system`](../../packages/design-system/README.md)。生成器同时输出浅色全量与深色覆盖（`dark.json`），运行时由设置里的“外观”或系统偏好选择；不要手写第二套色值。`components/reader-theme.tsx` 只保留紧凑侧栏和既有 DOM 控件的专属覆盖；不另维护基础 palette/typography。传统 DOM 的 `design-system/tokens.css` 与 `--reader-*` 别名由 `scripts/generate-design-system.mjs` 从同一共享 JSON 生成，content-script 同步脚本也读取共享源。
 
 调整 token 后运行共享包的生成命令及 `node apps/extension/scripts/generate-design-system.mjs`，并检查 Web 与 Reader；不要手工修改生成 CSS。MUI spacing 基数为 8px，紧凑的 4/12/20px 使用共享命名间距或显式 token，不能沿用旧 4px 基数的数字 `sx`。
 
@@ -163,4 +163,4 @@ npm run e2e:matrix
 
 已同步收藏的编辑使用 `PUT /api/reading/save` 更新本人对应的 knowledge 草稿。平台端必须支持对应的更新接口；仅收到 POST 去重响应不能视为编辑同步成功。
 
-翻译目标语言可在聊天输入区的“翻译”旁选择，并保存在本地设置中；默认跟随界面语言。界面目前为简体中文和英文，目标语言另支持繁体中文、日语、韩语、法语、德语、西班牙语、葡萄牙语、意大利语、俄语和阿拉伯语。问答仍按用户提问语言回答。
+翻译版式可在设置里选择“替换原文”或“原文与译文对照”：对照模式把译文放在原文下方，代码块和表格单元格仍按替换处理，切换后已翻译页面会立即重排。设置里还可以按站点设置“总是自动翻译 / 从不自动翻译 / 每次询问”，并维护最多 200 条术语表（每行一条 `source => 译法`），翻译时会要求模型优先使用这些译法。翻译目标语言可在聊天输入区的“翻译”旁选择，并保存在本地设置中；默认跟随界面语言。界面目前为简体中文和英文，目标语言另支持繁体中文、日语、韩语、法语、德语、西班牙语、葡萄牙语、意大利语、俄语和阿拉伯语。问答仍按用户提问语言回答。

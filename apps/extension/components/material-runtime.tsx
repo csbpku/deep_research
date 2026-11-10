@@ -1,6 +1,6 @@
 import { safeSourceUrl } from '../web-search.js';
 import { space } from "@deep-research/design-system";
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { ThemeProvider } from '@mui/material/styles';
@@ -33,7 +33,7 @@ function render(host: Element, content: React.ReactNode) {
 export function MaterialMarkdown({ text, className, bind }: { text: string; className?: string; bind?: (element: HTMLElement) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { if (ref.current) { renderMarkdown(ref.current, readingAnswerText(text)); bind?.(ref.current); } }, [text, bind]);
-  return <Box ref={ref} className={className} sx={{ fontSize: 'var(--reader-type-reading)', lineHeight: 'var(--reader-line-height-reading)', overflowWrap: 'anywhere' }} />;
+  return <Box ref={ref} className={className} sx={{ fontSize: 'var(--reader-reading-size, var(--reader-type-reading))', lineHeight: 'var(--reader-reading-leading, var(--reader-line-height-reading))', overflowWrap: 'anywhere' }} />;
 }
 interface Message { role: string; content: string; webSources?: { title: string; url: string }[]; searchStatus?: string }
 function CopyAction({ text, onError }: { text: string; onError?: () => void }) {
@@ -46,7 +46,7 @@ export function renderMaterialConversation(host: Element, messages: Message[], o
   const latest = messages.map(m => m.role).lastIndexOf('assistant');
   render(host, messages.map((message, index) => <Box component="article" key={index} className={`conversation-message history-detail-message ${message.role}`} sx={message.role === 'user' ? { justifySelf: 'end', width: 'fit-content', maxWidth: '92%', p: space.md, borderRadius: '12px 12px 4px 12px', bgcolor: 'action.hover' } : { minWidth: 0 }}>
     {message.role === 'assistant' && <Typography component="div" className="conversation-message-header history-detail-message-header" variant="caption" color="text.secondary" sx={{ mb: space.sm }}>Reader</Typography>}
-    {message.role === 'assistant' ? <MaterialMarkdown className="conversation-message-body history-detail-message-body" text={message.content} bind={index === latest ? options.bindLatest : undefined} /> : <Typography component="div" className="conversation-message-body history-detail-message-body" variant="body1" sx={{ fontSize: 'var(--reader-type-reading)', lineHeight: 'var(--reader-line-height-reading)' }}>{message.content}</Typography>}
+    {message.role === 'assistant' ? <MaterialMarkdown className="conversation-message-body history-detail-message-body" text={message.content} bind={index === latest ? options.bindLatest : undefined} /> : <Typography component="div" className="conversation-message-body history-detail-message-body" variant="body1" sx={{ fontSize: 'var(--reader-reading-size, var(--reader-type-reading))', lineHeight: 'var(--reader-reading-leading, var(--reader-line-height-reading))' }}>{message.content}</Typography>}
     {message.role === 'assistant' && Boolean(message.webSources?.length) && <Box className="answer-web-sources" sx={{ mt: space.md, pt: space.md, borderTop: 1, borderColor: 'divider' }}>
       <Typography variant="caption" component="div" color="text.secondary">{t('网络来源 · 搜索摘要')}</Typography>
       <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }}>
@@ -60,15 +60,105 @@ export function renderMaterialConversation(host: Element, messages: Message[], o
   </Box>));
 }
 export interface MaterialEvidence { id?: string; claim?: string; quote?: string; url?: string; anchored?: boolean; onLocate?: () => void }
+/**
+ * One evidence card.
+ *
+ * The card itself stays a link so a click anywhere on the quote still locates
+ * the passage in the article. The row of quote tools is a sibling of that link
+ * rather than a child: nesting buttons inside an anchor makes the browser treat
+ * every tool click as a link activation and hides the tools from some assistive
+ * technologies. `data-evidence-action` marks those tools so the card can also
+ * ignore clicks that land on their padding.
+ */
+function EvidenceCard({ item, index }: { item: MaterialEvidence; index: number }) {
+  const quote = String(item.quote || '').trim();
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const quoteRef = useRef<HTMLSpanElement>(null);
+  const resetCopyState = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(resetCopyState.current), []);
+  useLayoutEffect(() => {
+    const node = quoteRef.current;
+    if (!node || expanded) return;
+    // Chrome still reports the full content height of a `-webkit-line-clamp`
+    // box, so this comparison is the cheapest reliable "is the quote clipped?"
+    // test. Re-measure on resize: the side panel width is user-controlled and a
+    // quote can start or stop overflowing without any data change.
+    const measure = () => setOverflowing(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [quote, expanded]);
+
+  const flashCopyState = (state: 'copied' | 'failed') => {
+    setCopyState(state);
+    window.clearTimeout(resetCopyState.current);
+    // The failure hint has to survive long enough to be read and acted on;
+    // the success hint only needs to confirm that the clipboard changed.
+    resetCopyState.current = window.setTimeout(() => setCopyState('idle'), state === 'copied' ? 1800 : 4000);
+  };
+  const selectQuote = () => {
+    const node = quoteRef.current;
+    const selection = window.getSelection?.();
+    if (!node || !selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+  const copyQuote = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(quote);
+      flashCopyState('copied');
+    } catch {
+      // Clipboard permission can be denied. Selecting the quote is the honest
+      // fallback: the reader can finish the copy with the keyboard.
+      selectQuote();
+      flashCopyState('failed');
+    }
+  };
+  const toggleExpanded = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setExpanded((value) => !value);
+  };
+  const copyLabel = copyState === 'copied' ? t('已复制') : copyState === 'failed' ? t('请选中复制') : t('复制引文');
+  // A saved session can point at evidence without a live callback. Saying
+  // "locate on page" there would promise an action the card cannot perform.
+  const openLabel = item.onLocate && item.anchored ? t('在网页中定位') : t('打开原文');
+
+  return <Box className="evidence-card" sx={{ mb: space.sm, border: 1, borderColor: 'divider', borderRadius: '8px' }}>
+    <ListItemButton component="a" href={item.url || '#'} target="_blank" rel="noreferrer noopener" id={item.id} className="evidence-item history-detail-evidence-item" data-evidence-index={index} title={openLabel}
+      onClick={event => {
+        if (!item.onLocate) return;
+        if ((event.target as Element | null)?.closest?.('[data-evidence-action]')) return;
+        event.preventDefault();
+        item.onLocate();
+      }}
+      sx={{ alignItems: 'flex-start', gap: space.sm, p: space.md, borderRadius: '8px 8px 0 0', textDecoration: 'none' }}>
+      <Typography component="span" className="evidence-number" variant="caption" color="primary">[{index + 1}]</Typography>
+      <Box component="span" className="evidence-content" sx={{ minWidth: 0 }}>
+        {item.claim && <Typography component="span" className="evidence-claim" variant="body2" sx={{ display: 'block', fontWeight: 600 }}>{item.claim}</Typography>}
+        {/* The two-line clamp also lives in `sidepanel.css`; the expanded rule
+            is nested under `.is-expanded` so it outranks that stylesheet no
+            matter which one the browser applies last. */}
+        <Typography ref={quoteRef} component="span" className={`evidence-quote${expanded ? ' is-expanded' : ''}`} variant="caption" color="text.secondary" sx={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', mt: space.xs, '&.is-expanded': { display: 'block', WebkitLineClamp: 'unset', overflow: 'visible' } }}>“{quote}”</Typography>
+        <Typography component="span" className="evidence-open" variant="caption" color="primary" sx={{ display: 'block', mt: space.sm, fontWeight: 500 }}>{openLabel}</Typography>
+      </Box>
+    </ListItemButton>
+    {quote && <Stack className="evidence-actions" direction="row" useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center', gap: space.sm, px: space.md, pb: space.sm }}>
+      {(expanded || overflowing) && <ReaderButton type="button" data-evidence-action="toggle" control="compact" aria-expanded={expanded} aria-label={expanded ? t('收起引文') : t('展开引文')} onClick={toggleExpanded} sx={{ px: space.sm, color: 'primary.main' }}>{expanded ? t('收起引文') : t('展开引文')}</ReaderButton>}
+      <ReaderButton type="button" data-evidence-action="copy" control="compact" aria-label={copyLabel} startIcon={<ComposerIcon kind="copy" size={15} />} onClick={copyQuote} sx={{ px: space.sm }}>{copyLabel}</ReaderButton>
+    </Stack>}
+  </Box>;
+}
 export function renderMaterialEvidence(host: Element, items: MaterialEvidence[]) {
-  render(host, items.map((item, index) => <ListItemButton component="a" href={item.url || '#'} target="_blank" rel="noreferrer noopener" key={index} id={item.id} className="evidence-item history-detail-evidence-item" data-evidence-index={index} title={item.anchored ? t('在网页中定位') : t('打开原文')} onClick={event => { if (item.onLocate) { event.preventDefault(); item.onLocate(); } }} sx={{ alignItems: 'flex-start', gap: space.sm, border: 1, borderColor: 'divider', borderRadius: '8px', p: space.md, mb: space.sm, textDecoration: 'none' }}>
-    <Typography component="span" className="evidence-number" variant="caption" color="primary">[{index + 1}]</Typography>
-    <Box component="span" className="evidence-content" sx={{ minWidth: 0 }}>
-      {item.claim && <Typography component="span" className="evidence-claim" variant="body2" sx={{ display: 'block', fontWeight: 600 }}>{item.claim}</Typography>}
-      <Typography component="span" className="evidence-quote" variant="caption" color="text.secondary" sx={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', mt: space.xs }}>“{item.quote}”</Typography>
-      <Typography component="span" className="evidence-open" variant="caption" color="primary" sx={{ display: 'block', mt: space.sm }}>{item.anchored ? t('在网页中定位') : t('打开原文')}</Typography>
-    </Box>
-  </ListItemButton>));
+  render(host, items.map((item, index) => <EvidenceCard key={`${index}:${item.quote || ''}`} item={item} index={index} />));
 }
 export interface MaterialAction { label: string; run: () => void; danger?: boolean; action?: string }
 export interface MaterialRecord { key: string; className?: string; title: string; source?: string; detail?: string; answer?: string; meta?: string; status?: string; warning?: boolean; tags?: string[]; actions: MaterialAction[]; visibleActions?: number }
@@ -90,8 +180,20 @@ export function renderMaterialRecords(host: Element, records: MaterialRecord[], 
     <RecordActions actions={record.actions} visible={record.visibleActions} />
   </Paper>) : <Typography className="history-empty" color="text.secondary" variant="body2" sx={{ py: space.section }}>{empty}</Typography>);
 }
-export function renderMaterialFollowups(host: Element, prompts: string[], run: (prompt: string) => void) {
-  render(host, <Stack divider={<Divider />} spacing={space.xs}>{prompts.map(prompt => <ReaderButton key={prompt} className="discussion-followup" control="followup" variant="text" fullWidth endIcon={<ComposerIcon kind="arrow-forward" size={18} />} onClick={() => run(prompt)}><span>{prompt}</span></ReaderButton>)}</Stack>);
+export function renderMaterialFollowups(host: Element, prompts: string[], run: (prompt: string) => void, options: { layout?: 'rows' | 'chips' } = {}) {
+  if (options.layout !== 'chips') {
+    // Default stays the audited design: one shared frame, borderless 44px rows.
+    render(host, <Stack divider={<Divider />} spacing={space.xs}>{prompts.map(prompt => <ReaderButton key={prompt} className="discussion-followup" control="followup" variant="text" fullWidth endIcon={<ComposerIcon kind="arrow-forward" size={18} />} onClick={() => run(prompt)}><span>{prompt}</span></ReaderButton>)}</Stack>);
+    return;
+  }
+  // Compact mode for narrow panels: shorter wrapped chips instead of full-width
+  // rows. The label may be clipped, so the complete question stays the button's
+  // accessible name rather than a tooltip.
+  render(host, <Box className="discussion-followups" sx={{ display: 'flex', flexWrap: 'wrap', gap: space.xs }}>
+    {prompts.map((prompt, index) => <ReaderButton key={prompt} className="discussion-followup discussion-followup-chip" control="compact" variant="outlined" data-layout="chips" data-followup-index={index} aria-label={prompt} onClick={() => run(prompt)} sx={{ maxWidth: '100%', minHeight: 32, borderRadius: 'var(--reader-radius-pill)', px: space.md, color: 'text.secondary' }}>
+      <Box component="span" className="discussion-followup-label" sx={{ display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{prompt}</Box>
+    </ReaderButton>)}
+  </Box>);
 }
 export function renderMaterialOptions(host: Element, options: { id: string; label: string }[], selected: string, run: (id: string) => void) {
   render(host, options.map(item => <ListItemButton component="button" type="button" key={item.id} className="composer-model-option" role="option" data-model-id={item.id} aria-selected={selected === item.id} selected={selected === item.id} onClick={() => run(item.id)} sx={{ width: '100%', borderRadius: '8px', overflowWrap: 'anywhere' }}>{item.label}</ListItemButton>));

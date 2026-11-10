@@ -7,17 +7,34 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = resolve(root, 'public');
 await mkdir(publicDir, { recursive: true });
 await import('./generate-design-system.mjs');
-const tokens = JSON.parse(await readFile(new URL('../../../packages/design-system/src/tokens.json', import.meta.url), 'utf8'));
-const contentSource = await readFile(resolve(root, 'content.js'), 'utf8');
+const sharedSource = new URL('../../../packages/design-system/src/', import.meta.url);
+const lightTokens = JSON.parse(await readFile(new URL('tokens.json', sharedSource), 'utf8'));
+const darkOverrides = JSON.parse(await readFile(new URL('dark.json', sharedSource), 'utf8'));
+// Both sets are complete, not a light set plus overrides: the content script
+// writes the whole palette onto each shadow host, so a switch has no values to
+// inherit from the page and no key can keep a stale light value.
+const designTokens = { light: lightTokens, dark: { ...lightTokens, ...darkOverrides } };
+// Ship the scope selector and both palettes together in every content-script injection.
+const readingScopeSource = await readFile(resolve(root, 'reading-scope.js'), 'utf8');
+const contentSource = `${readingScopeSource}\n${await readFile(resolve(root, 'content.js'), 'utf8')}`;
 const tokenPlaceholder = 'const READER_DESIGN_TOKENS = {};';
 if (!contentSource.includes(tokenPlaceholder)) {
   throw new Error('content.js is missing the design token placeholder');
 }
 const english = JSON.parse(await readFile(resolve(root, 'locales/en.json'), 'utf8'));
 await writeFile(resolve(publicDir, 'content.js'), contentSource
-  .replace(tokenPlaceholder, `const READER_DESIGN_TOKENS = ${JSON.stringify(tokens)};`)
+  .replace(tokenPlaceholder, `const READER_DESIGN_TOKENS = ${JSON.stringify(designTokens)};`)
   .replace('const READER_EN_MESSAGES = {};', `const READER_EN_MESSAGES = ${JSON.stringify(english)};`));
 await copyFile(resolve(root, 'reader-platform-bridge.js'), resolve(publicDir, 'reader-platform-bridge.js'));
+// The demo article ships with the extension so the first run can show the
+// whole reading loop without asking for access to a real website. It loads
+// the generated content script directly: chrome-extension:// pages cannot be
+// targeted by chrome.scripting, but they can load their own resources.
+const demoSource = await readFile(resolve(root, 'demo-article.html'), 'utf8');
+await writeFile(resolve(publicDir, 'demo.html'), demoSource.replace(
+  '</body>',
+  '  <script src="content.js"></script>\n  </body>',
+));
 for (const locale of ['en', 'zh_CN']) {
   const localeDir = resolve(publicDir, '_locales', locale);
   await mkdir(localeDir, { recursive: true });

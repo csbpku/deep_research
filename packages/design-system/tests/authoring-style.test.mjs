@@ -87,12 +87,22 @@ test('the shared token files stay the single colour source for both runtimes', a
   }
 });
 
-test('the Reader renders one palette and never declares a second scheme', async () => {
+test('the Reader ships the shared dark palette instead of a second one', async () => {
   const readerCss = await readFile(join(repoRoot, 'apps/extension/design-system/tokens.css'), 'utf8');
-  // A `.dark` block would be a second palette that only the extension knows
-  // about, so the Reader must ship the shared light palette on its own.
-  assert.ok(!/^\.dark\s*\{/mu.test(readerCss), 'the Reader stylesheet must not declare a dark palette');
+  // Dark mode is allowed, but only as the shared overrides: a Reader-only
+  // colour block would drift from the platform palette.
+  assert.match(readerCss, /:root\[data-reader-scheme="dark"\]\s*\{/u, 'the Reader stylesheet must expose the shared dark scheme');
+  const darkBlock = readerCss.split(':root[data-reader-scheme="dark"]')[1] || '';
+  const darkOverrides = JSON.parse(await readFile(join(repoRoot, 'packages/design-system/src/dark.json'), 'utf8'));
+  for (const [key, value] of Object.entries(darkOverrides)) {
+    if (!key.startsWith('color-')) continue;
+    assert.ok(darkBlock.includes(`--reader-${key}: ${value};`), `reader dark css is missing ${key}`);
+  }
+  // A `.dark` class would be a second switch MUI could toggle independently.
+  assert.ok(!/^\.dark\s*\{/mu.test(readerCss), 'the Reader stylesheet must not declare a .dark block');
+});
 
+test('the Reader scheme follows one stored preference and never MUI colour schemes', async () => {
   const offenders = [];
   for (const file of [
     'apps/extension/content.js',
@@ -106,11 +116,14 @@ test('the Reader renders one palette and never declares a second scheme', async 
     'apps/extension/scripts/sync-static.mjs',
   ]) {
     const content = await readFile(join(repoRoot, file), 'utf8');
-    if (/readerColorScheme|reader-color-scheme|useColorScheme|READER_DARK_DESIGN_TOKENS/u.test(content)) {
-      offenders.push(file);
-    }
+    // MUI's `useColorScheme`/`colorSchemes` would let two providers fight over
+    // a class on <html>; the Reader keeps one explicit preference instead.
+    if (/\buseColorScheme\b|\bcolorSchemes\s*:/u.test(content)) offenders.push(file);
   }
-  assert.deepEqual(offenders, [], `the Reader must not reintroduce a colour scheme switch: ${offenders.join(', ')}`);
+  assert.deepEqual(offenders, [], `the Reader must not use MUI colour schemes: ${offenders.join(', ')}`);
+
+  const scheme = await readFile(join(repoRoot, 'apps/extension/color-scheme.js'), 'utf8');
+  assert.ok(scheme.includes("'readerColorScheme'"), 'the scheme preference key must live in one module');
 });
 
 test('the Reader theme declares no colour schemes, so MUI never writes a scheme class', async () => {

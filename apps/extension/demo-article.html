@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bounded queues for background work — Reader demo</title>
+    <style>
+      :root { color-scheme: light; }
+      body { max-width: 760px; margin: 40px auto; padding: 0 24px 96px; font: 18px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; color: #20242c; }
+      h1 { font-size: 30px; line-height: 1.25; margin: 0 0 8px; }
+      h2 { font-size: 21px; margin: 36px 0 10px; }
+      p { margin: 0 0 16px; }
+      .meta { color: #626c7a; font-size: 14px; margin-bottom: 28px; }
+      pre { padding: 14px 16px; overflow: auto; background: #f4f6f8; border: 1px solid #e1e5eb; border-radius: 8px; font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 15px; }
+      th, td { border: 1px solid #e1e5eb; padding: 8px 10px; text-align: left; }
+      th { background: #f4f6f8; }
+      blockquote { margin: 20px 0; padding: 4px 0 4px 16px; border-left: 3px solid #b8c0cd; color: #475160; }
+      .callout { margin: 24px 0; padding: 12px 16px; border: 1px solid #e1e5eb; border-radius: 8px; background: #f7f8fa; font-size: 15px; }
+      @media (prefers-color-scheme: dark) {
+        :root { color-scheme: dark; }
+        body { background: #191e27; color: #eef1f6; }
+        .meta { color: #a8b1c0; }
+        pre, table th, .callout { background: #20262f; border-color: #333b48; }
+        th, td { border-color: #333b48; }
+        blockquote { border-left-color: #56607a; color: #c3cbd8; }
+      }
+    </style>
+  </head>
+  <body>
+    <article>
+      <h1>Bounded queues for background work</h1>
+      <p class="meta">Reader demo article · about 700 words · safe to translate and ask about</p>
+
+      <p id="intro">A background pipeline in the browser has to keep the page responsive while it reads, translates, or analyses content. The most useful primitive for that job is a bounded queue: producers enqueue work, workers take it off the queue, and the queue itself refuses to grow without limit.</p>
+
+      <h2>Why a bound is not a performance limit</h2>
+      <p id="target">Bounded queues keep browser work responsive because cancellation can stop stale requests before they consume more model capacity. The bound is not there to slow the system down; it is there to make the cost of new work visible to the producer.</p>
+      <p>When the queue is full, the producer has three options: wait, drop the oldest item, or fail the request. Each choice has a different failure mode, and the right one depends on whether the work is interactive or background.</p>
+
+      <div class="callout" id="tradeoff"><strong>The trade-off.</strong> A small bound makes backpressure appear early and keeps latency predictable, but throughput suffers when requests arrive in bursts. A large bound absorbs bursts but hides overload until memory and latency both degrade.</div>
+
+      <h2>What cancellation changes</h2>
+      <p>If a user closes the sidebar or changes the selected passage, the queued work is no longer useful. Cancellation has to be part of the queue contract rather than an afterthought: an aborted job must not hold a worker slot, and its result must never be applied to the page after the page has changed.</p>
+      <blockquote id="quote">Reliable reading tools make uncertainty visible and keep the original document in control.</blockquote>
+
+      <h2>Implementation sketch</h2>
+      <pre><code id="code-example">async function drain(queue, worker, signal) {
+  const active = new Set();
+  while (queue.length || active.size) {
+    if (signal.aborted) break;
+    while (active.size &lt; 4 &amp;&amp; queue.length) {
+      const task = queue.shift();
+      active.add(worker(task).finally(() =&gt; active.delete(task)));
+    }
+    if (active.size) await Promise.race(active);
+  }
+}</code></pre>
+
+      <h2>Choosing capacity</h2>
+      <p>Measure the p95 latency of one request and the burst size you expect. Capacity should be large enough to absorb one burst and small enough that a full queue still drains in a few seconds. In practice, four parallel workers and a queue of twenty-four items cover most reading workloads.</p>
+
+      <table>
+        <thead><tr><th>Scenario</th><th>Bound</th><th>Behaviour under load</th></tr></thead>
+        <tbody>
+          <tr><td>Interactive question</td><td>4</td><td>New questions wait; stale ones are cancelled</td></tr>
+          <tr><td>Full-page translation</td><td>24</td><td>Batches queue up; progress stays visible</td></tr>
+          <tr><td>Image analysis</td><td>3</td><td>Slow vision calls do not block text work</td></tr>
+        </tbody>
+      </table>
+
+      <h2>What this demo is for</h2>
+      <p id="purpose">This page exists so you can try the whole reading loop without granting access to a real website: translate it, ask why the bound is not a performance limit, and follow the evidence back to the exact paragraph.</p>
+    </article>
+  </body>
+</html>

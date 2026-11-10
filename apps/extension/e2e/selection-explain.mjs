@@ -159,6 +159,8 @@ try {
   await reopened.locator('#save-selection').click();
   await reopened.locator('#save-dialog').waitFor({ state: 'visible' });
   assert.equal(await reopened.locator('#save-include-ai').isChecked(), true);
+  await reopened.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await reopened.locator('#save-include-ai').waitFor({ state: 'visible' });
   await reopened.locator('#save-include-ai').uncheck();
   await reopened.locator('#save-sync').uncheck();
   await reopened.locator('#save-note').fill('Only my note');
@@ -177,6 +179,8 @@ try {
   await reopened.locator('#save-selection').click();
   await reopened.locator('#save-dialog').waitFor({ state: 'visible' });
   assert.equal(await reopened.locator('#save-note').inputValue(), 'Only my note');
+  await reopened.locator('#save-more-options').evaluate((element) => { element.open = true; });
+  await reopened.locator('#save-include-ai').waitFor({ state: 'visible' });
   await reopened.locator('#save-include-ai').check();
   await reopened.locator('#confirm-save').click();
   await reopened.locator('#save-dialog').waitFor({ state: 'hidden' });
