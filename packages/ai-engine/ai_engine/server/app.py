@@ -466,13 +466,21 @@ async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
             await asyncio.sleep(1.0)
 
 
-def _fact_review_timeout_seconds() -> int:
-    """Bound one independent review attempt; it must not hold the job queue."""
+def _fact_review_timeout_seconds(report_chars: int = 0) -> int:
+    """Bound one independent review attempt; it must not hold the job queue.
+
+    The budget scales with report length: a 30k-character report needs six
+    inventory chunks plus several adjudication batches, and a flat 180s cut
+    the review off mid-batch (``review_unavailable``) even though every model
+    call succeeded. One extra second per ~200 characters keeps the queue bound
+    while letting long reports finish.
+    """
     try:
-        value = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "180"))
+        base = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "180"))
     except (TypeError, ValueError):
-        value = 180
-    return min(max(value, 30), 600)
+        base = 180
+    scaled = base + max(0, report_chars) // 100
+    return min(max(scaled, 30), 900)
 
 
 def _fact_review_heartbeat_seconds(store: JobStore) -> float:
@@ -725,7 +733,7 @@ async def _review_one_item(store: JobStore, work: ReviewWorkItem) -> None:
                             risk=cast(Any, target_risk),
                             phase_callback=review_progress,
                         ),
-                        timeout=_fact_review_timeout_seconds(),
+                        timeout=_fact_review_timeout_seconds(len(work.report)),
                     )
                 if result.claims:
                     challenged = result.claims[0]
@@ -760,7 +768,7 @@ async def _review_one_item(store: JobStore, work: ReviewWorkItem) -> None:
                             report_type=work.report_type,
                             phase_callback=review_progress,
                         ),
-                        timeout=_fact_review_timeout_seconds(),
+                        timeout=_fact_review_timeout_seconds(len(work.report)),
                     )
         except asyncio.TimeoutError:
             checkpoint_claims = _claims_from_review_inventory(workflow_checkpoints)

@@ -811,6 +811,12 @@ def _reconcile_unbound_evidence(
     )
 
 
+# A dense 6k-token chunk can yield >100 claims; a 5k output cap truncates the
+# JSON and turns the whole review into ``review_unavailable``. Keep the cap
+# above the largest observed inventory while staying inside provider limits.
+_INVENTORY_MAX_OUTPUT_TOKENS = 8000
+
+
 def _review_error_code(exc: BaseException) -> ReviewErrorCode:
     """Map provider/parser failures to a small stable UI vocabulary."""
     if isinstance(exc, TokenBudgetExceeded):
@@ -1997,7 +2003,7 @@ class DefaultResearchReviewer:
             estimate_call_tokens(
                 user_prompt=prompt,
                 system_prompt=_CLAIM_INVENTORY_SYSTEM,
-                max_output_tokens=5000,
+                max_output_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
             )
             for prompt in inventory_prompts
         )
@@ -2019,8 +2025,8 @@ class DefaultResearchReviewer:
                         system_prompt=_CLAIM_INVENTORY_SYSTEM,
                         llm_spec=self._llm_spec,
                         tier="light",
-                        max_tokens=5000,
-                        timeout=60.0,
+                        max_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
+                        timeout=90.0,
                         disable_thinking=True,
                         operation="research.fact_review.inventory",
                     )

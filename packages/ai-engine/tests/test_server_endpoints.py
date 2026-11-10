@@ -734,3 +734,12 @@ async def test_logging_failure_does_not_replace_json_response(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     assert response.json()["status"] == "ok"
+
+
+def test_fact_review_timeout_scales_with_report_length(monkeypatch):
+    from ai_engine.server.app import _fact_review_timeout_seconds
+
+    monkeypatch.delenv("FACT_REVIEW_TIMEOUT_SECONDS", raising=False)
+    assert _fact_review_timeout_seconds(0) == 180
+    assert _fact_review_timeout_seconds(31_000) == 490
+    assert _fact_review_timeout_seconds(10_000_000) == 900
