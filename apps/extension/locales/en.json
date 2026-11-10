@@ -893,5 +893,11 @@
   "2. 翻译这篇文章": "2. Translate it",
   "3. 问一个问题": "3. Ask a question",
   "示例文章已打开：点击“翻译”或直接在下方提问。": "Demo article opened. Select Translate, or ask below.",
-  "这篇文章为什么说有界队列的限制不是为了降低性能？": "Why is a bounded queue not a performance limit?"
+  "这篇文章为什么说有界队列的限制不是为了降低性能？": "Why is a bounded queue not a performance limit?",
+  "当前站点：{0}（由通配规则 {1} 匹配）": "Current site: {0} (matched by the wildcard rule {1})",
+  "正文与图片文字翻译通过调研平台 AI Engine 处理；图片字节仅在本次操作中由浏览器读取并按需上传，不会上传图片 URL。{0}{1}{2}": "Text and image translation use the platform AI Engine. Image bytes are read by the browser only for this action and uploaded on demand; image URLs are never uploaded.{0}{1}{2}",
+  "正文翻译会按块处理；图片无法翻译时保留原图并继续。{0}{1}{2}": "Text is translated in batches; untranslatable images keep the original and translation continues.{0}{1}{2}",
+  "保存": "Save",
+  "留空则与聊天使用同一个模型": "Leave empty to use the same model as chat",
+  "来源": "Source"
 }

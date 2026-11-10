@@ -1308,10 +1308,12 @@ async function openDemoArticle() {
   // The demo page loads content.js itself; extension pages cannot be injected
   // by chrome.scripting, so the panel asks for the page context directly.
   if (Number.isInteger(tab?.id)) {
+    // The content script is part of the demo page; a resolved sendMessage
+    // means it is listening, so stop retrying immediately.
     for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
-        const response = await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
-        if (response !== undefined || attempt > 3) break;
+        await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+        break;
       } catch {
         await new Promise((resolve) => { setTimeout(resolve, 250); });
       }
@@ -1945,7 +1947,7 @@ async function askLibrary() {
   status.textContent = t("正在从 {0} 条相关收藏中整理答案…", selection.evidence.length);
   try {
     const messages = buildLibraryAnswerMessages(question, selection.evidence);
-    const payload = await requestChat(readingProvider(), messages, { temperature: 0.2, maxTokens: 1_200 });
+    const payload = await requestChat(provider, messages, { temperature: 0.2, maxTokens: 1_200 });
     const result = parseLibraryAnswer(messageText(payload), selection.evidence);
     renderMarkdown(answerHost, result.answer || '');
     show(answerHost, Boolean(result.answer));
@@ -1966,10 +1968,21 @@ async function askLibrary() {
   }
 }
 
+function safeCitationUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
 function renderLibraryCitations(host, citations) {
   if (!host) return;
   host.replaceChildren();
-  const list = (citations || []).filter((item) => item?.url).slice(0, 6);
+  // Imported records are untrusted input: never render a non-http(s) href in
+  // an extension page.
+  const list = (citations || []).map((item) => ({ ...item, href: safeCitationUrl(item?.url) })).filter((item) => item.href).slice(0, 6);
   if (!list.length) { show(host, false); return; }
   const label = document.createElement('span');
   label.className = 'small';
@@ -1977,11 +1990,13 @@ function renderLibraryCitations(host, citations) {
   host.append(label);
   list.forEach((citation, index) => {
     const link = document.createElement('a');
-    link.href = citation.url;
+    link.href = citation.href;
     link.target = '_blank';
     link.rel = 'noreferrer noopener';
     link.className = 'library-citation';
-    link.textContent = `[${index + 1}] ${citation.title || new URL(citation.url).hostname}`;
+    let hostname = '';
+    try { hostname = new URL(citation.href).hostname; } catch { hostname = ''; }
+    link.textContent = `[${index + 1}] ${citation.title || hostname || t("来源")}`;
     link.title = String(citation.quote || '').slice(0, 200);
     host.append(link);
   });
@@ -3969,7 +3984,8 @@ function downloadText(text, filename, mime = 'text/markdown;charset=utf-8') {
   link.href = url;
   link.download = filename;
   link.click();
-  URL.revokeObjectURL(url);
+  // Revoking in the same tick can cancel the download before Chrome reads it.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 function downloadJson(data) {
@@ -4325,6 +4341,14 @@ async function init() {
   const storedTypeScale = (await chrome.storage.local.get('readerTypeScale')).readerTypeScale;
   $('type-scale').value = ['compact', 'large'].includes(storedTypeScale) ? storedTypeScale : 'comfortable';
   siteRules = normalizeSiteRules((await chrome.storage.local.get(SITE_RULES_KEY))[SITE_RULES_KEY]);
+  // Rules can change from another panel or a future settings surface; keep the
+  // in-memory copy in sync so auto-translate does not need a reload.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[SITE_RULES_KEY]) return;
+    siteRules = normalizeSiteRules(changes[SITE_RULES_KEY].newValue);
+    renderSiteRule();
+    maybeAutoTranslate();
+  });
   usageState = pruneUsage((await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY], { keepDays: 120 });
   translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
   const storedPricing = await readerStore.getSetting('pricing', null);
