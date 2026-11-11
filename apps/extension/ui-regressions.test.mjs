@@ -795,7 +795,7 @@ test('source block extraction excludes nested translations and stays stable when
   let translated = false;
   const node = {};
   node.cloneNode = () => { const clone = { textContent: translated ? 'Original原文译文' : 'Original' }; clone.querySelectorAll = () => translated ? [{ remove: () => { clone.textContent = 'Original'; } }] : []; return clone; };
-  const sandbox = { clean: (text) => text.trim(), node };
+  const sandbox = { clean: (text) => text.trim(), node, READER_OWN_NODE_SELECTOR: '[data-deep-research-translation],[data-deep-research-image-wrap],[data-deep-research-image-fallback],[data-deep-research-image-side-translation],[data-deep-research-status]' };
   const fn = extract(content, '  function sourceBlockText(', '  function extractBlocks(');
   assert.equal(vm.runInNewContext(fn + '\nsourceBlockText(node)', sandbox), 'Original');
   translated = true;

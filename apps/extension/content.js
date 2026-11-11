@@ -381,9 +381,19 @@
     }
   }
 
+  // Reader's own overlays must never become source passages. The image
+  // fallback is a div appended next to an inline image; without this guard
+  // readingBlockNodes would treat it as a new leaf paragraph and change the
+  // page hash, which makes the panel restore (and remove) the translation it
+  // just painted.
+  const READER_OWN_NODE_SELECTOR = '[data-deep-research-translation],[data-deep-research-image-wrap],[data-deep-research-image-fallback],[data-deep-research-image-side-translation],[data-deep-research-status]';
+  function isReaderOwnNode(node) {
+    return Boolean(node.closest(READER_OWN_NODE_SELECTOR));
+  }
+
   function sourceBlockText(node) {
     const clone = node.cloneNode(true);
-    clone.querySelectorAll('[data-deep-research-translation]').forEach((item) => item.remove());
+    clone.querySelectorAll(READER_OWN_NODE_SELECTOR).forEach((item) => item.remove());
     return clean(clone.textContent || '');
   }
 
@@ -400,12 +410,13 @@
     // Publishers sometimes use unadorned divs for article paragraphs.
     // Only add leaf containers outside semantic blocks, preserving structure.
     const leafContainers = collect('div,section')
+      .filter((node) => !isReaderOwnNode(node))
       .filter((node) => !node.closest(READING_BLOCK_SELECTOR))
       .filter((node) => !node.querySelector(`${READING_BLOCK_SELECTOR},div,section,script,style,form,button,input,textarea,select`))
       .filter((node) => /[\p{L}]{2}/u.test(sourceBlockText(node)));
     return [...new Set([...collect(READING_BLOCK_SELECTOR), ...leafContainers])]
       .sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
-      .filter((node) => !node.closest('[data-deep-research-translation]'))
+      .filter((node) => !isReaderOwnNode(node))
       // Never treat a form or an editable control as article text. This is a
       // privacy boundary for pages that mix documentation with a comment,
       // search, or password form.

@@ -131,9 +131,15 @@ try {
   assert.equal(requests.at(-1).stream, true);
   assert.match(requests.at(-1).messages[0].content, /separate distinct ideas with blank lines/u);
   assert.equal(await panel.locator('#conversation-list .assistant .reader-markdown-list li').count(), 2);
-  assert.equal(await page.locator(imageSelector).count(), 1);
+  // Wait past the content-script's 400ms mutation refresh. An image fallback
+  // that leaks into the article body changes the page hash, makes the panel
+  // restore translations, and removes this marker shortly after it is painted.
+  await page.waitForTimeout(1200);
+  assert.equal(await page.locator(imageSelector).count(), 1, 'the first image translation must survive the page-context refresh');
   releaseImage();
   await page.waitForFunction(selector => document.querySelectorAll(selector).length === 2, imageSelector);
+  await page.waitForTimeout(1200);
+  assert.equal(await page.locator(imageSelector).count(), 2, 'both image translations must survive the page-context refresh');
   await panel.reload();
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
   await panel.locator('#composer-model').waitFor({ state: 'visible' });
