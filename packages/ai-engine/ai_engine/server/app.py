@@ -3292,20 +3292,28 @@ _PREFLIGHT_PROBE_TIMEOUT_SECONDS = 4.0
 _PREFLIGHT_CACHE: tuple[str, float, dict[str, Any]] | None = None
 
 
+def _preflight_credential(profile: str, suffix: str) -> str:
+    """Read a credential the same way ``llm.config`` resolves it.
+
+    Profiles accept both ``MINIMAX_API_KEY`` and the lowercase alias
+    ``minimax_api_key``; the preflight must not report a cached "ok" for a
+    profile whose lowercase key was removed.
+    """
+    upper = f"{profile.upper()}_{suffix}"
+    lower = f"{profile.lower()}_{suffix.lower()}"
+    return os.environ.get(upper, "").strip() or os.environ.get(lower, "").strip()
+
+
 def _preflight_cache_key() -> str:
     """Fingerprint the non-secret inputs that can change a preflight result."""
     profiles = ("minimax", "deepseek", "openai", "anthropic")
     credentials = {
         profile: {
-            "key": bool(os.environ.get(f"{profile.upper()}_API_KEY", "").strip()),
-            "key_heavy": bool(
-                os.environ.get(f"{profile.upper()}_API_KEY_HEAVY", "").strip()
-            ),
-            "base_url": bool(os.environ.get(f"{profile.upper()}_BASE_URL", "").strip()),
-            "base_url_heavy": bool(
-                os.environ.get(f"{profile.upper()}_BASE_URL_HEAVY", "").strip()
-            ),
-            "protocol": os.environ.get(f"{profile.upper()}_PROTOCOL", "").strip(),
+            "key": bool(_preflight_credential(profile, "API_KEY")),
+            "key_heavy": bool(_preflight_credential(profile, "API_KEY_HEAVY")),
+            "base_url": bool(_preflight_credential(profile, "BASE_URL")),
+            "base_url_heavy": bool(_preflight_credential(profile, "BASE_URL_HEAVY")),
+            "protocol": _preflight_credential(profile, "PROTOCOL"),
         }
         for profile in profiles
     }
@@ -3362,8 +3370,8 @@ def _check_llm_slot(purpose: LlmPurpose) -> tuple[dict[str, Any], LlmRoute | Non
 
     profile = route.vendor.upper()
     explicit_gateway = bool(
-        os.environ.get(f"{profile}_BASE_URL", "").strip()
-        or os.environ.get(f"{profile}_BASE_URL_HEAVY", "").strip()
+        _preflight_credential(route.vendor, "BASE_URL")
+        or _preflight_credential(route.vendor, "BASE_URL_HEAVY")
     )
     if explicit_gateway:
         return (

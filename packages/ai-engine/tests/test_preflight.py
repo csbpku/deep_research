@@ -34,6 +34,13 @@ for _profile in ("MINIMAX", "DEEPSEEK", "OPENAI", "ANTHROPIC"):
         f"{_profile}_BASE_URL",
         f"{_profile}_BASE_URL_HEAVY",
         f"{_profile}_PROTOCOL",
+        # llm.config accepts the lowercase aliases too; a developer .env often
+        # contains only ``minimax_api_key``.
+        f"{_profile.lower()}_api_key",
+        f"{_profile.lower()}_api_key_heavy",
+        f"{_profile.lower()}_base_url",
+        f"{_profile.lower()}_base_url_heavy",
+        f"{_profile.lower()}_protocol",
     )
 
 
