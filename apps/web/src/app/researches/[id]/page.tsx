@@ -114,6 +114,7 @@ interface ResearchDetail {
     reason?: string | null;
     evidenceStatus: 'supported' | 'unverified' | 'contradicted';
   }>;
+  reviewVerification?: 'verified' | 'disclosed' | null;
   reviewDisclosureSummary?: {
     coverageStatus: 'complete' | 'insufficient' | 'not_applicable' | null;
     researchSufficiencyStatus: 'sufficient' | 'insufficient' | 'not_assessed' | null;
@@ -282,6 +283,12 @@ export default function ResearchDetailPage() {
             <StatusBadge kind="researchType" value={isLongResearch ? 'research' : 'knowledge'} />
             <StatusBadge kind="method" value={data.creationMethod} />
             {isDraft && <StatusBadge kind="research" value="draft" />}
+            {!isDraft && data.reviewVerification === 'verified'
+              ? <StatusBadge kind="verification" value="verified" icon={<CheckCircle2 size={14} />} />
+              : null}
+            {!isDraft && data.reviewVerification === 'disclosed'
+              ? <StatusBadge kind="verification" value="disclosed" icon={<AlertTriangle size={14} />} />
+              : null}
             {data.featuredAt && <StatusBadge kind="featured" value="true" icon={<Star />} />}
           </div>
 

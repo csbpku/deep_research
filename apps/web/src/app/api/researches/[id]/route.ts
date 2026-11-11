@@ -874,6 +874,18 @@ function shapeResearchDetail(r: {
       ]
     : [];
   const reviewDisclosureSummary = r.status === 'published' ? publishDisposition.disclosure : null;
+  // The reader-facing verification state is derived from the current run:
+  // only a completed, clear review earns "已核验"; anything disclosed stays
+  // explicitly "带披露发布". A report without a current review gets neither.
+  const reviewVerification: 'verified' | 'disclosed' | null = r.status !== 'published'
+    ? null
+    : publishDisposition.disclosure
+      ? 'disclosed'
+      : currentReview.run
+        && currentReview.run.executionStatus === 'completed'
+        && currentReview.run.outcome === 'clear'
+        ? 'verified'
+        : null;
   return {
     id: r.id,
     type: r.type,
@@ -901,6 +913,7 @@ function shapeResearchDetail(r: {
     // current run, so it cannot survive an edit as if it still applied.
     reviewDisclosure,
     reviewDisclosureSummary,
+    reviewVerification,
     researchSufficiency,
     // `reviewRuns` is the audit trail. This projection is the single state
     // used by current-version UI decisions, so clients do not need to infer
