@@ -136,3 +136,36 @@ test('the demo exception does not grant activation to other extension pages', as
   }
   assert.equal(worker.sent.length, 0);
 });
+
+test('worker records translation usage only after the job completes', async () => {
+  globalThis.fetch = async () => completion();
+  const worker = createBackgroundHarness();
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'usage-complete', tabId: 1, context: context() });
+  await waitFor(async () => (await readerStore.getJob('usage-complete'))?.status === 'completed', 3000);
+  const usage = await waitFor(() => worker.chrome.storage.local.values.readerUsage, 3000);
+  assert.equal(usage.totals.translation.requests, 1);
+  assert.ok(usage.totals.translation.chars > 0);
+  assert.ok(usage.totals.translation.tokens > 0);
+});
+
+test('worker does not record usage for a cancelled translation', async () => {
+  globalThis.fetch = async (_url, options) => {
+    return new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    });
+  };
+  const worker = createBackgroundHarness();
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'usage-cancel', tabId: 1, context: context() });
+  await waitFor(async () => (await readerStore.getJob('usage-cancel'))?.status === 'running', 3000);
+  await worker.dispatch({ type: 'deep-research:translation-cancel', jobId: 'usage-cancel' });
+  await waitFor(async () => (await readerStore.getJob('usage-cancel'))?.status === 'cancelled', 3000);
+  assert.equal(worker.chrome.storage.local.values.readerUsage, undefined);
+});
+
+test('worker does not record usage when the job fails before translating', async () => {
+  await readerStore.setSetting('provider', null);
+  const worker = createBackgroundHarness();
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'usage-fail', tabId: 1, context: context() });
+  await waitFor(async () => (await readerStore.getJob('usage-fail'))?.status === 'failed', 5000);
+  assert.equal(worker.chrome.storage.local.values.readerUsage, undefined);
+});

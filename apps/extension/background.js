@@ -7,6 +7,7 @@ import { DEFAULT_WEB_APP_URL, resolvePlatformOrigin } from './platform-config.js
 import { getTrustedReaderPlatformOrigin, validateRadarSourceUrl } from './reader-platform-bridge-utils.js';
 import { resumePendingInstall } from './reader-install-resume.js';
 import { createUsageRecorder } from './usage-persistence.js';
+import { estimateTranslation } from './cost-estimate.js';
 import { GLOSSARY_MAX_PROMPT_CHARS, glossaryPrompt as buildGlossaryPrompt, parseGlossary } from './glossary.js';
 import { isBundledDemoUrl, requestDemoContext } from './reader-demo.js';
 
@@ -322,6 +323,21 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
       recoveryRequired: false,
     });
     await readerStore.deleteTaskInput(jobId);
+    // Count the job only once it reached a terminal success state. Recording at
+    // hand-off made a cancelled translation look like a completed one.
+    try {
+      const usage = estimateTranslation({ blocks, body: boundedContext.body });
+      if (usage.requests) {
+        await recordReaderUsage({
+          kind: 'translation',
+          requests: usage.requests + images.length,
+          chars: usage.chars,
+          tokens: usage.tokens,
+        });
+      }
+    } catch {
+      // Usage is best-effort evidence; it must never fail a finished translation.
+    }
     emit('deep-research:translation-complete', { job: { ...job }, failures, warnings });
   } catch (error) {
     const recoverForNewPage = Boolean(translationJobs.get(jobId)?.preserveForRecovery);

@@ -59,8 +59,9 @@ test('a worker-accepted translation never also starts the panel executor', async
   await panel.run(panel.context);
   assert.equal(panel.calls.worker, 1);
   assert.equal(panel.calls.local, 0);
-  assert.equal(panel.calls.usage.length, 1);
-  assert.equal(panel.calls.usage[0].requests, estimateTranslation(panel.context).requests);
+  // The worker records usage when the job completes; billing at hand-off
+  // counted translations the user could still cancel.
+  assert.equal(panel.calls.usage.length, 0);
 });
 
 test('bookkeeping failure after worker acceptance cannot launch another executor', async () => {
@@ -201,4 +202,23 @@ test('opening another panel cannot overwrite a usage event committed while setti
   await opening;
   assert.equal(stored.readerUsage.totals.translation.requests, 1);
   assert.equal(stored.readerUsage.totals.answer.requests, 1);
+});
+
+test('the panel fallback records usage only after the local translation finishes', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const panel = translationPanel({
+    sendMessage: async () => { throw new Error('worker unavailable'); },
+    localTranslate: async (_provider, _document, blocks) => {
+      await gate;
+      return blocks.map((block) => ({ ...block, text: '队列受到保护。', sourceText: block.text }));
+    },
+  });
+  const run = panel.run(panel.context);
+  await waitFor(() => panel.calls.local === 1);
+  assert.equal(panel.calls.usage.length, 0);
+  release();
+  await run;
+  assert.equal(panel.calls.usage.length, 1);
+  assert.equal(panel.calls.usage[0].requests, estimateTranslation(panel.context).requests);
 });

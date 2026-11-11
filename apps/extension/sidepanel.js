@@ -1770,6 +1770,14 @@ function renderLibraryTagOptions(tags) {
   select.value = current;
 }
 
+async function refreshUsageFromStorage() {
+  try {
+    const stored = (await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY];
+    usageState = pruneUsage(mergeUsage(usageState, stored), { keepDays: 120 });
+    renderUsageSummary();
+  } catch { /* usage is best-effort */ }
+}
+
 async function loadUsageSettings() {
   translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
   const storedPricing = await readerStore.getSetting('pricing', null);
@@ -3222,11 +3230,8 @@ async function processDocument(context, runId = activeTranslationRun) {
     if (accepted?.ok) {
       try {
         persistJobPatch(job, { workerManaged: true, status: job.status === 'completed' ? 'queued' : job.status || 'queued' });
-        void recordUsageEvent('translation', {
-          requests: usageEstimate.requests + images.length,
-          chars: usageEstimate.chars,
-          tokens: usageEstimate.tokens,
-        });
+        // The worker records usage when the job completes; counting here
+        // would bill a task that the user cancels a second later.
       } catch {
         // The background owns this task now. Panel bookkeeping cannot start
         // another model pipeline; a recreated panel can read worker progress.
@@ -3319,11 +3324,6 @@ async function processDocument(context, runId = activeTranslationRun) {
       ...blocks.filter((block) => block.kind === 'code').map((block) => block.id),
     ]);
     if (runId !== activeTranslationRun) return;
-    void recordUsageEvent('translation', {
-      requests: usageEstimate.requests + images.length,
-      chars: usageEstimate.chars,
-      tokens: usageEstimate.tokens,
-    });
     const finalResults = await applyTranslations([...cachedTranslations, ...translations.filter((item) => item.text)]);
     const renderedById = new Map(finalResults.map((item) => [item.id, item]));
     translations = [...cachedTranslations, ...translations].map((item) => renderedById.get(item.id) || item);
@@ -3345,6 +3345,11 @@ async function processDocument(context, runId = activeTranslationRun) {
       persistJobPatch(job, { imageDone, imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size), processedImageIds: job.processedImageIds });
     }
     if (runId !== activeTranslationRun) return;
+    void recordUsageEvent('translation', {
+      requests: usageEstimate.requests + images.length,
+      chars: usageEstimate.chars,
+      tokens: usageEstimate.tokens,
+    });
     const usableImageTranslations = imageTranslations.filter((item) => item.regions?.length || item.fallbackText || item.fallbackRegions?.length);
     if (usableImageTranslations.length) {
       usableImageTranslations.forEach((item) => translatedImageIds.add(item.id));
@@ -4304,6 +4309,7 @@ chrome.runtime.onMessage.addListener((message) => {
       : reportedFailures;
     translationRunning = false;
     translationPaused = Boolean(message.cancelled && translationPaused);
+    void refreshUsageFromStorage();
     renderProgress(activeJobRecord.textDone || 0, activeJobRecord.textTotal || 0, activeJobRecord.imageDone || 0, activeJobRecord.imageTotal || 0);
     const failures = failedTranslationItems.length;
     if (!message.cancelled && !failures && activeJobRecord.status === 'completed') {
