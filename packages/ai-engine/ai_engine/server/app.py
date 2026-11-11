@@ -469,22 +469,21 @@ async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
 def _fact_review_timeout_seconds(report_chars: int = 0) -> int:
     """Bound one independent review attempt; it must not hold the job queue.
 
-    The budget scales with report length: a 30k-character report needs six
+    The budget scales with report length: a 30k-character report needs a dozen
     inventory chunks plus several adjudication batches, and a flat 180s cut
     the review off mid-batch (``review_unavailable``) even though every model
-    call succeeded. One extra second per ~200 characters keeps the queue bound
-    while letting long reports finish.
+    call succeeded. The base covers one inventory wave; one extra second per
+    ~30 characters keeps the queue bound while letting long reports finish.
     """
     try:
-        base = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "180"))
+        base = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "300"))
     except (TypeError, ValueError):
-        base = 180
-    # Observed: a 31k-character report needs ~8 minutes end to end
-    # (6 inventory chunks + 28 adjudication batches). 1s per 60 characters
-    # leaves headroom without letting a stalled review hold the queue for the
-    # full upper bound.
-    scaled = base + max(0, report_chars) // 60
-    return min(max(scaled, 30), 900)
+        base = 300
+    # Observed locally: inventory alone can take ~10 minutes for 31k characters
+    # when the provider needs 60-180s per chunk; adjudication adds ~6 minutes
+    # at concurrency 3. 1s per 30 characters keeps that inside the bound.
+    scaled = base + max(0, report_chars) // 30
+    return min(max(scaled, 30), 1500)
 
 
 def _fact_review_heartbeat_seconds(store: JobStore) -> float:

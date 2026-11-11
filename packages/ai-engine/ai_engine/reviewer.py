@@ -815,7 +815,7 @@ def _reconcile_unbound_evidence(
 # A dense 6k-token chunk can yield >100 claims; a 5k output cap truncates the
 # JSON and turns the whole review into ``review_unavailable``. Keep the cap
 # above the largest observed inventory while staying inside provider limits.
-_INVENTORY_MAX_OUTPUT_TOKENS = 8000
+_INVENTORY_MAX_OUTPUT_TOKENS = 12000
 
 
 def _review_error_code(exc: BaseException) -> ReviewErrorCode:
@@ -2126,7 +2126,7 @@ class DefaultResearchReviewer:
         inventory_body = _report_body_without_references(report)
         inventory_chunks = split_text_by_token_budget(
             inventory_body,
-            max(1_000, int(os.environ.get("RESEARCH_REVIEW_CHUNK_TOKENS", "6000"))),
+            max(1_000, int(os.environ.get("RESEARCH_REVIEW_CHUNK_TOKENS", "2000"))),
         )
         inventory_prompts = [
             (
@@ -2158,41 +2158,64 @@ class DefaultResearchReviewer:
                 operation="research.fact_review.inventory",
                 estimated_tokens=inventory_reserved_tokens,
             ):
-                for chunk, inventory_prompt in zip(inventory_chunks, inventory_prompts):
+                inventory_semaphore = asyncio.Semaphore(_fact_review_concurrency())
+
+                async def _inventory_one(
+                    chunk: Any, inventory_prompt: str
+                ) -> tuple[int, dict[str, Any] | None, bool]:
                     parsed_payload: dict[str, Any] | None = None
                     truncated = False
-                    for attempt in (1, 2):
-                        generated = await generate_text(
-                            user_prompt=inventory_prompt,
-                            system_prompt=_CLAIM_INVENTORY_SYSTEM,
-                            llm_spec=self._llm_spec,
-                            tier="light",
-                            max_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
-                            timeout=90.0,
-                            disable_thinking=True,
-                            operation="research.fact_review.inventory",
-                        )
-                        truncated = bool(getattr(generated, "truncated", False))
-                        if not truncated:
-                            parsed_payload = _extract_json_object(generated.text)
-                        if parsed_payload is not None:
-                            break
-                        # Content-free diagnostics: enough to tell a truncated
-                        # JSON from a non-JSON answer without logging report text.
-                        _review_logger.warning(
-                            "inventory chunk unusable chunk=%s/%s attempt=%s truncated=%s output_chars=%s",
-                            chunk.index,
-                            len(inventory_chunks),
-                            attempt,
-                            truncated,
-                            len(generated.text),
-                        )
-                    if parsed_payload is None:
-                        raise ValueError(
-                            f"第 {chunk.index}/{len(inventory_chunks)} 个报告块的声明清单"
-                            + ("输出不完整" if truncated else "无法解析")
-                        )
-                    completed_inventory_chunks += 1
+                    async with inventory_semaphore:
+                        for attempt in (1, 2):
+                            generated = await generate_text(
+                                user_prompt=inventory_prompt,
+                                system_prompt=_CLAIM_INVENTORY_SYSTEM,
+                                llm_spec=self._llm_spec,
+                                tier="light",
+                                max_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
+                                # Multi-thousand-character chunks can produce
+                                # JSON that takes slower providers past 90s.
+                                # A timeout here discards the whole inventory.
+                                timeout=180.0,
+                                disable_thinking=True,
+                                operation="research.fact_review.inventory",
+                            )
+                            truncated = bool(getattr(generated, "truncated", False))
+                            if not truncated:
+                                parsed_payload = _extract_json_object(generated.text)
+                            if parsed_payload is not None:
+                                break
+                            # Content-free diagnostics: enough to tell a
+                            # truncated JSON from a non-JSON answer without
+                            # logging report text.
+                            _review_logger.warning(
+                                "inventory chunk unusable chunk=%s/%s attempt=%s truncated=%s output_chars=%s",
+                                chunk.index,
+                                len(inventory_chunks),
+                                attempt,
+                                truncated,
+                                len(generated.text),
+                            )
+                    return chunk.index, parsed_payload, truncated
+
+                inventory_results = await asyncio.gather(*(
+                    _inventory_one(chunk, prompt)
+                    for chunk, prompt in zip(inventory_chunks, inventory_prompts)
+                ))
+                failed_inventory = [
+                    (chunk, truncated)
+                    for chunk, (_, payload, truncated) in zip(inventory_chunks, inventory_results)
+                    if payload is None
+                ]
+                if failed_inventory:
+                    failed_chunk, failed_truncated = failed_inventory[0]
+                    raise ValueError(
+                        f"第 {failed_chunk.index}/{len(inventory_chunks)} 个报告块的声明清单"
+                        + ("输出不完整" if failed_truncated else "无法解析")
+                    )
+                completed_inventory_chunks = len(inventory_results)
+                for chunk, (_, parsed_payload, _) in zip(inventory_chunks, inventory_results):
+                    assert parsed_payload is not None
                     coverage = parsed_payload.get("coverage_status")
                     inventory_coverages.append(
                         coverage
@@ -2347,7 +2370,7 @@ class DefaultResearchReviewer:
             # degrading to an explicit unavailable review.  This is a
             # recovery attempt, never a pass-through to "verified".
             first_error = exc
-            first_raw = generated.text[:500] if "generated" in locals() and generated.text else "<no output>"
+            first_raw = "<inventory unavailable>"
             retry_prompt = (
                 f"主题：{topic}\n报告类型：{report_type}\n"
                 "只审核报告中最重要的可验证事实；观点和建议使用 not_applicable。\n"

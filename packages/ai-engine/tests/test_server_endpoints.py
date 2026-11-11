@@ -740,6 +740,6 @@ def test_fact_review_timeout_scales_with_report_length(monkeypatch):
     from ai_engine.server.app import _fact_review_timeout_seconds
 
     monkeypatch.delenv("FACT_REVIEW_TIMEOUT_SECONDS", raising=False)
-    assert _fact_review_timeout_seconds(0) == 180
-    assert _fact_review_timeout_seconds(31_000) == 696
-    assert _fact_review_timeout_seconds(10_000_000) == 900
+    assert _fact_review_timeout_seconds(0) == 300
+    assert _fact_review_timeout_seconds(31_000) == 1333
+    assert _fact_review_timeout_seconds(10_000_000) == 1500
