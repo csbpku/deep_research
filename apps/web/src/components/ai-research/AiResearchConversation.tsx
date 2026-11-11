@@ -24,6 +24,7 @@ import { InlineAiResearchStatus } from '@/components/ai-research/InlineAiResearc
 import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiResearchBrief';
 import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
 import { AppTextField as Input } from '@/components/material/AppTextField';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
@@ -334,6 +335,13 @@ interface InlineJobSnapshot {
   artifact: { content: string | null } | null;
 }
 
+type PreflightCheck = {
+  name: string;
+  ok: boolean;
+  message: string;
+  level?: 'warning' | 'error';
+};
+
 const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
 
 export function AiResearchConversation({
@@ -384,11 +392,83 @@ export function AiResearchConversation({
   const [restoredBrief, setRestoredBrief] = useState<BriefValue | null>(null);
   const [draftStorageError, setDraftStorageError] = useState(false);
   const [submissionUncertain, setSubmissionUncertain] = useState(false);
+  const [preflightStatus, setPreflightStatus] = useState<'idle' | 'checking' | 'ok' | 'warning' | 'blocked'>('idle');
+  const [preflightChecks, setPreflightChecks] = useState<PreflightCheck[]>([]);
+  const [preflightAttempt, setPreflightAttempt] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousConversationIdRef = useRef<string | null>(conversationId ?? null);
   const loadedConversationIdRef = useRef<string | null>(null);
   const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const fromJobAppliedRef = useRef(false);
+
+  // Preflight runs once the plan is ready, before the user can start. A slow
+  // check downgrades to a warning (never a hard block); a returned failure
+  // blocks the start button with the specific reason.
+  const preflightQuestion = brief?.brief?.question?.trim() ?? '';
+  useEffect(() => {
+    if (!preflightQuestion || planning) {
+      setPreflightStatus('idle');
+      setPreflightChecks([]);
+      return;
+    }
+    if (submitting || activeJobId) return;
+    const controller = new AbortController();
+    let timedOut = false;
+    setPreflightStatus('checking');
+    setPreflightChecks([]);
+    const timer = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      setPreflightStatus('warning');
+      setPreflightChecks([{
+        name: 'preflight_timeout',
+        ok: true,
+        level: 'warning',
+        message: '启动前检查超时，暂未确认模型与搜索配置；仍可开始，失败时会显示具体原因。',
+      }]);
+    }, 6000);
+    const preflightUrl = preflightAttempt > 0
+      ? '/api/ai-research/preflight?refresh=1'
+      : '/api/ai-research/preflight';
+    void fetch(preflightUrl, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json() as { ok?: unknown; checks?: unknown };
+      })
+      .then((data) => {
+        if (timedOut || controller.signal.aborted) return;
+        const checks = Array.isArray(data.checks)
+          ? data.checks.filter((check): check is PreflightCheck => {
+              if (!check || typeof check !== 'object') return false;
+              const candidate = check as Record<string, unknown>;
+              return typeof candidate.name === 'string'
+                && typeof candidate.ok === 'boolean'
+                && typeof candidate.message === 'string';
+            })
+          : [];
+        setPreflightChecks(checks);
+        if (data.ok === true) {
+          setPreflightStatus(checks.some((check) => check.level === 'warning') ? 'warning' : 'ok');
+        } else {
+          setPreflightStatus('blocked');
+        }
+      })
+      .catch(() => {
+        if (timedOut || controller.signal.aborted) return;
+        setPreflightStatus('warning');
+        setPreflightChecks([{
+          name: 'preflight_unavailable',
+          ok: true,
+          level: 'warning',
+          message: '启动前检查请求失败，暂未确认模型与搜索配置；仍可开始，失败时会显示具体原因。',
+        }]);
+      })
+      .finally(() => window.clearTimeout(timer));
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [preflightQuestion, preflightAttempt, planning, submitting, activeJobId]);
 
   // Task history, the topbar and old /ai-research/<jobId> links land here
   // with a job id. Show that job's result in place; a conversation is only
@@ -830,6 +910,11 @@ export function AiResearchConversation({
 
   async function submit(extraMessages: Message[] = []) {
     if (submitting || activeJobId || conversationCreating || hydrating || submissionUncertain) return;
+    if (preflightStatus === 'blocked') {
+      setErrorKind('validation');
+      setError('启动前检查未通过，请先修复上方列出的模型/凭据/检索配置后重试。');
+      return;
+    }
     if (topic.trim().length < 2) {
       setErrorKind('validation');
       setError('先告诉我至少 2 个字的研究主题。');
@@ -1140,6 +1225,50 @@ export function AiResearchConversation({
 
               {phase !== 'understand' && !activeJobId && !hydrating ? (
                 <Box sx={{ ml: 5, minWidth: 0 }}>
+                  {preflightStatus === 'checking' ? (
+                    <Box role="status" aria-live="polite" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                      <CircularProgress size={14} thickness={5} aria-hidden />
+                      <Typography sx={{ typography: 'metadata', color: 'text.secondary' }}>
+                        正在检查模型与搜索配置…
+                      </Typography>
+                    </Box>
+                  ) : null}
+                  {preflightStatus === 'blocked' || preflightStatus === 'warning' ? (
+                    <Alert
+                      severity={preflightStatus === 'blocked' ? 'error' : 'warning'}
+                      sx={{ mb: 1.5, alignItems: 'flex-start' }}
+                      action={(
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() => setPreflightAttempt((value) => value + 1)}
+                        >
+                          重新检查
+                        </Button>
+                      )}
+                    >
+                      <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, mb: 0.5 }}>
+                        {preflightStatus === 'blocked'
+                          ? '启动前检查未通过，暂时无法开始研究'
+                          : '启动前检查有提示'}
+                      </Typography>
+                      <Box component="ul" sx={{ m: 0, pl: 2, display: 'grid', gap: 0.25 }}>
+                        {(preflightStatus === 'blocked'
+                          ? preflightChecks.filter((check) => !check.ok)
+                          : preflightChecks.filter((check) => check.level === 'warning')
+                        ).map((check) => (
+                          <Box
+                            component="li"
+                            key={check.name}
+                            sx={{ typography: 'metadata', overflowWrap: 'anywhere' }}
+                          >
+                            {check.message}
+                          </Box>
+                        ))}
+                      </Box>
+                    </Alert>
+                  ) : null}
                   <AiResearchBrief
                     initialBrief={restoredBrief}
                     question={topic}
@@ -1151,13 +1280,18 @@ export function AiResearchConversation({
                         size="sm"
                         aria-label="开始调研"
                         onClick={() => void submit()}
-                        disabled={submitting || conversationCreating || hydrating || submissionUncertain || scopeIncomplete || sourceSelectionIncomplete || brief?.contextSelectionIncomplete}
+                        disabled={submitting || conversationCreating || hydrating || submissionUncertain || scopeIncomplete || sourceSelectionIncomplete || brief?.contextSelectionIncomplete || preflightStatus === 'blocked' || preflightStatus === 'checking'}
                       >
                         {submitting ? <CircularProgress size={16} thickness={5} aria-hidden /> : <Send size={16} />}
                         {submitting ? '启动中…' : '开始研究'}
                       </Button>
                     )}
-                      onBriefReady={(value) => setBrief(value)}
+                      onBriefReady={(value) => {
+                        setBrief(value);
+                        // A new plan gets a fresh cached preflight; only an
+                        // explicit "重新检查" should bypass the engine cache.
+                        setPreflightAttempt(0);
+                      }}
                     onPlanningChange={(value) => {
                       setPlanning(value);
                       // Never let a previous question's brief be submitted
