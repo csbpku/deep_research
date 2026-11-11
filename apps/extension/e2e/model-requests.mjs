@@ -62,6 +62,8 @@ try {
   });
   const worker = browser.serviceWorkers()[0] || await browser.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;
+  const page = await browser.newPage();
+  await page.goto(origin);
   const panel = await browser.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
@@ -74,15 +76,21 @@ try {
     });
     db.close();
   }, `${origin}/v1`);
+  await page.bringToFront();
   await panel.reload();
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
   await panel.locator('#settings-button').click();
   await panel.locator('#answer-reasoning-mode').selectOption('high');
   await panel.locator('#save-usage-settings').click();
   await panel.locator('#usage-settings-status').filter({ hasText: /已保存|saved/u }).waitFor();
+  const savedEffort = await panel.evaluate(async () => {
+    const db = await new Promise(resolve => { const open = indexedDB.open('deep-research-reader', 4); open.onsuccess = () => resolve(open.result); });
+    const result = await new Promise(resolve => { const read = db.transaction('settings').objectStore('settings').get('answerReasoningMode'); read.onsuccess = () => resolve(read.result?.value); });
+    db.close(); return result;
+  });
+  assert.equal(savedEffort, 'high', `saved effort differs from UI ${await panel.locator('#answer-reasoning-mode').inputValue()}`);
 
-  const page = await browser.newPage();
-  await page.goto(origin);
+
   await page.bringToFront();
   const tabId = await worker.evaluate(async url => {
     const [tab] = await chrome.tabs.query({ url: `${url}/*` });
@@ -112,7 +120,7 @@ try {
     context: { ...context, body: 'Bounded queues preserve capacity for interactive work.' } };
   assert.equal((await panel.evaluate(input => chrome.runtime.sendMessage({ type: 'deep-research:answer-start', input }), input)).ok, true);
   await panel.waitForFunction(async () => (await chrome.runtime.sendMessage({ type: 'deep-research:answer-state', id: 'answer' }))?.status === 'completed');
-  assert.equal(requests.at(-1).reasoning_effort, 'high');
+  assert.equal(requests.at(-1).reasoning_effort, 'high', JSON.stringify(requests.map(body => ({ model: body.model, effort: body.reasoning_effort, stream: body.stream, image: Array.isArray(body.messages.at(-1).content) }))));
   assert.equal(requests.at(-1).stream, true);
   assert.equal(await page.locator(imageSelector).count(), 1);
   releaseImage();

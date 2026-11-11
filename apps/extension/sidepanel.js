@@ -1791,13 +1791,14 @@ function renderUsageSettings() {
 
 async function saveUsageSettings() {
   const model = String($('translation-model')?.value || '').trim();
+  const reasoningMode = $('answer-reasoning-mode')?.value || 'auto';
   const input = Math.max(0, Number($('price-input')?.value) || 0);
   const output = Math.max(0, Number($('price-output')?.value) || 0);
   translationModel = model;
+  answerReasoningMode = reasoningMode;
   pricing = { inputPerMillion: input, outputPerMillion: output };
   await readerStore.setSetting('translationModel', model);
-  answerReasoningMode = $('answer-reasoning-mode')?.value || 'auto';
-  await readerStore.setSetting('answerReasoningMode', answerReasoningMode);
+  await readerStore.setSetting('answerReasoningMode', reasoningMode);
   await readerStore.setSetting('pricing', pricing);
   $('usage-settings-status').textContent = t("用量设置已保存。");
 }

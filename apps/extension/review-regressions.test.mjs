@@ -20,6 +20,23 @@ function actualFunction(start, end, globals) {
   return vm.runInNewContext(`${source.slice(begin, finish)}\n${start.match(/function (\w+)/)[1]}`, { t, ...globals });
 }
 
+test('usage settings capture the selected answer effort before asynchronous writes can refresh the form', async () => {
+  const nodes = {
+    'translation-model': { value: '' }, 'answer-reasoning-mode': { value: 'high' },
+    'price-input': { value: '' }, 'price-output': { value: '' }, 'usage-settings-status': {},
+  };
+  const saved = new Map();
+  const save = actualFunction('async function saveUsageSettings(', '\nasync function recordUsageEvent(', {
+    $: id => nodes[id], translationModel: '', answerReasoningMode: 'auto', pricing: {},
+    readerStore: { async setSetting(key, value) {
+      saved.set(key, value);
+      if (key === 'translationModel') nodes['answer-reasoning-mode'].value = 'auto';
+    } },
+  });
+  await save();
+  assert.equal(saved.get('answerReasoningMode'), 'high');
+});
+
 function translationPanel({ failBookkeeping = false, sendMessage = async () => ({ ok: true }), localTranslate } = {}) {
   const calls = { worker: 0, local: 0, usage: [] };
   const job = { id: 'translation-test', status: 'queued', targetLanguage: 'zh-CN' };
