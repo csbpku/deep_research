@@ -1681,10 +1681,11 @@ async def _run_adjudication_batch(
     report_type: str,
     source_text: str,
     llm_spec: str | None,
+    attempts: int = 2,
 ) -> tuple[ReviewResult | None, BaseException | None]:
-    """Run one independent batch with one retry; never raise to the caller."""
+    """Run one independent batch with bounded retries; never raise to the caller."""
     last_error: BaseException | None = None
-    for attempt in (1, 2):
+    for attempt in range(1, attempts + 1):
         try:
             adjudication_prompt = (
                 f"主题：{topic}\n报告类型：{report_type}\n"
@@ -1721,6 +1722,82 @@ async def _run_adjudication_batch(
             _review_error_code(last_error or RuntimeError("batch failed")),
         )
     return None, last_error
+
+
+async def _adjudicate_batch_with_split(
+    *,
+    batch: tuple[ClaimInventoryItem, ...],
+    batch_index: int,
+    batch_count: int,
+    topic: str,
+    report_type: str,
+    source_text: str,
+    llm_spec: str | None,
+) -> tuple[ReviewResult | None, BaseException | None]:
+    """Retry a failed batch, then split it before giving up.
+
+    Large batches fail as a unit when one claim confuses the model. Splitting
+    a 6-claim batch into two independent 3-claim calls recovers that coverage
+    without changing the review semantics for the successful half.
+    """
+    result, error = await _run_adjudication_batch(
+        batch=batch,
+        batch_index=batch_index,
+        batch_count=batch_count,
+        topic=topic,
+        report_type=report_type,
+        source_text=source_text,
+        llm_spec=llm_spec,
+        attempts=2,
+    )
+    if result is not None or len(batch) < 4:
+        return result, error
+
+    midpoint = len(batch) // 2
+    parts = (batch[:midpoint], batch[midpoint:])
+    _review_logger.warning(
+        "adjudication batch splitting batch=%s/%s claims=%s",
+        batch_index,
+        batch_count,
+        len(batch),
+    )
+    outcomes = await asyncio.gather(*(
+        _run_adjudication_batch(
+            batch=part,
+            batch_index=batch_index,
+            batch_count=batch_count,
+            topic=topic,
+            report_type=report_type,
+            source_text=source_text,
+            llm_spec=llm_spec,
+            attempts=1,
+        )
+        for part in parts
+    ))
+
+    claims: list[ClaimVerdict] = []
+    instructions: list[str] = []
+    failed = False
+    for part_result, part_error in outcomes:
+        if part_result is None:
+            failed = True
+            error = part_error or error
+            continue
+        claims.extend(part_result.claims)
+        instructions.extend(part_result.revision_instructions)
+        if part_result.coverage_status == "insufficient":
+            failed = True
+
+    if not claims:
+        return None, error
+    return ReviewResult(
+        status="needs_revision" if failed else "passed",
+        claims=tuple(claims),
+        revision_instructions=tuple(dict.fromkeys(instructions)),
+        coverage_status="insufficient" if failed else "complete",
+        batch_count=1,
+        attempts=3,
+    ), None
 
 
 async def _adjudicate_fact_batches(
@@ -1786,7 +1863,7 @@ async def _adjudicate_fact_batches(
             })
 
         outcomes = await asyncio.gather(*(
-            _run_adjudication_batch(
+            _adjudicate_batch_with_split(
                 batch=batch,
                 batch_index=batch_index,
                 batch_count=len(batches),
@@ -1827,10 +1904,16 @@ async def _adjudicate_fact_batches(
                 continue
 
             batch_claims = list(batch_result.claims)
-            missing_count = sum(
-                1 for claim in batch_claims
-                if "没有返回这条声明的结果" in (claim.reason or "")
+            returned_ids = {claim.claim_id for claim in batch_claims}
+            missing_items = tuple(
+                item for item in batch if item.claim_id not in returned_ids
             )
+            if missing_items:
+                judged_claims.extend(_unverified_batch_claims(
+                    missing_items,
+                    reason=f"第 {batch_index} 批未返回这些声明的判断结果。",
+                ))
+            missing_count = len(missing_items)
             if batch_result.coverage_status == "insufficient" or missing_count:
                 failed_batches += 1
             else:
