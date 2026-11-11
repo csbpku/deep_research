@@ -264,17 +264,17 @@
 | 1 | 修雷达可见性 | 回填 `external_reading` 标签；或把"审核未完成"从公开门槛降级为"标注未审核"；至少让精读不再比速读更难看见 | 精读可见率 > 70% | ⚠️ 部分：新增"自动流水线 ready 但未人工复核"分支，可见精读 59 → 285 条（约 67%）；剩余 139 条 `needs_manual_review` 仍隐藏 |
 | 2 | 改默认视图 | 默认「全部时间 + 精读/速读」；空态给出"放宽等级/来源/时间"三个一键动作 | 首屏非空率 > 90% | ✅ 默认精读+速读、全部时间；空态「放宽到全部时间与可读内容」一键重置 |
 | 3 | 时间语义 | 卡片主位改"发布 X 天前"，入库时间降为 tooltip | 用户能判断新旧 | ✅ `publishedAt` 主位，tooltip 同时给发布/入库 |
-| 4 | 判断落点 | 卡片/详情加「已读 / 不感兴趣 / 稍后 / 值得试点」四态 + 可选一句话；进入 "我判断过的" 视图；反馈写入排序权重 | 判断率（判断/打开）> 20% | ❌ 仍只有收藏/点踩 |
+| 4 | 判断落点 | 卡片/详情加「已读 / 不感兴趣 / 稍后 / 值得试点」四态 + 可选一句话；进入 "我判断过的" 视图；反馈写入排序权重 | 判断率（判断/打开）> 20% | ✅ 四态（`read/later/pilot/inaccurate`）已上线，`?judged=1` 按当前用户过滤；排序权重回写未做 |
 | 5 | 合并三套概览 | 列表预览与详情 landing 统一为一个组件；主 CTA 唯一（打开原文），Reader 为次级 | 入口数 3 → 1 | ❌ |
 | 6 | 议题可展开 | `candidateIds` 直接渲染为链接列表；加"转为调研"按钮 | 议题展开率可测 | ✅ 前 6 条 + `/ai-research?seed=` |
 | 7 | 调研确认页收口 | 默认折叠为摘要条：一句话 + 真实耗时 + 来源数 + 修改；一键开跑 | 确认→启动率 +20% | ⚠️ 部分：CTA 已吸底，滚动时始终可见；仍未折叠成摘要条 |
-| 8 | 结果页重排 | 顺序改为 结论 → 全文 → 证据 → 审查；合并两个 details | 结果页停留/读完率 | ❌ |
+| 8 | 结果页重排 | 顺序改为 结论 → 全文 → 证据 → 审查；合并两个 details | 结果页停留/读完率 | ✅ 结论→背景→风险→正文→来源→讨论；披露/历史/元数据合并为页尾唯一 `details` |
 | 9 | 导出 | 研究稿导出 Markdown（复制/下载）；后续补 PDF | 导出率 | ✅ 详情页「导出 Markdown」；真实下载 35,415 字 |
 | 10 | 卡片门禁 | 知识卡片独立门禁（不要求背景/风险）；结果页常驻"存为知识" | 卡片创建→发布率 | ❌ |
 | 11 | 草稿摘要自动填充 | 生成草稿时从正文"结论/风险"章节抽取 background/conclusion/risks，作者确认即可发布 | 发布率 4% → 25% | ✅ 备忘实测 95/273/203 字自动预填 |
 | 12 | 引用与状态清理 | 入库时校验 UTF-8/编码探测，修复已乱码标题；结果页 `stale` 本地化；去重对话消息、只留一个输入框 | 证据区无乱码、无英文状态 | ⚠️ `stale` 已本地化，库内已无乱码标题；重复消息/双输入框未改 |
 | 13 | 审核失败可恢复 | 清单解析失败时保留原始输出并给出可诊断错误；失败块单独重试；超时预算可配置 | 长报告审核完成率 > 90% | ✅ 清单 16k、分块重试、批次递归拆分、预算 300s+字数/30、并发 3 |
-| 14 | 启动前预检 | 提交前检查模型凭据/额度/搜索可用性，失败即拒绝启动并说明 | 无效配置 0 空转任务 | ❌ |
+| 14 | 启动前预检 | 提交前检查模型凭据/额度/搜索可用性，失败即拒绝启动并说明 | 无效配置 0 空转任务 | ✅ `/health/preflight` 5 项检查 + BFF + 对话页 gate；健康环境实测不阻断 |
 
 ### P1（4–8 周，补标配）
 
@@ -511,7 +511,7 @@
 
 ## 12. 2026-11-11 收口核对
 
-### 12.1 本轮补上的四项
+### 12.1 本轮补上的七项
 
 **雷达可见性（P0-1）**：`apps/web/src/app/api/radar/route.ts` 的 `publicQualityGate` 增加分支——`distilledTier in (collection, deep_read)`、`enrichmentStatus=ready`、`readerQualityStatus=ready`、`contentReviewStatus IS NULL`（自动流水线跑完但从未人工复核）。详情路由对未审核行做正文脱敏：`surface=content` 返回 `body: null`、`originalMarkdown: null`，卡片仍指向原文。本机公开精读从 59 条增至 285 条（约 67%）；剩余 139 条 `needs_manual_review` 仍隐藏，作为质量兜底。
 
@@ -521,17 +521,22 @@
 
 **研究稿导出（P0-9）**：新增 `apps/web/src/components/research/ExportResearchMarkdownButton.tsx` 与 `apps/web/src/lib/export-research-markdown.ts`；已发布详情页提供「导出 Markdown」，按 标题 → 发布/标签 → 背景 → 结论 → 风险 → 正文 组装。真实下载 d28515a0 得到 35,415 字 `.md`。
 
+**四态判断（P0-4）**：`RadarFeedbackType` 增加 `read/later/pilot`，迁移 `20261111000002_radar_feedback_judgments`；卡片与详情显示「已读 / 稍后 / 值得试点 / 不感兴趣」，沿用现有 POST/DELETE `/api/radar-feedback` 切换。`?judged=1` 在 `publicQualityGate` 上按当前用户反馈过滤，空态给「查看全部雷达」。浏览器实测四按钮可点，判断后「我判断过的」显示「共 1 条」。排序权重回写仍是后续项。
+
+**结果页重排（P0-8）**：`apps/web/src/app/researches/[id]/page.tsx` 顺序改为 结论 → 背景 → 风险 → 正文 → 来源与证据 → 团队讨论；披露明细、修改历史、元数据收进页尾唯一 `details#review-audit`。新增 `page.test.ts` 2 例；真实详情页 h2 顺序与唯一 `details` 已核对。
+
+**启动预检（P0-14）**：引擎新增 `GET /health/preflight`（内部 token、60s 缓存、`force=true`），检查 adapter、`RESEARCH_LLM` / `UTILITY_LLM` 槽位与凭据、Tavily 配置，并对研究路线做 8 token / 4s 有界探测；错误信息脱敏。Web BFF `apps/web/src/app/api/ai-research/preflight/route.ts` 做 6s 代理；对话页在方案就绪后检查，失败禁用「开始研究」并列出缺失项，warning 不阻断，提供「重新检查」。健康环境实测 `ok:true`、5 项全过，页面不出现阻断 Alert，开始按钮可用。
+
 ### 12.2 验证
 
-- `pnpm --dir apps/web test`：1,420 passed / 2 skipped；`tsc`、`pnpm --dir apps/web build` 通过。
+- `pnpm --dir apps/web test`：1,433 passed / 2 skipped；`tsc`、`pnpm --dir apps/web build` 通过；`e2e/mui-radar.spec.ts` 26 例、`e2e/mui-domain.spec.ts` 2 例通过。
+- Python：`tests/test_preflight.py` 8 例、`tests/test_server_endpoints.py` 等 46 passed；ruff、mypy 通过。
 - 浏览器：`/radar` 默认非空；未审核精读详情 `surface=content` 返回 `body:null`；已发布详情导出文件内容与页面一致。
 
 ### 12.3 仍未做（按建议顺序）
 
-1. **P0-14 启动预检**：模型/搜索不可用时应在提交前拒绝，而不是空转。
-2. **P0-4 四态判断**：已读/稍后/试点/不感兴趣 + 判断视图 + 回写排序。
-3. **P0-7 完整版**：把确认页折叠成「一句话 + 预计耗时 + 来源数 + 修改」。
-4. **P0-8 结果页重排**：结论 → 全文 → 证据 → 审查。
-5. **P0-5 合并三套概览**、**P0-10 卡片门禁独立**、**P0-12 对话去重**。
+1. **P0-7 完整版**：把确认页折叠成「一句话 + 预计耗时 + 来源数 + 修改」，而不只是 CTA 吸底。
+2. **P0-5 合并三套概览**、**P0-10 卡片门禁独立**、**P0-12 对话去重**。
+3. **P0-4 的排序回写**：四态已能记录，但尚未改变雷达排序权重。
 
 第 7 节「结果 → 发布率 4%」是改造前口径；带披露发布与批量处置上线后该数字已不代表现状，下一轮应基于新事件重算，不再引用旧值。
