@@ -906,5 +906,6 @@
   "示例文章仅支持独立模式；平台模式请打开普通网页后阅读。": "The demo article requires standalone mode. In platform mode, open a regular web page to read.",
   "切换独立模式": "Switch to standalone mode",
   "示例文章暂未准备好，请稍后重新打开。": "The demo article is not ready yet. Try opening it again shortly.",
-  "问收藏仅支持独立模式；请在设置中切换并配置模型。": "Ask library requires standalone mode. Switch modes and configure a model in Settings."
+  "问收藏仅支持独立模式；请在设置中切换并配置模型。": "Ask library requires standalone mode. Switch modes and configure a model in Settings.",
+  "关闭提示": "Dismiss message"
 }

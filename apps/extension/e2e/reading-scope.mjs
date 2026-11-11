@@ -152,6 +152,23 @@ try {
     assert.equal(after.scopePartial, true);
     assert.deepEqual(after.scopeWarnings, before.scopeWarnings);
     summary.partialWarningPreserved = true;
+    const strip = article.locator('[data-deep-research-status] .status');
+    const dismiss = article.locator('[data-deep-research-status] .dismiss');
+    const partialNotice = { type: 'deep-research:reader-status', state: 'partial', label: 'Article text may be incomplete', detail: 'Read 3 blocks.' };
+    await send(tabId, partialNotice);
+    await expect(strip).toHaveClass(/visible/);
+    await expect(strip).toHaveClass(/partial/);
+    await expect(dismiss).toBeVisible();
+    await dismiss.click();
+    await expect(strip).not.toHaveClass(/visible/);
+    // A repeat of the same page-context update must not resurrect a notice the
+    // reader just dismissed.
+    await send(tabId, partialNotice);
+    await expect(strip).not.toHaveClass(/visible/);
+    await send(tabId, { type: 'deep-research:reader-status', state: 'loading', label: 'Reading article…', detail: '' });
+    await expect(strip).toHaveClass(/visible/);
+    await expect(dismiss).toBeHidden();
+    summary.partialStatusDismissible = true;
     await article.close();
   }
   for (const tag of ['p', 'div', 'section']) {
