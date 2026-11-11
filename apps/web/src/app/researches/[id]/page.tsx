@@ -258,6 +258,9 @@ export default function ResearchDetailPage() {
   }
 
   const isLongResearch = data.type === 'research';
+  // Decision memos are markdown research drafts; the format is carried by the
+  // artifact heading rather than researches.type, so surface it as a badge.
+  const isDecisionMemo = isLongResearch && data.body.trimStart().startsWith('# 决策备忘');
   const isKnowledge = data.type === 'knowledge';
   const isDraft = data.status === 'draft';
   const isArchived = data.status === 'archived';
@@ -283,7 +286,7 @@ export default function ResearchDetailPage() {
           </Typography>
 
           <div className={styles.badges}>
-            <StatusBadge kind="researchType" value={isLongResearch ? 'research' : 'knowledge'} />
+            <StatusBadge kind="researchType" value={isDecisionMemo ? 'decision_memo' : isLongResearch ? 'research' : 'knowledge'} />
             <StatusBadge kind="method" value={data.creationMethod} />
             {isDraft && <StatusBadge kind="research" value="draft" />}
             {!isDraft && data.reviewVerification === 'verified'

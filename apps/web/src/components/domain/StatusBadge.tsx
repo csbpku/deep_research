@@ -63,6 +63,7 @@ const FEATURED_TONES: Record<string, Tone> = {
 /** researches.type —— "研究报告 / 知识卡片" 区分 */
 const RESEARCH_TYPE_TONES: Record<string, Tone> = {
   research: { palette: 'evidence', label: '研究报告' },
+  decision_memo: { palette: 'evidence', label: '决策备忘' },
   knowledge: { palette: 'neutral', label: '知识卡片' },
 };
 
