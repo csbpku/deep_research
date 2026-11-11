@@ -36,8 +36,8 @@ for (const mode of ['light', 'dark'] as const) {
     await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
     await expect(page.getByRole('textbox', { name: '重点回答' })).toHaveValue('适用边界与工程代价');
     const output = page.getByRole('radiogroup', { name: '交付什么', exact: true });
-    await expect(output.getByRole('radio')).toHaveCount(4);
-    await expect(output.getByRole('radio', { name: /^研究稿/ })).toBeChecked();
+    await expect(output.getByRole('radio')).toHaveCount(5);
+    await expect(output.getByRole('radio', { name: /^决策备忘/ })).toBeChecked();
     await output.getByRole('radio', { name: /网页简报/ }).check();
     await expect(page.getByRole('region', { name: '启动配置摘要', exact: true })).toContainText('网页简报');
     const depth = page.getByRole('radiogroup', { name: '投入多少', exact: true });
@@ -200,8 +200,10 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await page.keyboard.insertText('仅核对异常传播与取消行为');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('textbox', { name: '对比对象' })).toBeFocused();
-  const output = page.getByRole('radio', { name: /^研究稿/ });
+  const output = page.getByRole('radio', { name: /^决策备忘/ });
   await tabTo(output);
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: /^完整报告/ })).toBeChecked();
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('radio', { name: /^Slides 提纲/ })).toBeChecked();
   await page.keyboard.press('ArrowRight');

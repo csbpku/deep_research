@@ -237,7 +237,7 @@ test.describe('AI Research parent (UI polish)', () => {
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
     const output = page.getByRole('radiogroup', { name: '交付什么' });
-    await expect(output.getByRole('radio', { name: /研究稿.*完整论证与引用/u })).toBeChecked();
+    await expect(output.getByRole('radio', { name: /决策备忘.*关键声明/u })).toBeChecked();
     const sources = page.getByRole('radiogroup', { name: '参考什么' });
     await expect(sources.getByRole('radio', { name: /网页搜索 \+ 已选资料/u })).toBeChecked();
     await sources.getByRole('radio', { name: /仅使用已选资料/u }).check();
@@ -252,8 +252,8 @@ test.describe('AI Research parent (UI polish)', () => {
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
     const output = page.getByRole('radiogroup', { name: '交付什么' });
-    await expect(output.getByRole('radio', { name: /研究稿.*完整论证与引用/u })).toBeChecked();
-    await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('本次将生成 研究稿');
+    await expect(output.getByRole('radio', { name: /决策备忘.*关键声明/u })).toBeChecked();
+    await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('本次将生成 决策备忘');
   });
 
   test('slides artifact is rendered once as a bounded outline', async ({ page }) => {
