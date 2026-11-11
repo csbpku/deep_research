@@ -13,7 +13,7 @@ import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Typography from '@mui/material/Typography';
 import { space, tokens } from '@deep-research/design-system';
-import { RadarFeedbackBar } from './RadarFeedbackBar';
+import { RADAR_PRIMARY_FEEDBACK_TYPES, RadarFeedbackBar } from './RadarFeedbackBar';
 import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
@@ -258,7 +258,7 @@ export function RadarCandidateCard({
           summaryId={candidate.id}
           initialCounts={candidate.feedbackCounts}
           initialMine={candidate.myFeedbacks}
-          types={['favorite']}
+          types={[...RADAR_PRIMARY_FEEDBACK_TYPES, 'favorite']}
         />
         {candidate.commentCount > 0 ? (
           <Button

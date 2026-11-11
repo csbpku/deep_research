@@ -18,10 +18,16 @@ import {
 } from 'lucide-react';
 
 import type { DistilledScore } from '@deep-research/shared/schemas';
+import type { RadarFeedbackType } from '@deep-research/shared/states';
 import { BackToSearchButton } from '../domain/BackToSearchButton';
 import { decodeRadarTextEntities } from './radar-reading-blocks';
 import { DistilledScorePanel } from './DistilledScorePanel';
 import { RadarSourceChip } from './RadarSourceChip';
+import {
+  RadarFeedbackBar,
+  emptyRadarFeedbackCounts,
+  type RadarFeedbackCounts,
+} from './RadarFeedbackBar';
 import {
   formatRadarContentKind,
   formatSourceType,
@@ -50,6 +56,8 @@ export interface ExternalReadingDetail {
   tags?: string[];
   publishedAt?: string | null;
   isAuthenticated?: boolean;
+  feedbackCounts?: RadarFeedbackCounts;
+  myFeedbacks?: RadarFeedbackType[];
 }
 
 export function externalReaderUrl(
@@ -222,6 +230,17 @@ export function RadarExternalReadingLanding({
           <Typography variant="pageTitle" component="h1" sx={{ mt: 2, maxWidth: 960, overflowWrap: 'anywhere' }}>
             {displayTitle}
           </Typography>
+
+          {detail.isAuthenticated ? (
+            <Box sx={{ mt: 2 }}>
+              <RadarFeedbackBar
+                summaryId={detail.id}
+                initialCounts={detail.feedbackCounts ?? emptyRadarFeedbackCounts()}
+                initialMine={detail.myFeedbacks ?? []}
+                types={['read', 'later', 'pilot', 'inaccurate']}
+              />
+            </Box>
+          ) : null}
 
           <Box sx={{ mt: 3, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) 240px' }, gap: { xs: 3, lg: 4 } }}>
             <Box sx={{ minWidth: 0 }}>

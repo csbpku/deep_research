@@ -22,6 +22,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { space } from '@deep-research/design-system';
 import {
   ArrowUpRight,
+  CheckCheck,
   ChevronDown,
   Layers3,
   ListOrdered,
@@ -125,6 +126,7 @@ interface RadarUrlState {
   perPage: PageSize;
   view: RadarView;
   selectedId: string | null;
+  judged: boolean;
 }
 
 function radarUrlParams(state: RadarUrlState): URLSearchParams {
@@ -136,6 +138,7 @@ function radarUrlParams(state: RadarUrlState): URLSearchParams {
   params.set('page', String(state.page));
   params.set('per_page', String(state.perPage));
   params.set('view', state.view);
+  if (state.judged) params.set('judged', '1');
   if (state.selectedId) params.set('open', state.selectedId);
   return params;
 }
@@ -317,6 +320,7 @@ export default function RadarScreen() {
   const [view, setView] = useState<RadarView>(
     () => parseRadarView(searchParams.get('view')),
   );
+  const [judged, setJudged] = useState(() => searchParams.get('judged') === '1');
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   // URL is the committed state for a radar view. This keeps a filtered list
@@ -337,10 +341,11 @@ export default function RadarScreen() {
       ? 'all'
       : [20, 50, 100].includes(Number(nextPerPage)) ? Number(nextPerPage) as PageSize : 20);
     setView(parseRadarView(searchParams.get('view')));
+    setJudged(searchParams.get('judged') === '1');
   }, [searchParams]);
 
   const query = useQuery<RadarListResponse>({
-    queryKey: ['radar', view, q, sourceTypes.join(','), quality.join(','), dateRange, page, perPage],
+    queryKey: ['radar', view, q, sourceTypes.join(','), quality.join(','), dateRange, page, perPage, judged],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
@@ -350,6 +355,7 @@ export default function RadarScreen() {
       if (dateFrom) params.set('dateFrom', dateFrom);
       params.set('page', view === 'highlights' ? '1' : String(page));
       params.set('per_page', view === 'highlights' ? String(HIGHLIGHT_POOL_SIZE) : perPage === 'all' ? 'all' : String(perPage));
+      if (judged) params.set('judged', '1');
       return fetchRadar(params);
     },
     enabled: view !== 'source',
@@ -435,7 +441,7 @@ export default function RadarScreen() {
       : `${sourceTypes.length} 个来源`;
   const qualitySummary = quality.length === QUALITY_OPTIONS.length ? '全部等级' : qualityLabel;
   const mobileFilterSummary = `${dateLabel} · ${sourceSummary} · ${qualitySummary}`;
-  const currentUrlState: RadarUrlState = { q, sourceTypes, quality, dateRange, page, perPage, view, selectedId };
+  const currentUrlState: RadarUrlState = { q, sourceTypes, quality, dateRange, page, perPage, view, selectedId, judged };
   const replaceUrlState = useCallback((patch: Partial<RadarUrlState>) => {
     const next = { ...currentUrlState, ...patch };
     const listStateChanged = Object.keys(patch).some((key) => key !== 'selectedId');
@@ -454,6 +460,7 @@ export default function RadarScreen() {
       page: 1,
       perPage: 20,
       selectedId: null,
+      judged: false,
     };
     setSearchInput('');
     setQ('');
@@ -462,7 +469,21 @@ export default function RadarScreen() {
     setDateRange('all');
     setPage(1);
     setPerPage(20);
+    setJudged(false);
     router.replace(`${pathname}?${radarUrlParams(next).toString()}`, { scroll: false });
+  };
+  const toggleJudged = () => {
+    const next = !judged;
+    setJudged(next);
+    setPage(1);
+    // “我判断过的”是排序列表的一个视图；切进来时回到推荐排序，
+    // 避免按来源浏览或精选继续展示未过滤的分组数据。
+    if (next) {
+      setView('ranked');
+      replaceUrlState({ judged: true, page: 1, view: 'ranked' });
+    } else {
+      replaceUrlState({ judged: false, page: 1 });
+    }
   };
   const listState = radarUrlParams({ ...currentUrlState, selectedId: null });
   const detailHref = (summaryId: string) => (
@@ -550,7 +571,7 @@ export default function RadarScreen() {
                 title="从当前筛选结果中选择有限内容，优先兼顾不同类型和来源"
                 aria-label="本次精选"
                 aria-pressed={view === 'highlights'}
-                onClick={() => { setView('highlights'); setPage(1); replaceUrlState({ view: 'highlights', page: 1 }); }}
+                onClick={() => { setView('highlights'); setJudged(false); setPage(1); replaceUrlState({ view: 'highlights', page: 1, judged: false }); }}
               >
                 <Sparkles className={styles.icon} />
                 本次精选
@@ -574,7 +595,7 @@ export default function RadarScreen() {
                 title="按来源浏览内容"
                 aria-label="按来源浏览"
                 aria-pressed={view === 'source'}
-                onClick={() => { setView('source'); setPage(1); replaceUrlState({ view: 'source', page: 1 }); }}
+                onClick={() => { setView('source'); setJudged(false); setPage(1); replaceUrlState({ view: 'source', page: 1, judged: false }); }}
               >
                 <Layers3 className={styles.icon} />
                 按来源浏览
@@ -650,6 +671,19 @@ export default function RadarScreen() {
           </label>
         ) : null}
 
+        <Button
+          type="button"
+          size="small"
+          variant={judged ? 'contained' : 'outlined'}
+          aria-pressed={judged}
+          aria-label="我判断过的"
+          title="只看自己标记过已读、稍后、值得试点或不感兴趣的雷达内容"
+          onClick={toggleJudged}
+        >
+          <CheckCheck className={styles.icon} />
+          我判断过的
+        </Button>
+
         <Button type="submit" size="small" variant="contained">
           <Search />
           搜索
@@ -710,6 +744,18 @@ export default function RadarScreen() {
                     replaceUrlState({ sourceTypes: next, page: 1 });
                   }}
                 />
+                <Button
+                  type="button"
+                  size="small"
+                  variant={judged ? 'contained' : 'outlined'}
+                  aria-pressed={judged}
+                  aria-label="我判断过的"
+                  sx={{ minHeight: '44px' }}
+                  onClick={toggleJudged}
+                >
+                  <CheckCheck />
+                  我判断过的
+                </Button>
                 {view === 'ranked' ? (
                   <label className={styles.mobileField}>
                     <span>每页</span>
@@ -820,6 +866,16 @@ export default function RadarScreen() {
           action={
             <Button variant="outlined" size="small" onClick={() => query.refetch()}>
               重试
+            </Button>
+          }
+        />
+      ) : judged && items.length === 0 ? (
+        <EmptyState
+          title="还没有判断记录"
+          description="在雷达卡片上点击已读、稍后、值得试点或不感兴趣后，这里会汇总你判断过的内容。"
+          action={
+            <Button type="button" variant="outlined" size="small" onClick={toggleJudged}>
+              查看全部雷达
             </Button>
           }
         />

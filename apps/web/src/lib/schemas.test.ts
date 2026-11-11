@@ -74,9 +74,25 @@ describe('RadarIdParam', () => {
   });
 });
 
+describe('RadarListQuery', () => {
+  it('parses the judged flag from either the UI or a readable URL', () => {
+    expect(RadarListQuery.parse({ judged: '1' }).judged).toBe(true);
+    expect(RadarListQuery.parse({ judged: 'true' }).judged).toBe(true);
+    expect(RadarListQuery.parse({ judged: 'false' }).judged).toBe(false);
+    expect(RadarListQuery.parse({}).judged).toBe(false);
+  });
+
+  it('rejects an unknown judged value', () => {
+    expect(RadarListQuery.safeParse({ judged: 'yes' }).success).toBe(false);
+  });
+});
+
 describe('CreateRadarFeedbackInput', () => {
-  it('accepts all 5 feedbackTypes', () => {
-    for (const ft of ['useful', 'inaccurate', 'used', 'favorite', 'suggest_research']) {
+  it('accepts all legacy and judgment feedbackTypes', () => {
+    for (const ft of [
+      'useful', 'inaccurate', 'used', 'favorite', 'suggest_research',
+      'read', 'later', 'pilot',
+    ]) {
       const r = CreateRadarFeedbackInput.safeParse({
         summaryId: '11111111-1111-1111-1111-111111111111',
         feedbackType: ft,
@@ -106,6 +122,15 @@ describe('DeleteRadarFeedbackQuery', () => {
       summaryId: '11111111-1111-1111-1111-111111111111',
       feedbackType: 'useful',
     }).success).toBe(true);
+  });
+
+  it('accepts new judgment feedbackTypes', () => {
+    for (const ft of ['read', 'later', 'pilot']) {
+      expect(DeleteRadarFeedbackQuery.safeParse({
+        summaryId: '11111111-1111-1111-1111-111111111111',
+        feedbackType: ft,
+      }).success).toBe(true);
+    }
   });
 
   it('rejects invalid feedbackType', () => {

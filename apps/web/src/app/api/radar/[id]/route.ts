@@ -196,11 +196,17 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
 
   const fb = isContentSurface
     ? {
-        counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
+        counts: {
+          useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+          read: 0, later: 0, pilot: 0,
+        },
         mine: [],
       }
     : (await aggregateFeedbacks(prisma, [summary.id], u?.id)).get(summary.id) ?? {
-    counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
+    counts: {
+          useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+          read: 0, later: 0, pilot: 0,
+        },
     mine: [],
   };
 

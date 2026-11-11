@@ -155,6 +155,10 @@ enum RadarFeedbackType {
   used
   favorite
   suggest_research
+  // P0-4 判断落点：轻量判断按钮。仅新增枚举值，历史反馈保持有效。
+  read
+  later
+  pilot
 }
 
 // Week 6 [db]：AI 多轮追问会话状态
