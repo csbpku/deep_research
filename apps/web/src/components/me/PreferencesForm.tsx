@@ -89,6 +89,7 @@ export function PreferencesForm({ userEmail }: { userEmail: string }) {
               }))}
             >
               <MenuItem value={ALL}>未设置</MenuItem>
+              <MenuItem value="decision_memo">决策备忘（默认）</MenuItem>
               <MenuItem value="research_report">完整调研报告</MenuItem>
               <MenuItem value="summary_brief">快速判断</MenuItem>
               <MenuItem value="slides">Slides 提纲</MenuItem>

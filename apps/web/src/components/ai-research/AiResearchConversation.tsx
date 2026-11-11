@@ -9,6 +9,7 @@ import {
   FileText,
   Globe2,
   Link2,
+  NotebookPen,
   Presentation,
   Send,
   Sparkles,
@@ -47,7 +48,7 @@ interface RadarSeed {
   body: string | null;
 }
 
-type ReportType = 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
+type ReportType = 'decision_memo' | 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
 type ResearchLength = 'brief' | 'standard' | 'deep';
 type SourcePolicy = 'prefer_user_sources' | 'only_user_sources';
 type ResearchSourceRef = {
@@ -161,7 +162,8 @@ const reportOptions: Array<{
   description: string;
   icon: typeof FileText;
 }> = [
-  { value: 'research_report', label: '研究稿', description: '完整调研、引用和可编辑草稿', icon: FileText },
+  { value: 'decision_memo', label: '决策备忘', description: '默认：一页结论、关键声明、风险与下一步', icon: NotebookPen },
+  { value: 'research_report', label: '完整报告', description: '完整调研、引用和可编辑草稿', icon: FileText },
   { value: 'summary_brief', label: '快速判断', description: '几秒给方向；不做完整检索或逐条依据确认', icon: Sparkles },
   { value: 'slides', label: 'Slides 提纲', description: '按页组织的可编辑提纲（不是 .pptx）', icon: Presentation },
   { value: 'web_brief', label: '网页简报', description: '独立网页阅读版，适合分享和长文阅读', icon: Globe2 },
@@ -205,7 +207,7 @@ function ResearchRunReceipt({ jobId, topic }: { jobId: string; topic: string }) 
       .then(async (response) => { if (!response.ok) throw new Error('receipt unavailable'); return await response.json() as Record<string, unknown>; })
       .then((data) => {
         if (cancelled) return;
-        if (!['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType)) ||
+        if (!['decision_memo', 'research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType)) ||
             !['brief', 'standard', 'deep'].includes(String(data.reportLength)) ||
             !['prefer_user_sources', 'only_user_sources'].includes(String(data.sourcePolicy))) throw new Error('receipt incomplete');
         setReceipt({ reportType: data.reportType as ReportType, reportLength: data.reportLength as ResearchLength,
@@ -356,7 +358,7 @@ export function AiResearchConversation({
   const [context, setContext] = useState('');
   const [sourceDraft, setSourceDraft] = useState('');
   const [sourceUrls, setSourceUrls] = useState<string[]>([]);
-  const [reportType, setReportType] = useState<ReportType>('research_report');
+  const [reportType, setReportType] = useState<ReportType>('decision_memo');
   // Developers start with one focused round; multi-round is an explicit
   // choice, not the silent default that turned a narrow question into 12 minutes.
   const [reportLength, setReportLength] = useState<ResearchLength>('standard');
@@ -415,9 +417,9 @@ export function AiResearchConversation({
         if (cancelled) return;
         const restoredTopic = typeof data.topic === 'string' ? data.topic : '';
         const restoredContext = typeof data.context === 'string' ? data.context : '';
-        const restoredType = ['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
+        const restoredType = ['decision_memo', 'research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
           ? data.reportType as ReportType
-          : 'research_report';
+          : 'decision_memo';
         const restoredLength = ['brief', 'standard', 'deep'].includes(String(data.reportLength))
           ? data.reportLength as ResearchLength
           : restoredType === 'summary_brief' ? 'brief' : 'deep';
@@ -499,7 +501,7 @@ export function AiResearchConversation({
     setContext('');
     setSourceDraft('');
     setSourceUrls([]);
-    setReportType('research_report');
+    setReportType('decision_memo');
     setReportLength('deep');
     setSourcePolicy('prefer_user_sources');
     setInput('');
@@ -1009,9 +1011,9 @@ export function AiResearchConversation({
       const response = await fetch(`/api/ai-research/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
       if (!response.ok) throw await toApiHttpError(response, '读取原调研配置失败');
       const data = await response.json() as Record<string, unknown>;
-      const restoredType = ['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
+      const restoredType = ['decision_memo', 'research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
         ? data.reportType as ReportType
-        : 'research_report';
+        : 'decision_memo';
       const restoredUrls = Array.isArray(data.sourceRefs)
         ? (data.sourceRefs as Array<Record<string, unknown>>)
           .filter((ref) => ref.type === 'url')

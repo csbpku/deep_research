@@ -592,7 +592,7 @@ model AiResearchJob {
   requesterId    String      @db.Uuid
   topic          String      @db.VarChar(200)
   context        String?     @db.VarChar(2000)
-  reportType     String      @default("research_report") @db.VarChar(40) // research_report | summary_brief | slides | web_brief | evidence_search (internal)
+  reportType     String      @default("research_report") @db.VarChar(40) // decision_memo | research_report | summary_brief | slides | web_brief | evidence_search (internal)
   artifactType   String      @default("markdown") @db.VarChar(24) // markdown (research_report/web_brief) | slides | table | chart
   sourcePolicy   String      @default("prefer_user_sources") @db.VarChar(40)
   // 研究深度必须随任务持久化，否则重启后的队列 worker 会退回默认轻量档。

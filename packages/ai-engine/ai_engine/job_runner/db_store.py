@@ -220,7 +220,10 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
         topic=str(row["topic"]),
         context=context_str,
         report_type=cast(
-            Literal["research_report", "summary_brief", "slides", "web_brief", "evidence_search"],
+            Literal[
+                "research_report", "decision_memo", "summary_brief", "slides",
+                "web_brief", "evidence_search",
+            ],
             str(row.get("reportType", "research_report")),
         ),
         source_policy=cast(

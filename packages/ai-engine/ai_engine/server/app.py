@@ -3583,11 +3583,23 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"deep-research:ai-job:{snapshot.job_id}"))
             body = output_text.strip()
             origin_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
-            revision_sha256 = research_revision_hash({"title": snapshot.topic[:300], "body": body})
             # Pre-fill the three publish-gate fields from the report itself.
             # The author can edit them in the editor; publishing still takes an
             # explicit click, so this removes retyping without bypassing review.
             summary_fields = derive_research_summary(body)
+            # The review is scoped to the whole snapshot, including the
+            # summary fields we just derived. Hashing only title/body here
+            # would make every pre-filled draft look stale immediately.
+            revision_sha256 = research_revision_hash(
+                {
+                    "title": snapshot.topic[:300],
+                    "body": body,
+                    "background": summary_fields["background"],
+                    "conclusion": summary_fields["conclusion"],
+                    "risks": summary_fields["risks"],
+                    "tags": [],
+                }
+            )
             sql = (
                 'INSERT INTO "researches" '
                 '("id", "type", "status", "title", "body", "authorId", "creationMethod", '

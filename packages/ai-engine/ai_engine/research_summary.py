@@ -31,8 +31,8 @@ _HTML_TAG = re.compile(r"<[^>]+>")
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
 _RULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 
-_BACKGROUND_KEYS = ("背景", "研究范围", "问题背景", "研究问题")
-_CONCLUSION_KEYS = ("结论", "决策摘要", "取舍", "总结", "建议")
+_BACKGROUND_KEYS = ("背景", "研究范围", "问题背景", "研究问题", "问题")
+_CONCLUSION_KEYS = ("结论", "决策摘要", "取舍", "总结", "建议", "下一步")
 _RISK_KEYS = ("风险", "待验证", "未确认", "局限", "证据缺口", "限制")
 
 
