@@ -136,6 +136,9 @@ try {
   // the saved content or reorder the shelf by touching updatedAt.
   await panel.locator('#manage-tags').click();
   await panel.locator('#tag-manager').waitFor({ state: 'visible', timeout: 10_000 });
+  // Visibility precedes the async IndexedDB load and React commit on slower
+  // runners. Wait for the actual rows before asserting their contents.
+  await panel.waitForFunction(() => document.querySelectorAll('.tag-manager-row').length === 2);
   assert.equal(await panel.locator('.tag-manager-row').count(), 2, '标签管理应列出全库两个标签');
   await panel.locator('.tag-manager-row[data-tag="架构"] input').fill('系统设计');
   await panel.locator('.tag-manager-row[data-tag="架构"]').getByRole('button', { name: '保存', exact: true }).click();
@@ -147,6 +150,7 @@ try {
   await panel.locator('.tag-manager-row[data-tag="性能"]').getByRole('button', { name: '确认删除', exact: true }).click();
   await panel.waitForFunction(() => [...document.querySelectorAll('#library-tag option')].every(option => option.value !== '性能'), null, { timeout: 10_000 });
   assert.equal(await panel.locator('.insight-row').count(), 3, '删除标签必须保留收藏内容');
+  await panel.waitForFunction(() => document.querySelectorAll('.tag-manager-row').length === 1);
   assert.equal(await panel.locator('.tag-manager-row').count(), 1, '标签管理应只剩重命名后的标签');
 
   // Queue the real UI transaction behind a live IndexedDB writer, then queue
