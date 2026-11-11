@@ -845,7 +845,25 @@ function PlanningFallback({
           {children}
         </Box>
       ) : null}
-      <Box component="footer" sx={{ display: 'flex', justifyContent: 'flex-end', p: 2, borderTop: 1, borderColor: 'divider' }}>{startAction}</Box>
+      {/* Keep the primary action reachable: the confirmation form is longer
+          than a viewport, and the button used to sit ~2 screens down. */}
+      <Box
+        component="footer"
+        sx={{
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 2,
+          display: 'flex',
+          justifyContent: 'flex-end',
+          p: 2,
+          borderTop: 1,
+          borderColor: 'divider',
+          bgcolor: 'background.paper',
+          boxShadow: '0 -8px 16px -16px rgba(0,0,0,0.45)',
+        }}
+      >
+        {startAction}
+      </Box>
     </Paper>
   );
 }

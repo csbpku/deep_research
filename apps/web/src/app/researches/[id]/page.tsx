@@ -27,6 +27,7 @@ import MarkdownContent from '@/components/MarkdownContent';
 import { EmptyState } from '@/components/EmptyState';
 import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
+import { ExportResearchMarkdownButton } from '@/components/research/ExportResearchMarkdownButton';
 import { MetaItem, MetaRow } from '@/components/domain/MetaRow';
 import { SectionCard } from '@/components/domain/SectionCard';
 import { StatusBadge } from '@/components/domain/StatusBadge';
@@ -312,8 +313,21 @@ export default function ResearchDetailPage() {
           </MetaRow>
         </div>
 
-        {data.canEdit || data.canManageStatus ? (
+        {!isDraft || data.canEdit || data.canManageStatus ? (
           <div className={styles.actions}>
+            {!isDraft ? (
+              <ExportResearchMarkdownButton
+                research={{
+                  title: data.title,
+                  background: data.background,
+                  conclusion: data.conclusion,
+                  risks: data.risks,
+                  body: data.body,
+                  tags: data.tags,
+                  publishedAt: data.publishedAt,
+                }}
+              />
+            ) : null}
             {isDraft && data.canEdit ? (
               <DeleteDraftButton
                 researchId={data.id}

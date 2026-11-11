@@ -228,7 +228,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     !(
       summary.enrichmentStatus === 'ready' &&
       summary.readerQualityStatus === 'ready' &&
-      summary.contentReviewStatus === 'approved'
+      (summary.contentReviewStatus === 'approved' || summary.contentReviewStatus === null)
     )
   ) {
     return toApiErrorResponse({
@@ -241,7 +241,11 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   // External reading uses the source URL/Reader path, never a cached source
   // snapshot. Keep historical payloads private even if the row was enriched
   // before it acquired the external-reading contract.
-  const responseCandidate = tier === 'skim' || externalReading
+  // Unreviewed full-text rows stay readable as summaries, but their cached
+  // body is not public: Radar points readers at the source instead.
+  const unreviewedCachedBody =
+    tier !== 'skim' && !externalReading && summary.contentReviewStatus !== 'approved';
+  const responseCandidate = tier === 'skim' || externalReading || unreviewedCachedBody
     ? {
         ...shaped,
         body: null,

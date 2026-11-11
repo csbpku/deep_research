@@ -170,6 +170,16 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             readerQualityStatus: 'ready',
             contentReviewStatus: 'approved',
           },
+          // Rows whose automatic pipeline is complete but that were never
+          // manually reviewed used to disappear from Radar. Their cached body
+          // is redacted at the detail route, so the card behaves like an
+          // external-reading item instead of being invisible.
+          {
+            distilledTier: { in: ['collection', 'deep_read'] },
+            enrichmentStatus: 'ready',
+            readerQualityStatus: 'ready',
+            contentReviewStatus: null,
+          },
         ],
       },
     ],

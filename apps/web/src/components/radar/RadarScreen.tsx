@@ -139,9 +139,9 @@ function radarUrlParams(state: RadarUrlState): URLSearchParams {
   if (state.selectedId) params.set('open', state.selectedId);
   return params;
 }
-// Keep the default stream focused on readable material; skim remains opt-in
-// for users who want to browse browser-reading candidates.
-const DEFAULT_QUALITY: QualityValue[] = ['deep_read'];
+// Default to everything a reader can act on. Restricting the first screen to
+// deep_read made an empty list the normal case; skim is readable material too.
+const DEFAULT_QUALITY: QualityValue[] = ['deep_read', 'skim'];
 
 const DATE_OPTIONS = [
   { value: 'all', label: '全部时间' },
@@ -306,7 +306,7 @@ export default function RadarScreen() {
   });
   const [dateRange, setDateRange] = useState<DateRange>(() => {
     const value = searchParams.get('date');
-    return DATE_OPTIONS.some((option) => option.value === value) ? value as DateRange : '7d';
+    return DATE_OPTIONS.some((option) => option.value === value) ? value as DateRange : 'all';
   });
   const [page, setPage] = useState(() => Math.max(1, Number(searchParams.get('page')) || 1));
   const [perPage, setPerPage] = useState<PageSize>(() => {
@@ -331,7 +331,7 @@ export default function RadarScreen() {
     setSearchInput(searchParams.get('q') ?? '');
     setSourceTypes((searchParams.get('source') ?? '').split(',').filter(Boolean));
     setQuality(nextQuality.length > 0 ? nextQuality : DEFAULT_QUALITY);
-    setDateRange(DATE_OPTIONS.some((option) => option.value === nextDate) ? nextDate as DateRange : '7d');
+    setDateRange(DATE_OPTIONS.some((option) => option.value === nextDate) ? nextDate as DateRange : 'all');
     setPage(Math.max(1, Number(searchParams.get('page')) || 1));
     setPerPage(nextPerPage === 'all'
       ? 'all'
@@ -450,7 +450,7 @@ export default function RadarScreen() {
       q: '',
       sourceTypes: [],
       quality: DEFAULT_QUALITY,
-      dateRange: '7d',
+      dateRange: 'all',
       page: 1,
       perPage: 20,
       selectedId: null,
@@ -459,7 +459,7 @@ export default function RadarScreen() {
     setQ('');
     setSourceTypes([]);
     setQuality(DEFAULT_QUALITY);
-    setDateRange('7d');
+    setDateRange('all');
     setPage(1);
     setPerPage(20);
     router.replace(`${pathname}?${radarUrlParams(next).toString()}`, { scroll: false });
@@ -830,22 +830,14 @@ export default function RadarScreen() {
             ? '试试放宽阅读等级、来源或搜索条件。'
             : `“${dateLabel}”内没有匹配内容，可以查看全部时间。`}
           action={
-            dateRange !== 'all' ? (
-              <Button
-                type="button"
-                variant="outlined"
-                size="small"
-                onClick={() => {
-                  setDateRange('all');
-                  setPage(1);
-                  replaceUrlState({ dateRange: 'all', page: 1 });
-                }}
-              >
-                查看全部时间
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <Button type="button" variant="outlined" size="small" onClick={resetFilters}>
+                放宽到全部时间与可读内容
               </Button>
-            ) : me.data?.role === 'admin' ? (
-              <Button variant="outlined" size="small" component={Link} href="/admin/radar">前往后台触发同步</Button>
-            ) : null
+              {me.data?.role === 'admin' ? (
+                <Button variant="text" size="small" component={Link} href="/admin/radar">前往后台触发同步</Button>
+              ) : null}
+            </Box>
           }
         />
       ) : (
