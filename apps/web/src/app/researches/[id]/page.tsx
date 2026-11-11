@@ -102,6 +102,7 @@ interface ResearchDetail {
   createdAt: string;
   updatedAt: string;
   author: { id: string; name: string };
+  reviewStatus?: string | null;
   canEdit: boolean;
   canManageStatus: boolean;
   researchSources: ResearchSourceItem[];
@@ -170,6 +171,8 @@ function addReaderAnchor(href: string, anchor: SavedSourceAnchor): string {
 export default function ResearchDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const me = useCurrentUser();
   const [discussionOpen, setDiscussionOpen] = useState(false);
@@ -330,6 +333,29 @@ export default function ResearchDetailPage() {
                 }}
               />
             )}
+            {!isDraft && data.canEdit && data.creationMethod === 'ai_research' ? (
+              <AppButton
+                variant="outlined"
+                size="small"
+                disabled={reviewBusy || data.reviewStatus === 'queued' || data.reviewStatus === 'reviewing'}
+                onClick={() => {
+                  setReviewBusy(true);
+                  setReviewError(null);
+                  void fetch(`/api/researches/${data.id}/review`, { method: 'POST' })
+                    .then(async (response) => {
+                      if (!response.ok) throw new Error(`核验请求失败（${response.status}）`);
+                      await queryClient.invalidateQueries({ queryKey: ['research', data.id] });
+                      router.refresh();
+                    })
+                    .catch((err: unknown) => {
+                      setReviewError(err instanceof Error ? err.message : '核验请求失败，请稍后重试。');
+                    })
+                    .finally(() => setReviewBusy(false));
+                }}
+              >
+                {reviewBusy || data.reviewStatus === 'queued' || data.reviewStatus === 'reviewing' ? '核验进行中…' : '重新核验'}
+              </AppButton>
+            ) : null}
             {data.canEdit && (
               <AppButton
                 component={Link}
@@ -344,6 +370,7 @@ export default function ResearchDetailPage() {
           </div>
         ) : null}
       </div>
+      {reviewError ? <Typography component="p" variant="metadata" color="error.main" role="alert">{reviewError}</Typography> : null}
 
       {data.tags.length > 0 && (
         <TagList className={styles.tags}>

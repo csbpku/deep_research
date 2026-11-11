@@ -136,7 +136,22 @@ describe('version-scoped fact review runs', () => {
     }));
     expect(mocks.aiResearchJobUpdate).toHaveBeenCalled();
     expect(mocks.researchUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: RESEARCH_ID, status: 'draft' },
+      where: { id: RESEARCH_ID, status: { in: ['draft', 'published'] } },
+    }));
+  });
+
+  it('allows re-reviewing a published report so it can be upgraded after publication', async () => {
+    mocks.researchFindUnique.mockResolvedValue({ ...draft(), status: 'published' });
+
+    const response = await reviewPost(
+      new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never,
+      params(RESEARCH_ID),
+    );
+
+    expect(response.status).toBe(202);
+    expect(mocks.researchReviewRunCreate).toHaveBeenCalled();
+    expect(mocks.researchUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: RESEARCH_ID, status: { in: ['draft', 'published'] } },
     }));
   });
 
