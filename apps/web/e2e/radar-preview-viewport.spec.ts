@@ -105,13 +105,17 @@ test.describe('Radar preview stays inside the scroll viewport', () => {
     test(`${viewport.width}x${viewport.height}: top, middle, bottom and window resize keep the source button clickable`, async ({ page }, testInfo) => {
       await page.setViewportSize(viewport);
       await page.goto('/radar?date=all');
-      await page.getByRole('link', { name: candidate.title, exact: true }).click();
-      const panel = page.getByRole('complementary', { name: '文章概览', exact: true }).filter({ visible: true });
+      const link = page.getByRole('link', { name: candidate.title, exact: true });
+      // The list may be taller than the viewport; make the target card visible
+      // before measuring so this test asserts the invariant it cares about:
+      // opening the preview must not move the list.
+      await link.scrollIntoViewIfNeeded();
       const main = page.getByRole('main');
-      await expect.poll(() => controlsFit(page)).toEqual({ fits: true, clickable: true });
       const initialScroll = await main.evaluate(element => element.scrollTop);
-      if (viewport.height >= 600) expect(initialScroll).toBe(0);
-      else expect(initialScroll).toBeLessThan(await main.evaluate(element => element.clientHeight));
+      await link.click();
+      const panel = page.getByRole('complementary', { name: '文章概览', exact: true }).filter({ visible: true });
+      await expect.poll(() => controlsFit(page)).toEqual({ fits: true, clickable: true });
+      expect(await main.evaluate(element => element.scrollTop)).toBe(initialScroll);
       await page.screenshot({ path: testInfo.outputPath(`preview-top-${viewport.width}.png`) });
 
       const body = panel.locator('[data-radar-preview-body]');
