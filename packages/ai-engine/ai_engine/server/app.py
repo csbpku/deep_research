@@ -27,6 +27,7 @@ import inspect
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
@@ -74,7 +75,13 @@ from ai_engine.llm.client import (
     sanitize_llm_error,
     stream_text,
 )
-from ai_engine.llm.config import config_snapshot, resolve_spec
+from ai_engine.llm.config import (
+    LlmPurpose,
+    LlmRoute,
+    config_snapshot,
+    resolve_route,
+    resolve_spec,
+)
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 from ai_engine.llm.token_budget import (
     TokenBudgetExceeded,
@@ -3278,6 +3285,236 @@ async def review_research(body: ReviewResearchBody, request: Request) -> dict[st
         "review": result.to_dict(),
         "request_id": getattr(request.state, "request_id", None),
     }
+
+
+_PREFLIGHT_CACHE_TTL_SECONDS = 60.0
+_PREFLIGHT_PROBE_TIMEOUT_SECONDS = 4.0
+_PREFLIGHT_CACHE: tuple[str, float, dict[str, Any]] | None = None
+
+
+def _preflight_cache_key() -> str:
+    """Fingerprint the non-secret inputs that can change a preflight result."""
+    profiles = ("minimax", "deepseek", "openai", "anthropic")
+    credentials = {
+        profile: {
+            "key": bool(os.environ.get(f"{profile.upper()}_API_KEY", "").strip()),
+            "key_heavy": bool(
+                os.environ.get(f"{profile.upper()}_API_KEY_HEAVY", "").strip()
+            ),
+            "base_url": bool(os.environ.get(f"{profile.upper()}_BASE_URL", "").strip()),
+            "base_url_heavy": bool(
+                os.environ.get(f"{profile.upper()}_BASE_URL_HEAVY", "").strip()
+            ),
+            "protocol": os.environ.get(f"{profile.upper()}_PROTOCOL", "").strip(),
+        }
+        for profile in profiles
+    }
+    return json.dumps(
+        {
+            "adapter": os.environ.get("AI_ENGINE_ADAPTER", "gpt_researcher"),
+            "research": os.environ.get("RESEARCH_LLM", "").strip(),
+            "primary": os.environ.get("PRIMARY_LLM", "").strip(),
+            "smart": os.environ.get("SMART_LLM", "").strip(),
+            "utility": os.environ.get("UTILITY_LLM", "").strip(),
+            "brief": os.environ.get("BRIEF_LLM", "").strip(),
+            "fallback": os.environ.get("FALLBACK_LLM", "").strip(),
+            "llm_fallback": os.environ.get("LLM_FALLBACK_LLM", "").strip(),
+            "retriever": os.environ.get("RETRIEVER", "").strip(),
+            "tavily": bool(os.environ.get("TAVILY_API_KEY", "").strip()),
+            "credentials": credentials,
+        },
+        sort_keys=True,
+    )
+
+
+def _preflight_check(
+    name: str,
+    ok: bool,
+    message: str,
+    *,
+    level: str | None = None,
+) -> dict[str, Any]:
+    check: dict[str, Any] = {"name": name, "ok": ok, "message": message}
+    if level is not None:
+        check["level"] = level
+    return check
+
+
+def _check_llm_slot(purpose: LlmPurpose) -> tuple[dict[str, Any], LlmRoute | None]:
+    """Resolve one canonical slot without exposing credentials or secrets."""
+    label = "RESEARCH_LLM" if purpose == "research" else "UTILITY_LLM"
+    try:
+        route = resolve_route(purpose)
+    except ValueError as exc:
+        return (
+            _preflight_check(
+                f"{purpose}_llm",
+                False,
+                f"{label} 配置无效：{exc}。请检查 AI engine 环境变量。",
+            ),
+            None,
+        )
+    if route.api_key:
+        return (
+            _preflight_check(f"{purpose}_llm", True, f"{label} 槽位可用：{route.spec}"),
+            route,
+        )
+
+    profile = route.vendor.upper()
+    explicit_gateway = bool(
+        os.environ.get(f"{profile}_BASE_URL", "").strip()
+        or os.environ.get(f"{profile}_BASE_URL_HEAVY", "").strip()
+    )
+    if explicit_gateway:
+        return (
+            _preflight_check(
+                f"{purpose}_llm",
+                True,
+                f"{label} 使用无密钥兼容网关（{profile}_BASE_URL 已配置）；"
+                f"如果网关需要鉴权，请补充 {profile}_API_KEY。",
+                level="warning",
+            ),
+            route,
+        )
+    return (
+        _preflight_check(
+            f"{purpose}_llm",
+            False,
+            f"缺少 {profile}_API_KEY，无法调用 {route.spec}。"
+            f"请在 packages/ai-engine/.env 中配置 {profile}_API_KEY 后重启 AI engine。",
+        ),
+        None,
+    )
+
+
+def _check_search_config() -> dict[str, Any]:
+    configured = os.environ.get("RETRIEVER", "").strip().lower()
+    has_tavily_key = bool(os.environ.get("TAVILY_API_KEY", "").strip())
+    if configured == "tavily":
+        if has_tavily_key:
+            return _preflight_check("search", True, "Tavily 检索器已配置")
+        return _preflight_check(
+            "search",
+            True,
+            "未配置 TAVILY_API_KEY，将自动使用 DuckDuckGo（无需密钥）。",
+        )
+    if configured:
+        return _preflight_check("search", True, f"检索器：{configured}")
+    if has_tavily_key:
+        return _preflight_check("search", True, "Tavily 已配置，将使用 Tavily 检索")
+    return _preflight_check("search", True, "使用 DuckDuckGo（无需密钥）")
+
+
+async def _probe_llm_route(route: LlmRoute) -> dict[str, Any]:
+    """One bounded, non-retrying provider call to prove the route works."""
+    try:
+        async with asyncio.timeout(_PREFLIGHT_PROBE_TIMEOUT_SECONDS):
+            await generate_text(
+                user_prompt="Reply with exactly OK.",
+                llm_spec=route.spec,
+                tier="light",
+                max_tokens=8,
+                timeout=_PREFLIGHT_PROBE_TIMEOUT_SECONDS,
+                disable_thinking=True,
+                operation="health.preflight",
+                single_attempt=True,
+            )
+    except Exception as exc:  # provider/auth/quota/network errors are blocking
+        # A provider timeout is inconclusive, not a configuration failure:
+        # let the user start rather than hard-block on a slow probe.
+        if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+            return _preflight_check(
+                "model_probe",
+                True,
+                "模型连通性探测超时，未确认可用性；仍可启动，失败时会显示具体错误。",
+                level="warning",
+            )
+        return _preflight_check(
+            "model_probe",
+            False,
+            f"模型调用失败：{sanitize_llm_error(exc)}。"
+            "请检查 API key、额度与 base URL。",
+        )
+    return _preflight_check("model_probe", True, f"模型连通性正常：{route.spec}")
+
+
+async def _run_preflight() -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    adapter: ResearchEngineAdapter | None = None
+    try:
+        adapter = _adapter_singleton()
+        health = await adapter.health()
+    except Exception as exc:
+        checks.append(
+            _preflight_check(
+                "adapter",
+                False,
+                f"研究引擎适配器不可用：{sanitize_llm_error(exc)}。"
+                "请检查 AI_ENGINE_ADAPTER 配置。",
+            )
+        )
+    else:
+        if health.ok:
+            checks.append(
+                _preflight_check("adapter", True, f"适配器已就绪：{health.adapter_name}")
+            )
+        else:
+            checks.append(
+                _preflight_check(
+                    "adapter",
+                    False,
+                    f"适配器 {health.adapter_name} 自检未通过。请检查 AI engine 日志。",
+                )
+            )
+
+    research_check, research_route = _check_llm_slot("research")
+    checks.append(research_check)
+    utility_check, _ = _check_llm_slot("utility")
+    checks.append(utility_check)
+    checks.append(_check_search_config())
+
+    probe_ready = (
+        adapter is not None
+        and not isinstance(adapter, FakeAdapter)
+        and research_check["ok"]
+        and research_route is not None
+    )
+    if probe_ready and research_route is not None:
+        checks.append(await _probe_llm_route(research_route))
+    else:
+        reason = (
+            "测试适配器（fake）"
+            if isinstance(adapter, FakeAdapter)
+            else "适配器或模型凭据检查未通过"
+        )
+        checks.append(
+            _preflight_check("model_probe", True, f"已跳过模型探测：{reason}。")
+        )
+
+    return {
+        "ok": all(check["ok"] for check in checks),
+        "checks": checks,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/health/preflight")
+async def health_preflight(force: bool = False) -> dict[str, Any]:
+    """Report whether a research job can start without burning a run.
+
+    Results are cached briefly so the confirmation page can poll without
+    sending a model request every time. The payload never contains secrets.
+    """
+    global _PREFLIGHT_CACHE
+    key = _preflight_cache_key()
+    now = time.monotonic()
+    if not force and _PREFLIGHT_CACHE is not None:
+        cached_key, cached_at, payload = _PREFLIGHT_CACHE
+        if cached_key == key and now - cached_at < _PREFLIGHT_CACHE_TTL_SECONDS:
+            return payload
+    payload = await _run_preflight()
+    _PREFLIGHT_CACHE = (key, time.monotonic(), payload)
+    return payload
 
 
 @app.get("/health")
