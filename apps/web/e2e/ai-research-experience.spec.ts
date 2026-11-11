@@ -206,7 +206,10 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await expect(page.getByRole('radio', { name: /^Slides 提纲/ })).toBeChecked();
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('radio', { name: /^网页简报/ })).toBeChecked();
-  await tabTo(page.getByRole('radio', { name: /^多轮研究/ }));
+  // Single-round is the default now, so it owns the radio group's tab stop.
+  await tabTo(page.getByRole('radio', { name: /^单轮研究/ }));
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: /^多轮研究/ })).toBeChecked();
   await page.keyboard.press('ArrowLeft');
   await expect(page.getByRole('radio', { name: /^单轮研究/ })).toBeChecked();
   await tabTo(page.getByRole('radio', { name: /^网页搜索/ }));
