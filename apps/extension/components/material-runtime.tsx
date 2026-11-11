@@ -21,6 +21,16 @@ import { readingAnswerText } from '../reader-core.js';
 import { t } from '../i18n.js';
 
 const roots = new WeakMap<Element, Root>();
+function MaterialThemeBoundary({ children }: { children: React.ReactNode }) {
+  const [theme, setTheme] = useState(readerTheme);
+  useEffect(() => {
+    const update = () => setTheme(readerTheme);
+    window.addEventListener('reader:theme-changed', update);
+    update();
+    return () => window.removeEventListener('reader:theme-changed', update);
+  }, []);
+  return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
+}
 function render(host: Element, content: React.ReactNode) {
   let root = roots.get(host);
   if (!root) { root = createRoot(host); roots.set(host, root); }
@@ -28,7 +38,7 @@ function render(host: Element, content: React.ReactNode) {
   // boundaries, so the theme has to be provided again here. The Reader theme
   // carries no colour schemes, so this provider never writes a `light`/`dark`
   // class onto <html>: the two providers cannot disagree about a palette.
-  flushSync(() => root.render(<ThemeProvider theme={readerTheme}>{content}</ThemeProvider>));
+  flushSync(() => root.render(<MaterialThemeBoundary>{content}</MaterialThemeBoundary>));
 }
 export function MaterialMarkdown({ text, className, bind }: { text: string; className?: string; bind?: (element: HTMLElement) => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -181,14 +191,13 @@ export function renderMaterialRecords(host: Element, records: MaterialRecord[], 
   </Paper>) : <Typography className="history-empty" color="text.secondary" variant="body2" sx={{ py: space.section }}>{empty}</Typography>);
 }
 export function renderMaterialFollowups(host: Element, prompts: string[], run: (prompt: string) => void, options: { layout?: 'rows' | 'chips' } = {}) {
-  if (options.layout !== 'chips') {
-    // Default stays the audited design: one shared frame, borderless 44px rows.
+  if (options.layout === 'rows') {
+    // Legacy full-width rows: kept for callers that explicitly opt in.
     render(host, <Stack divider={<Divider />} spacing={space.xs}>{prompts.map(prompt => <ReaderButton key={prompt} className="discussion-followup" control="followup" variant="text" fullWidth endIcon={<ComposerIcon kind="arrow-forward" size={18} />} onClick={() => run(prompt)}><span>{prompt}</span></ReaderButton>)}</Stack>);
     return;
   }
-  // Compact mode for narrow panels: shorter wrapped chips instead of full-width
-  // rows. The label may be clipped, so the complete question stays the button's
-  // accessible name rather than a tooltip.
+  // Default: shorter wrapped chips instead of full-width rows. The label may be
+  // clipped, so the complete question stays the button's accessible name.
   render(host, <Box className="discussion-followups" sx={{ display: 'flex', flexWrap: 'wrap', gap: space.xs }}>
     {prompts.map((prompt, index) => <ReaderButton key={prompt} className="discussion-followup discussion-followup-chip" control="compact" variant="outlined" data-layout="chips" data-followup-index={index} aria-label={prompt} onClick={() => run(prompt)} sx={{ maxWidth: '100%', minHeight: 32, borderRadius: 'var(--reader-radius-pill)', px: space.md, color: 'text.secondary' }}>
       <Box component="span" className="discussion-followup-label" sx={{ display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{prompt}</Box>

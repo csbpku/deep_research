@@ -12,6 +12,14 @@ let toastTimer = 0;
 let activeDetail = null;
 let activeDetailReturnFocus = null;
 const sidePanelSurface = new URLSearchParams(window.location.search).get('surface') === 'sidepanel';
+const embedded = new URLSearchParams(window.location.search).get('embedded') === '1';
+
+/** The panel owns navigation; an embedded list reports intent and stays mounted. */
+function postToPanel(message) {
+  if (!embedded || window.parent === window) return false;
+  window.parent.postMessage(message, window.location.origin);
+  return true;
+}
 const sourceTab = Number(new URLSearchParams(window.location.search).get('sourceTab'));
 const boundWindowTabId = sourceTab > 0 && Number.isInteger(sourceTab) ? sourceTab : null;
 const pendingSessionKey = 'readerPendingSession';
@@ -175,6 +183,18 @@ async function openSession(session, { anchor = null } = {}) {
       showToast(t("没有获得原文站点权限；请允许访问后再继续聊天。"));
       return;
     }
+    // A background answer may finish while history is open. Continue from
+    // the latest local transcript, not the cached row originally rendered.
+    const current = await readerStore.getHistorySession(session);
+    if (!current && !session.remote) {
+      await loadData();
+      showToast(t("这条会话已被删除，请选择其他会话。"));
+      return;
+    }
+    if (current && (messageCount(current) >= messageCount(session)
+      || String(current.updatedAt || '') > String(session.updatedAt || ''))) {
+      session = { ...session, ...current };
+    }
     await chrome.storage.session?.set?.({
       [pendingSessionKey]: {
         ...session,
@@ -196,6 +216,12 @@ async function openSession(session, { anchor = null } = {}) {
     const tab = sidePanelSurface && Number.isInteger(activeTab?.id) && activeTabIsWeb
       ? await chrome.tabs.update(activeTab.id, { url: session.url, active: true })
       : await chrome.tabs.create({ url: session.url, active: true });
+    if (postToPanel({ type: 'reader-history-resume', tabId: Number.isInteger(tab?.id) ? tab.id : null })) {
+      showToast(sessionIsOld(session)
+        ? t("原文已打开；这是旧版本，已恢复会话但原文证据需要重新核对。")
+        : t("原文已打开；Reader 正在恢复这次聊天，可以继续提问。"));
+      return;
+    }
     if (sidePanelSurface) {
       window.location.href = chrome.runtime.getURL(`sidepanel.html${boundWindowTabId && tab?.id ? `?sourceTab=${tab.id}` : ''}`);
     } else if (Number.isInteger(tab?.id)) {
@@ -393,12 +419,14 @@ function setTab(next) {
 }
 
 function returnToPanel(view = 'chat') {
+  if (postToPanel({ type: 'reader-history-view', view })) return;
   const params = new URLSearchParams({ view });
   if (boundWindowTabId) params.set('sourceTab', String(boundWindowTabId));
   window.location.href = chrome.runtime.getURL(`sidepanel.html?${params}`);
 }
 
 function closeHistory() {
+  if (postToPanel({ type: 'reader-history-close' })) return;
   if (sidePanelSurface) {
     returnToPanel();
     return;
@@ -417,7 +445,16 @@ $('history-library')?.addEventListener('click', () => returnToPanel('library'));
 $('history-settings')?.addEventListener('click', () => returnToPanel('settings'));
 $('history-current')?.addEventListener('click', () => { closeHistoryDetail({ restoreFocus: false }); $('history-search-input').focus(); });
 document.addEventListener('pointerdown', event => document.querySelectorAll('.history-card-actions details[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; }));
-document.addEventListener('keydown', event => { if (event.key === 'Escape') document.querySelectorAll('.history-card-actions details[open]').forEach(menu => { menu.open = false; menu.querySelector('summary')?.focus(); }); });
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  const menus = document.querySelectorAll('.history-card-actions details[open]');
+  if (menus.length) {
+    menus.forEach(menu => { menu.open = false; menu.querySelector('summary')?.focus(); });
+    return;
+  }
+  if (activeDetail) { closeHistoryDetail(); return; }
+  if (embedded) closeHistory();
+});
 $('close-history-detail').addEventListener('click', closeHistoryDetail);
 $('continue-history-detail').addEventListener('click', () => {
   if (activeDetail) void openSession(activeDetail);

@@ -1,6 +1,7 @@
 import { standaloneSearch, searchContext, safeSourceUrl } from './web-search.js';
 import { readerStore } from './reader-store.js';
 import { loadProvider, explainSelection, explainImage } from './reader-core.js';
+import { normalizeReasoningMode } from './model-policy.js';
 import { requestPlatformAnswer, requestPlatformImageAnswer, requestPlatformSearch } from './platform-answer.js';
 
 const tasks = new Map();
@@ -32,6 +33,8 @@ async function execute(input, task, controller) {
   try {
     const options = {
       signal: controller.signal, maxTokens: input.maxTokens,
+      reasoningMode: input.mode === 'standalone'
+        ? normalizeReasoningMode(input.reasoningMode ?? await readerStore.getSetting('answerReasoningMode', 'auto')) : undefined,
       history: input.history, action: input.action, platformUrl: input.platformUrl, language: input.language, replyLanguage: input.replyLanguage,
       onDelta: delta => { task.streamed += delta; publish(); },
       onProgress: (...progress) => { task.progress = progress; publish(true); },

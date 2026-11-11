@@ -7,6 +7,7 @@ import { DEFAULT_WEB_APP_URL, resolvePlatformOrigin } from './platform-config.js
 import { getTrustedReaderPlatformOrigin, validateRadarSourceUrl } from './reader-platform-bridge-utils.js';
 import { resumePendingInstall } from './reader-install-resume.js';
 import { createUsageRecorder } from './usage-persistence.js';
+import { estimateTranslation } from './cost-estimate.js';
 import { GLOSSARY_MAX_PROMPT_CHARS, glossaryPrompt as buildGlossaryPrompt, parseGlossary } from './glossary.js';
 import { isBundledDemoUrl, requestDemoContext } from './reader-demo.js';
 
@@ -281,9 +282,15 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
     for (const image of images) {
       if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
       try {
-        imageTranslations.push(await translateImage(readingProvider, document, image, { signal: controller.signal, fetchImageBytes: true }));
+        const translated = await translateImage(readingProvider, document, image, { signal: controller.signal, fetchImageBytes: true });
+        if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
+        imageTranslations.push(translated);
+        if (translated.regions?.length || translated.fallbackText || translated.fallbackRegions?.length) {
+          await sendToTab(tabId, { type: 'deep-research:apply-image-translations', documentUrl: boundedContext.url, translations: [translated] });
+        }
       } catch (error) {
         if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
+        if ([401, 403, 404, 429].includes(error?.status)) throw error;
         imageTranslations.push({ ...image, regions: [], confidence: 0, note: error instanceof Error ? error.message : '图片翻译失败' });
       }
       job.processedImageIds = mergeProcessedIds(job.processedImageIds, [image.id]);
@@ -294,8 +301,6 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
       emit('deep-research:translation-progress', { progress: { ...job } });
     }
     if (controller.signal.aborted) throw new DOMException('用户取消了翻译', 'AbortError');
-    const usableImageTranslations = imageTranslations.filter((item) => item.regions?.length || item.fallbackText || item.fallbackRegions?.length);
-    if (usableImageTranslations.length) await sendToTab(tabId, { type: 'deep-research:apply-image-translations', translations: usableImageTranslations });
     const currentFailures = translations.filter((item) => item.error).map((item) => summarizeFailure(item, 'text'));
     currentFailures.push(...imageTranslations.filter((item) => !item.regions?.length && !item.fallbackText && !item.noText && !item.keptOriginal).map((item) => summarizeFailure(item, 'image')));
     const resolvedIds = [
@@ -322,6 +327,24 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
       recoveryRequired: false,
     });
     await readerStore.deleteTaskInput(jobId);
+    // Count the job only once it reached a terminal success state. Recording at
+    // hand-off made a cancelled translation look like a completed one.
+    try {
+      const usage = estimateTranslation({ blocks, body: boundedContext.body });
+      // An image-only page has no text batches, so `usage.requests` is 0 even
+      // though every image was a billable model call. Count images first.
+      const requests = usage.requests + images.length;
+      if (requests) {
+        await recordReaderUsage({
+          kind: 'translation',
+          requests,
+          chars: usage.chars,
+          tokens: usage.tokens,
+        });
+      }
+    } catch {
+      // Usage is best-effort evidence; it must never fail a finished translation.
+    }
     emit('deep-research:translation-complete', { job: { ...job }, failures, warnings });
   } catch (error) {
     const recoverForNewPage = Boolean(translationJobs.get(jobId)?.preserveForRecovery);

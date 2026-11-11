@@ -401,6 +401,19 @@ test('pause during image request retains pending image without false failure', a
   assert.equal(sandbox.translationRunning, false);
 });
 
+test('a late successful image response after pause is not applied and the job is cancelled', async () => {
+  const { sandbox, job } = translationSandbox({ url: 'https://a.test', blocks: [], images: [{ id: 'image-0' }] }, async (controller) => {
+    controller.abort();
+    return { id: 'image-0', regions: [], fallbackText: 'Late translation' };
+  });
+  const sent = [];
+  sandbox.sendToPage = message => sent.push(message);
+  await vm.runInContext('processDocument(context, 1)', sandbox);
+  assert.equal(job.status, 'cancelled');
+  assert.equal(job.imageDone, 0);
+  assert.equal(sent.filter(message => message.type === 'deep-research:apply-image-translations').length, 0);
+});
+
 test('selection completion describes actual translation scope', async () => {
   const { sandbox, notices } = translationSandbox({ url: 'https://a.test', scope: 'selection', blocks: [], images: [] }, () => {});
   await vm.runInContext('processDocument(context, 1)', sandbox);
@@ -782,7 +795,7 @@ test('source block extraction excludes nested translations and stays stable when
   let translated = false;
   const node = {};
   node.cloneNode = () => { const clone = { textContent: translated ? 'Original原文译文' : 'Original' }; clone.querySelectorAll = () => translated ? [{ remove: () => { clone.textContent = 'Original'; } }] : []; return clone; };
-  const sandbox = { clean: (text) => text.trim(), node };
+  const sandbox = { clean: (text) => text.trim(), node, READER_OWN_NODE_SELECTOR: '[data-deep-research-translation],[data-deep-research-image-wrap],[data-deep-research-image-fallback],[data-deep-research-image-side-translation],[data-deep-research-status]' };
   const fn = extract(content, '  function sourceBlockText(', '  function extractBlocks(');
   assert.equal(vm.runInNewContext(fn + '\nsourceBlockText(node)', sandbox), 'Original');
   translated = true;
