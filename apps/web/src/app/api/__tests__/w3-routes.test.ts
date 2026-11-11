@@ -319,7 +319,8 @@ describe('research provenance input', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       code: 'VALIDATION_FAILED',
-      message: '事实审核尚未完成，审核通过后才能发布 AI 调研',
+      message: '这份调研还有未完成核验的内容；确认带披露发布后才能继续',
+      details: expect.objectContaining({ requiresDisclosureAcknowledgement: true }),
     });
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
@@ -344,7 +345,8 @@ describe('research provenance input', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       code: 'VALIDATION_FAILED',
-      message: '事实审核尚未完成，审核通过后才能发布 AI 调研',
+      message: '这份调研还有未完成核验的内容；确认带披露发布后才能继续',
+      details: expect.objectContaining({ requiresDisclosureAcknowledgement: true }),
     });
     expect(mocks.transaction).not.toHaveBeenCalled();
   });

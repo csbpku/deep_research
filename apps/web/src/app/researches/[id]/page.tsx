@@ -109,11 +109,21 @@ interface ResearchDetail {
   reviewDisclosure?: Array<{
     claimId: string;
     claim: string;
-    action: 'accept_uncertainty';
+    action?: 'accept_uncertainty';
     label: string;
-    reason: string | null;
+    reason?: string | null;
     evidenceStatus: 'supported' | 'unverified' | 'contradicted';
   }>;
+  reviewDisclosureSummary?: {
+    coverageStatus: 'complete' | 'insufficient' | 'not_applicable' | null;
+    researchSufficiencyStatus: 'sufficient' | 'insufficient' | 'not_assessed' | null;
+    openCount: number;
+    unsupportedCount: number;
+    conflictCount: number;
+    highRiskOpenCount: number;
+    disclosedCount: number;
+    machineIncomplete: boolean;
+  } | null;
   sourceComment: SourceCommentItem | null;
   audits?: AuditEntry[];
   commentCount?: number;
@@ -373,13 +383,35 @@ export default function ResearchDetailPage() {
               <MarkdownContent content={cleanResearchMarkdown(data.body)} />
             </SectionCard>
 
-            {data.reviewDisclosure && data.reviewDisclosure.length > 0 && (
-              <SectionCard title="不确定性说明" tone="warning" icon={AlertTriangle}>
-                <p className={styles.disclosureIntro}>
-                  这份调研保留了以下尚未完全确定的结论，阅读时请结合原文证据和风险说明判断。
-                </p>
+            {(data.reviewDisclosureSummary || (data.reviewDisclosure?.length ?? 0) > 0) && (
+              <SectionCard title={data.reviewDisclosureSummary ? '发布时披露' : '不确定性说明'} tone="warning" icon={AlertTriangle}>
+                {data.reviewDisclosureSummary ? (
+                  <div className={styles.disclosureIntro}>
+                    {data.reviewDisclosureSummary.machineIncomplete
+                      ? '本轮自动核验只覆盖了报告的一部分，机器清单未完整产出。'
+                      : null}
+                    {data.reviewDisclosureSummary.openCount > 0
+                      ? `发布时仍有 ${data.reviewDisclosureSummary.openCount} 条声明未完成核验`
+                        + (data.reviewDisclosureSummary.conflictCount > 0
+                          ? `，其中 ${data.reviewDisclosureSummary.conflictCount} 条存在来源冲突`
+                          : '')
+                        + '。'
+                      : null}
+                    {data.reviewDisclosureSummary.researchSufficiencyStatus === 'insufficient'
+                      ? '研究资料尚未覆盖原问题的全部关键部分。'
+                      : null}
+                    {data.reviewDisclosureSummary.disclosedCount > 0
+                      ? `作者已明确接受 ${data.reviewDisclosureSummary.disclosedCount} 条不确定性。`
+                      : null}
+                    {' '}阅读时请结合原文证据和风险说明判断。
+                  </div>
+                ) : (
+                  <p className={styles.disclosureIntro}>
+                    这份调研保留了以下尚未完全确定的结论，阅读时请结合原文证据和风险说明判断。
+                  </p>
+                )}
                 <ul className={styles.disclosureList}>
-                  {data.reviewDisclosure.map((item) => (
+                  {(data.reviewDisclosure ?? []).slice(0, 5).map((item) => (
                     <li key={item.claimId} className={styles.disclosureItem}>
                       <p className={styles.disclosureClaim}>{item.claim}</p>
                       <p className={styles.disclosureNote}>
@@ -388,6 +420,26 @@ export default function ResearchDetailPage() {
                     </li>
                   ))}
                 </ul>
+                {(data.reviewDisclosure?.length ?? 0) > 5 && (
+                  <details style={{ marginTop: 12 }}>
+                    <summary>展开其余 {(data.reviewDisclosure?.length ?? 0) - 5} 条</summary>
+                    <ul className={styles.disclosureList}>
+                      {(data.reviewDisclosure ?? []).slice(5).map((item) => (
+                        <li key={item.claimId} className={styles.disclosureItem}>
+                          <p className={styles.disclosureClaim}>{item.claim}</p>
+                          <p className={styles.disclosureNote}>
+                            {item.label}{item.reason ? ` · ${item.reason}` : ''}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                {data.reviewDisclosureSummary && data.reviewDisclosureSummary.openCount > (data.reviewDisclosure?.length ?? 0) && (
+                  <p className={styles.disclosureNote}>
+                    其余 {data.reviewDisclosureSummary.openCount - (data.reviewDisclosure?.length ?? 0)} 条未在此展开。
+                  </p>
+                )}
               </SectionCard>
             )}
 
