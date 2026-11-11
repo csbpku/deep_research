@@ -2132,7 +2132,8 @@ class DefaultResearchReviewer:
             (
                 f"主题：{topic}\n报告类型：{report_type}\n"
                 f"这是报告全文第 {chunk.index}/{len(inventory_chunks)} 块（字符 {chunk.start}-{chunk.end}）。"
-                "只抽取本块中的声明；如果内容不是完整声明，保留原样并标记 coverage_status=insufficient。"
+                "只抽取本块中的声明；块首尾被切断的半句保留原样、不要算作漏检，"
+                "只有本块中间完整段落确实无法抽取时才标记 coverage_status=insufficient。"
                 "请先完成声明清单，不要判断事实是否正确。\n报告正文：\n"
                 f"{chunk.text}"
             )
