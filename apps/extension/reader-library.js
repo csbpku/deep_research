@@ -46,6 +46,34 @@ function tagsOf(record) {
 }
 
 /**
+ * Rename or remove one canonical tag across a record's tag list. Matching is
+ * case-insensitive like filtering, the renamed value keeps the casing the user
+ * typed, and the 10-tag save limit is re-applied so a rename cannot grow a
+ * record past what the save dialog accepts.
+ */
+export function editTags(tags, { renameFrom = '', renameTo = '', remove = '' } = {}) {
+  const source = String(renameFrom || '').trim();
+  const target = String(renameTo || '').trim();
+  const removed = String(remove || '').trim();
+  const next = [];
+  const seen = new Set();
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    if (typeof tag !== 'string') continue;
+    let value = tag.trim();
+    if (!value) continue;
+    if (source && normalizeText(value) === normalizeText(source)) value = target;
+    if (!value) continue;
+    if (removed && normalizeText(value) === normalizeText(removed)) continue;
+    const key = normalizeText(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(value);
+    if (next.length >= 10) break;
+  }
+  return next;
+}
+
+/**
  * Two storage shapes (insight / annotation) become one view model so callers
  * never have to remember that annotations keep the quote under anchor.quote and
  * the page under document.url. Exported so a single record (a detail view, an

@@ -142,3 +142,19 @@ test('bulk translation cache retains the newest 500 entries and supports an orde
   assert.equal((await readerStore.exportData()).cache, undefined);
   await readerStore.clearCache();
 });
+
+test('tag maintenance updates every matching insight without touching updatedAt', async () => {
+  const base = { url: 'https://tags.test/article', document: { url: 'https://tags.test/article', title: 'Tags' }, quote: 'Quote', anchor: { quote: 'Quote' } };
+  const first = await readerStore.saveInsight({ ...base, id: 'tags-1', tags: ['React', 'performance'] });
+  const second = await readerStore.saveInsight({ ...base, id: 'tags-2', tags: ['performance'] });
+  const renamed = await readerStore.updateInsightTags({ renameFrom: 'react', renameTo: 'React 19' });
+  assert.equal(renamed, 1);
+  assert.deepEqual((await readerStore.getInsight('tags-1')).tags, ['React 19', 'performance']);
+  assert.equal((await readerStore.getInsight('tags-1')).updatedAt, first.updatedAt);
+  const removed = await readerStore.updateInsightTags({ remove: 'PERFORMANCE' });
+  assert.equal(removed, 2);
+  assert.deepEqual((await readerStore.getInsight('tags-1')).tags, ['React 19']);
+  assert.deepEqual((await readerStore.getInsight('tags-2')).tags, []);
+  assert.equal((await readerStore.getInsight('tags-2')).updatedAt, second.updatedAt);
+  assert.equal(await readerStore.updateInsightTags({ remove: 'missing' }), 0);
+});

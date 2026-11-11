@@ -1,3 +1,5 @@
+import { editTags } from './reader-library.js';
+
 const DB_NAME = 'deep-research-reader';
 const DB_VERSION = 4;
 const STORE_NAMES = ['sessions', 'insights', 'annotations', 'settings', 'cache', 'jobs', 'taskInputs'];
@@ -417,6 +419,23 @@ export const readerStore = {
       });
       return record;
     } finally { database.close(); }
+  },
+  /**
+   * Tag maintenance is a metadata edit, not a re-save: `updatedAt` stays put so
+   * the library keeps its original reading order after a rename. Returns the
+   * number of records whose tags actually changed.
+   */
+  async updateInsightTags({ renameFrom = '', renameTo = '', remove = '' } = {}) {
+    const records = await all('insights');
+    let changed = 0;
+    for (const record of records) {
+      const current = Array.isArray(record.tags) ? record.tags : [];
+      const next = editTags(current, { renameFrom, renameTo, remove });
+      if (next.length === current.length && next.every((tag, index) => tag === current[index])) continue;
+      await put('insights', { ...record, tags: next });
+      changed += 1;
+    }
+    return changed;
   },
   async linkInsightToPlatform(id, researchId, origin) {
     const normalizedId = normalizeRadarSummaryId(researchId);

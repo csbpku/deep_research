@@ -14,10 +14,14 @@ function HistoryPage() {
     void import('../../history.js');
   }, []);
 
-  const sidePanelSurface = new URLSearchParams(window.location.search).get('surface') === 'sidepanel';
+  const search = new URLSearchParams(window.location.search);
+  const sidePanelSurface = search.get('surface') === 'sidepanel';
+  // Embedded in the panel overlay: the panel's own bar is the chrome, so the
+  // full masthead would duplicate navigation inside a narrow iframe.
+  const embedded = search.get('embedded') === '1';
 
   return (
-    <Box component="main" className={`history-shell${sidePanelSurface ? ' history-sidepanel' : ''}`}>
+    <Box component="main" className={`history-shell${sidePanelSurface ? ' history-sidepanel' : ''}${embedded ? ' history-embedded' : ''}`}>
       <ReaderHeader history />
 
       <div className="history-layout">

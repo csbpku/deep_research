@@ -132,6 +132,23 @@ try {
   }
   assert.equal(markdown.endsWith('\n') && !markdown.endsWith('\n\n'), true, 'Markdown 应以单个换行结束');
 
+  // Tag maintenance edits every matching record in place; it must not delete
+  // the saved content or reorder the shelf by touching updatedAt.
+  await panel.locator('#manage-tags').click();
+  await panel.locator('#tag-manager').waitFor({ state: 'visible', timeout: 10_000 });
+  assert.equal(await panel.locator('.tag-manager-row').count(), 2, '标签管理应列出全库两个标签');
+  await panel.locator('.tag-manager-row[data-tag="架构"] input').fill('系统设计');
+  await panel.locator('.tag-manager-row[data-tag="架构"]').getByRole('button', { name: '保存', exact: true }).click();
+  await panel.waitForFunction(() => [...document.querySelectorAll('#library-tag option')].some(option => option.value === '系统设计'), null, { timeout: 10_000 });
+  assert.equal(await panel.locator('#library-tag option[value="架构"]').count(), 0, '旧标签不应残留');
+  assert.match(await panel.locator('#library-list').innerText(), /Alpha guide/, '重命名后收藏仍在原处');
+
+  await panel.locator('.tag-manager-row[data-tag="性能"]').getByRole('button', { name: '删除', exact: true }).click();
+  await panel.locator('.tag-manager-row[data-tag="性能"]').getByRole('button', { name: '确认删除', exact: true }).click();
+  await panel.waitForFunction(() => [...document.querySelectorAll('#library-tag option')].every(option => option.value !== '性能'), null, { timeout: 10_000 });
+  assert.equal(await panel.locator('.insight-row').count(), 3, '删除标签必须保留收藏内容');
+  assert.equal(await panel.locator('.tag-manager-row').count(), 1, '标签管理应只剩重命名后的标签');
+
   console.log(JSON.stringify({
     ok: true,
     checks: [
@@ -140,6 +157,7 @@ try {
       'choosing a tag narrows the list without dropping search',
       'clearing filters restores the full list',
       'the Markdown export downloads a dated file with grouped pages, notes, tags and sources',
+      'tag rename updates every matching record and tag delete keeps the records',
     ],
     tags: tagOptions.filter((option) => option.value).map((option) => option.value),
     markdownBytes: Buffer.byteLength(markdown),
