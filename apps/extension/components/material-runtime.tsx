@@ -21,6 +21,16 @@ import { readingAnswerText } from '../reader-core.js';
 import { t } from '../i18n.js';
 
 const roots = new WeakMap<Element, Root>();
+function MaterialThemeBoundary({ children }: { children: React.ReactNode }) {
+  const [theme, setTheme] = useState(readerTheme);
+  useEffect(() => {
+    const update = () => setTheme(readerTheme);
+    window.addEventListener('reader:theme-changed', update);
+    update();
+    return () => window.removeEventListener('reader:theme-changed', update);
+  }, []);
+  return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
+}
 function render(host: Element, content: React.ReactNode) {
   let root = roots.get(host);
   if (!root) { root = createRoot(host); roots.set(host, root); }
@@ -28,7 +38,7 @@ function render(host: Element, content: React.ReactNode) {
   // boundaries, so the theme has to be provided again here. The Reader theme
   // carries no colour schemes, so this provider never writes a `light`/`dark`
   // class onto <html>: the two providers cannot disagree about a palette.
-  flushSync(() => root.render(<ThemeProvider theme={readerTheme}>{content}</ThemeProvider>));
+  flushSync(() => root.render(<MaterialThemeBoundary>{content}</MaterialThemeBoundary>));
 }
 export function MaterialMarkdown({ text, className, bind }: { text: string; className?: string; bind?: (element: HTMLElement) => void }) {
   const ref = useRef<HTMLDivElement>(null);

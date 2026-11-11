@@ -127,7 +127,7 @@ function nodeMap() {
 
 test('the actual composer follows selection scope, resets to article and hides the starter for images', () => {
   const $ = nodeMap();
-  const sandbox = { $, t, document: { querySelector: () => ({ dataset: { workspaceView: 'chat' } }) },
+  const sandbox = { renderComposerReasoning() {}, $, t, document: { querySelector: () => ({ dataset: { workspaceView: 'chat' } }) },
     activeDiscussionContext: () => ({ selection: { quote: 'Selected source' } }), updateTranslationLanguageUi() {},
     pageReadDescriptor: () => ({ label: 'Ready', detail: '' }), show: (element, visible) => { element.visible = visible; },
     imageContext: { image: {} }, contextHasReadableBody: () => true, discussionScopeLabel: scope => scope, discussionScopeShortLabel: scope => scope,

@@ -10,6 +10,7 @@ import { estimateTranslation, formatTokens } from './cost-estimate.js';
 import { createUsageRecorder } from './usage-persistence.js';
 import { mergeUsage, pruneUsage } from './usage-meter.js';
 import { parseLibraryAnswer } from './library-answer.js';
+import { modelRequestPolicy, normalizeReasoningMode, providerReasoningCapability } from './model-policy.js';
 
 const source = readFileSync(new URL('./sidepanel.js', import.meta.url), 'utf8');
 const t = (text, ...values) => text.replace(/\{(\d+)\}/g, (_, index) => String(values[index]));
@@ -17,8 +18,52 @@ function actualFunction(start, end, globals) {
   const begin = source.indexOf(start);
   const finish = source.indexOf(end, begin);
   assert.ok(begin >= 0 && finish > begin, 'actual function boundaries must exist');
-  return vm.runInNewContext(`${source.slice(begin, finish)}\n${start.match(/function (\w+)/)[1]}`, { t, ...globals });
+  return vm.runInNewContext(`${source.slice(begin, finish)}\n${start.match(/function (\w+)/)[1]}`, { t, normalizeReasoningMode, ...globals });
 }
+
+test('saving pricing settings does not overwrite the independently saved composer effort', async () => {
+  const nodes = { 'translation-model': { value: '' }, 'price-input': { value: '' }, 'price-output': { value: '' }, 'usage-settings-status': {} };
+  const saved = new Map();
+  const save = actualFunction('async function saveUsageSettings(', '\nasync function recordUsageEvent(', {
+    $: id => nodes[id], translationModel: '', answerReasoningMode: 'high', pricing: {},
+    readerStore: { async setSetting(key, value) { saved.set(key, value); } },
+  });
+  await save();
+  assert.equal(saved.has('answerReasoningMode'), false);
+});
+
+test('composer effort updates immediately, saves changes in order and disables unsupported controls', async () => {
+  const nodes = {
+    'composer-reasoning-mode': { value: '', options: ['auto', 'low', 'medium', 'high', 'provider'].map(value => ({ value })) },
+    'composer-reasoning-label': {}, 'composer-reasoning-status': {},
+  };
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const saved = [];
+  const sandbox = { t, normalizeReasoningMode, providerReasoningCapability, modelRequestPolicy,
+    provider: { model: 'grok-4.7' }, readingMode: 'local', answerReasoningMode: 'auto', providerReady: () => true,
+    $: id => nodes[id], show: (node, visible) => { node.hidden = !visible; },
+    readerStore: { async setSetting(_key, mode) { saved.push(mode); if (saved.length === 1) await waiting; } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source.slice(source.indexOf('let reasoningSaveQueue ='), source.indexOf('function renderComposerModelOptions(')), sandbox);
+  const first = vm.runInContext("chooseComposerReasoningMode('high')", sandbox);
+  assert.equal(nodes['composer-reasoning-label'].textContent, '高');
+  const second = vm.runInContext("chooseComposerReasoningMode('low')", sandbox);
+  assert.equal(nodes['composer-reasoning-label'].textContent, '低');
+  await Promise.resolve(); release(); await Promise.all([first, second]);
+  assert.deepEqual(saved, ['high', 'low']);
+  sandbox.provider.model = 'unknown-model';
+  vm.runInContext('renderComposerReasoning()', sandbox);
+  assert.equal(nodes['composer-reasoning-mode'].disabled, true);
+  assert.equal(nodes['composer-reasoning-label'].textContent, '默认');
+  sandbox.provider.model = 'grok-4.7';
+  sandbox.readerStore.setSetting = async () => { throw new Error('storage failed'); };
+  sandbox.readerStore.getSetting = async () => 'provider';
+  await vm.runInContext("chooseComposerReasoningMode('high')", sandbox);
+  assert.equal(nodes['composer-reasoning-label'].textContent, '默认');
+  assert.match(nodes['composer-reasoning-status'].textContent, /保存失败/u);
+});
 
 function translationPanel({ failBookkeeping = false, sendMessage = async () => ({ ok: true }), localTranslate } = {}) {
   const calls = { worker: 0, local: 0, usage: [] };
