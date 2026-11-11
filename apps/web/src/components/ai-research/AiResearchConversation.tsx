@@ -357,7 +357,9 @@ export function AiResearchConversation({
   const [sourceDraft, setSourceDraft] = useState('');
   const [sourceUrls, setSourceUrls] = useState<string[]>([]);
   const [reportType, setReportType] = useState<ReportType>('research_report');
-  const [reportLength, setReportLength] = useState<ResearchLength>('deep');
+  // Developers start with one focused round; multi-round is an explicit
+  // choice, not the silent default that turned a narrow question into 12 minutes.
+  const [reportLength, setReportLength] = useState<ResearchLength>('standard');
   const [sourcePolicy, setSourcePolicy] = useState<SourcePolicy>('prefer_user_sources');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
@@ -1176,7 +1178,7 @@ export function AiResearchConversation({
                       scopeIncomplete={scopeIncomplete}
                       onReportTypeChange={(value) => {
                         setReportType(value);
-                        setReportLength(value === 'summary_brief' ? 'brief' : 'deep');
+                        setReportLength(value === 'summary_brief' ? 'brief' : 'standard');
                       }}
                       onReportLengthChange={setReportLength}
                       onSourcePolicyChange={setSourcePolicy}
