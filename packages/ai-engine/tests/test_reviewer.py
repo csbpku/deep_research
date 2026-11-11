@@ -600,8 +600,9 @@ async def test_failed_adjudication_batch_is_unverified_without_discarding_other_
         "部分批次失败",
     )
 
-    # Inventory + batch 1 + failed batch attempt/retry + batch 3.
-    assert len(calls) == 5
+    # Inventory + batch 1 + batch 3, plus retries and recursive splits of
+    # the failing [C3, C4] batch (each singleton is retried too).
+    assert len(calls) >= 7
     verdicts = {claim.claim_id: claim.verdict for claim in result.claims}
     assert verdicts["C1"] == "verified"
     assert verdicts["C2"] == "verified"

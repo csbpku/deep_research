@@ -1734,11 +1734,12 @@ async def _adjudicate_batch_with_split(
     source_text: str,
     llm_spec: str | None,
 ) -> tuple[ReviewResult | None, BaseException | None]:
-    """Retry a failed batch, then split it before giving up.
+    """Retry a failed batch, then keep splitting it before giving up.
 
-    Large batches fail as a unit when one claim confuses the model. Splitting
-    a 6-claim batch into two independent 3-claim calls recovers that coverage
-    without changing the review semantics for the successful half.
+    A failed batch usually means one claim confused the model; the rest are
+    fine. Splitting halves and retrying each half recursively (down to single
+    claims) recovers that coverage without changing review semantics for the
+    successful parts.
     """
     result, error = await _run_adjudication_batch(
         batch=batch,
@@ -1750,7 +1751,7 @@ async def _adjudicate_batch_with_split(
         llm_spec=llm_spec,
         attempts=2,
     )
-    if result is not None or len(batch) < 4:
+    if result is not None or len(batch) < 2:
         return result, error
 
     midpoint = len(batch) // 2
@@ -1762,7 +1763,7 @@ async def _adjudicate_batch_with_split(
         len(batch),
     )
     outcomes = await asyncio.gather(*(
-        _run_adjudication_batch(
+        _adjudicate_batch_with_split(
             batch=part,
             batch_index=batch_index,
             batch_count=batch_count,
@@ -1770,7 +1771,6 @@ async def _adjudicate_batch_with_split(
             report_type=report_type,
             source_text=source_text,
             llm_spec=llm_spec,
-            attempts=1,
         )
         for part in parts
     ))
