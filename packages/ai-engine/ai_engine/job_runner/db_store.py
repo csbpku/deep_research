@@ -1176,7 +1176,7 @@ class DbJobStore(JobStore):
             'FROM "research_review_runs" rr '
             'JOIN "researches" r ON r."id" = rr."researchId" '
             'LEFT JOIN "ai_research_jobs" j ON j."id" = rr."aiResearchJobId" '
-            'WHERE r."status" = \'draft\' '
+            'WHERE r."status" IN (\'draft\', \'published\') '
             '  AND rr."executionStatus" IN (\'queued\', \'reviewing\') '
             '  AND (rr."executionStatus" = \'queued\' '
             '       OR (rr."leaseExpiresAt" IS NOT NULL AND rr."leaseExpiresAt" < now()) '
