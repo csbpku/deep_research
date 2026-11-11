@@ -32,6 +32,7 @@ async function execute(input, task, controller) {
   try {
     const options = {
       signal: controller.signal, maxTokens: input.maxTokens,
+      reasoningMode: input.mode === 'standalone' ? await readerStore.getSetting('answerReasoningMode', 'auto') : undefined,
       history: input.history, action: input.action, platformUrl: input.platformUrl, language: input.language, replyLanguage: input.replyLanguage,
       onDelta: delta => { task.streamed += delta; publish(); },
       onProgress: (...progress) => { task.progress = progress; publish(true); },

@@ -281,9 +281,15 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
     for (const image of images) {
       if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
       try {
-        imageTranslations.push(await translateImage(readingProvider, document, image, { signal: controller.signal, fetchImageBytes: true }));
+        const translated = await translateImage(readingProvider, document, image, { signal: controller.signal, fetchImageBytes: true });
+        if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
+        imageTranslations.push(translated);
+        if (translated.regions?.length || translated.fallbackText || translated.fallbackRegions?.length) {
+          await sendToTab(tabId, { type: 'deep-research:apply-image-translations', documentUrl: boundedContext.url, translations: [translated] });
+        }
       } catch (error) {
         if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
+        if ([401, 403, 404, 429].includes(error?.status)) throw error;
         imageTranslations.push({ ...image, regions: [], confidence: 0, note: error instanceof Error ? error.message : '图片翻译失败' });
       }
       job.processedImageIds = mergeProcessedIds(job.processedImageIds, [image.id]);
@@ -294,8 +300,6 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
       emit('deep-research:translation-progress', { progress: { ...job } });
     }
     if (controller.signal.aborted) throw new DOMException('用户取消了翻译', 'AbortError');
-    const usableImageTranslations = imageTranslations.filter((item) => item.regions?.length || item.fallbackText || item.fallbackRegions?.length);
-    if (usableImageTranslations.length) await sendToTab(tabId, { type: 'deep-research:apply-image-translations', translations: usableImageTranslations });
     const currentFailures = translations.filter((item) => item.error).map((item) => summarizeFailure(item, 'text'));
     currentFailures.push(...imageTranslations.filter((item) => !item.regions?.length && !item.fallbackText && !item.noText && !item.keptOriginal).map((item) => summarizeFailure(item, 'image')));
     const resolvedIds = [

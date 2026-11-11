@@ -138,6 +138,7 @@ let siteRules = {};
 // Local, counter-only usage. Nothing here may carry page text or credentials.
 let usageState = { days: {}, totals: {} };
 let translationModel = '';
+let answerReasoningMode = 'auto';
 let pricing = { inputPerMillion: 0, outputPerMillion: 0 };
 let glossaryEntries = [];
 let currentSiteHost = '';
@@ -1767,6 +1768,7 @@ function renderLibraryTagOptions(tags) {
 
 async function loadUsageSettings() {
   translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
+  answerReasoningMode = await readerStore.getSetting('answerReasoningMode', 'auto');
   const storedPricing = await readerStore.getSetting('pricing', null);
   pricing = {
     inputPerMillion: Math.max(0, Number(storedPricing?.inputPerMillion) || 0),
@@ -1782,6 +1784,7 @@ function renderUsageSettings() {
   if (!$('usage-summary')) return;
   renderUsageSummary();
   if ($('translation-model')) $('translation-model').value = translationModel;
+  if ($('answer-reasoning-mode')) $('answer-reasoning-mode').value = answerReasoningMode;
   if ($('price-input')) $('price-input').value = pricing.inputPerMillion ? String(pricing.inputPerMillion) : '';
   if ($('price-output')) $('price-output').value = pricing.outputPerMillion ? String(pricing.outputPerMillion) : '';
 }
@@ -1793,6 +1796,8 @@ async function saveUsageSettings() {
   translationModel = model;
   pricing = { inputPerMillion: input, outputPerMillion: output };
   await readerStore.setSetting('translationModel', model);
+  answerReasoningMode = $('answer-reasoning-mode')?.value || 'auto';
+  await readerStore.setSetting('answerReasoningMode', answerReasoningMode);
   await readerStore.setSetting('pricing', pricing);
   $('usage-settings-status').textContent = t("用量设置已保存。");
 }
@@ -2006,7 +2011,7 @@ async function askLibrary() {
   status.textContent = t("正在从 {0} 条相关收藏中整理答案…", selection.evidence.length);
   try {
     const messages = buildLibraryAnswerMessages(question, selection.evidence);
-    const payload = await requestChat(provider, messages, { temperature: 0.2, maxTokens: 1_200 });
+    const payload = await requestChat(provider, messages, { temperature: 0.2, maxTokens: 1_200, reasoningMode: answerReasoningMode });
     const result = parseLibraryAnswer(messageText(payload), selection.evidence);
     renderMarkdown(answerHost, result.answer || '');
     show(answerHost, Boolean(result.answer));
@@ -3329,9 +3334,16 @@ async function processDocument(context, runId = activeTranslationRun) {
         const translated = usePlatform
           ? await requestPlatformImageTranslation(context, image, { signal: controller.signal })
           : await translateImage(readingProvider(context.targetLanguage), document, image, { signal: controller.signal, fetchImageBytes: true });
+        if (runId !== activeTranslationRun) return;
+        if (controller.signal.aborted) throw new DOMException(t("翻译已取消"), 'AbortError');
         imageTranslations.push(translated);
+        if (translated.regions?.length || translated.fallbackText || translated.fallbackRegions?.length) {
+          translatedImageIds.add(translated.id);
+          sendToPage({ type: 'deep-research:apply-image-translations', translations: [translated] });
+        }
       } catch (error) {
         if (controller.signal.aborted) throw new DOMException(t("翻译已取消"), 'AbortError');
+        if ([401, 403, 404, 429].includes(error?.status)) throw error;
         imageTranslations.push({ ...image, regions: [], confidence: 0, note: error instanceof Error ? error.message : t("图片翻译失败") });
       }
       imageDone += 1;
@@ -3340,11 +3352,6 @@ async function processDocument(context, runId = activeTranslationRun) {
       persistJobPatch(job, { imageDone, imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size), processedImageIds: job.processedImageIds });
     }
     if (runId !== activeTranslationRun) return;
-    const usableImageTranslations = imageTranslations.filter((item) => item.regions?.length || item.fallbackText || item.fallbackRegions?.length);
-    if (usableImageTranslations.length) {
-      usableImageTranslations.forEach((item) => translatedImageIds.add(item.id));
-      sendToPage({ type: 'deep-research:apply-image-translations', translations: usableImageTranslations });
-    }
     const currentFailures = translations.filter((item) => item.error).map((item) => ({
       id: item.id,
       kind: 'text',

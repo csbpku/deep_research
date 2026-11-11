@@ -906,5 +906,12 @@
   "示例文章仅支持独立模式；平台模式请打开普通网页后阅读。": "The demo article requires standalone mode. In platform mode, open a regular web page to read.",
   "切换独立模式": "Switch to standalone mode",
   "示例文章暂未准备好，请稍后重新打开。": "The demo article is not ready yet. Try opening it again shortly.",
-  "问收藏仅支持独立模式；请在设置中切换并配置模型。": "Ask library requires standalone mode. Switch modes and configure a model in Settings."
+  "问收藏仅支持独立模式；请在设置中切换并配置模型。": "Ask library requires standalone mode. Switch modes and configure a model in Settings.",
+  "回答思考强度（独立模式）": "Answer reasoning effort (standalone mode)",
+  "自动（优先速度）": "Auto (prefer speed)",
+  "低": "Low",
+  "中": "Medium",
+  "高（更慢）": "High (slower)",
+  "服务商默认": "Provider default",
+  "仅对已适配的推理模型生效；其他模型沿用服务商默认。翻译始终优先速度。": "Applies to supported reasoning models; other models keep provider defaults. Translation always prefers speed."
 }

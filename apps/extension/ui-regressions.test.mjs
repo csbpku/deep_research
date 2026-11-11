@@ -401,6 +401,19 @@ test('pause during image request retains pending image without false failure', a
   assert.equal(sandbox.translationRunning, false);
 });
 
+test('a late successful image response after pause is not applied and the job is cancelled', async () => {
+  const { sandbox, job } = translationSandbox({ url: 'https://a.test', blocks: [], images: [{ id: 'image-0' }] }, async (controller) => {
+    controller.abort();
+    return { id: 'image-0', regions: [], fallbackText: 'Late translation' };
+  });
+  const sent = [];
+  sandbox.sendToPage = message => sent.push(message);
+  await vm.runInContext('processDocument(context, 1)', sandbox);
+  assert.equal(job.status, 'cancelled');
+  assert.equal(job.imageDone, 0);
+  assert.equal(sent.filter(message => message.type === 'deep-research:apply-image-translations').length, 0);
+});
+
 test('selection completion describes actual translation scope', async () => {
   const { sandbox, notices } = translationSandbox({ url: 'https://a.test', scope: 'selection', blocks: [], images: [] }, () => {});
   await vm.runInContext('processDocument(context, 1)', sandbox);

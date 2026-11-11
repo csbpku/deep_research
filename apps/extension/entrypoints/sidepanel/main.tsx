@@ -331,6 +331,8 @@ function ReaderPanel() {
             <Typography component="h3" variant="h3">{t("用量")}</Typography>
           </div>
           <p id="usage-summary" className="small" role="status" aria-live="polite">{t("本月还没有调用模型。")}</p>
+          <div className="field"><label htmlFor="answer-reasoning-mode">{t("回答思考强度（独立模式）")}</label><ReaderSelect id="answer-reasoning-mode" defaultValue="auto"><option value="auto">{t("自动（优先速度）")}</option><option value="low">{t("低")}</option><option value="medium">{t("中")}</option><option value="high">{t("高（更慢）")}</option><option value="provider">{t("服务商默认")}</option></ReaderSelect></div>
+          <p className="small">{t("仅对已适配的推理模型生效；其他模型沿用服务商默认。翻译始终优先速度。")}</p>
           <div className="field"><label htmlFor="translation-model">{t("翻译模型（可选）")}</label><ReaderTextField id="translation-model" placeholder={t("留空则与聊天使用同一个模型")} autoComplete="off" /></div>
           <div className="field"><label htmlFor="price-input">{t("输入单价（每百万 token）")}</label><ReaderTextField id="price-input" type="number" slotProps={{ htmlInput: { min: 0, step: '0.01' } }} autoComplete="off" placeholder="0" /></div>
           <div className="field"><label htmlFor="price-output">{t("输出单价（每百万 token）")}</label><ReaderTextField id="price-output" type="number" slotProps={{ htmlInput: { min: 0, step: '0.01' } }} autoComplete="off" placeholder="0" /></div>
