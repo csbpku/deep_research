@@ -19,12 +19,21 @@ export function reasoningCapability(model) {
   return null;
 }
 
-export function modelRequestPolicy(provider, options = {}) {
-  const capability = reasoningCapability(options.model || provider?.model);
+export function providerReasoningCapability(provider, model = provider?.model) {
+  const capability = reasoningCapability(model);
   // Anthropic effort is verified for MiniMax and DeepSeek here. Native Claude and
   // other Messages providers retain their existing request shape.
   const anthropic = ['anthropic', 'custom-anthropic'].includes(provider?.providerKind);
-  if (!capability || (anthropic && !['minimax', 'deepseek'].includes(capability.family))) return { ...options };
+  return !capability || (anthropic && !['minimax', 'deepseek'].includes(capability.family)) ? null : capability;
+}
+
+export function normalizeReasoningMode(value) {
+  return ['auto', 'low', 'medium', 'high', 'provider'].includes(value) ? value : 'auto';
+}
+
+export function modelRequestPolicy(provider, options = {}) {
+  const capability = providerReasoningCapability(provider, options.model || provider?.model);
+  if (!capability) return { ...options };
   const mode = (['translation', 'image-translation'].includes(options.purpose) || options.action === 'translate') ? 'auto' : options.reasoningMode || 'auto';
   const requested = options.reasoningEffort || (mode === 'auto' ? capability.fast : mode);
   return {

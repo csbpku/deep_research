@@ -27,6 +27,7 @@ const server = createServer(async (request, response) => {
   response.setHeader('access-control-allow-origin', '*');
   response.setHeader('access-control-allow-headers', 'authorization,content-type');
   if (request.method === 'OPTIONS') { response.writeHead(204); response.end(); return; }
+  if (request.method === 'GET' && request.url === '/v1/models') { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ data: [{ id: 'grok-4.7' }, { id: 'generic-model' }] })); return; }
   if (request.method === 'GET') { response.setHeader('content-type', 'text/html'); response.end(html); return; }
   let raw = '';
   for await (const chunk of request) raw += chunk;
@@ -42,7 +43,7 @@ const server = createServer(async (request, response) => {
   if (second) { markSecondRequested(); await pendingImage; }
   const answer = JSON.stringify(image
     ? { hasReadableText: true, regions: [], confidence: 0.5, fallbackTranslation: second ? '第二张图的译文' : '第一张图的译文' }
-    : { answer: '有界队列保留交互容量。', evidence: [{ quote: 'Bounded queues preserve capacity for interactive work.', claim: '原文说明容量的作用。' }], limitations: [] });
+    : { answer: '## 交互优先\n\n有界队列为交互保留容量，长任务不占满所有位置。\n\n- 为问答保留一个位置。\n- 后台翻译按批次处理。', evidence: [{ quote: 'Bounded queues preserve capacity for interactive work.', claim: '原文说明容量的作用。' }], limitations: [] });
   response.setHeader('content-type', body.stream ? 'text/event-stream' : 'application/json');
   response.end(body.stream
     ? `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}\n\ndata: [DONE]\n\n`
@@ -79,16 +80,23 @@ try {
   await page.bringToFront();
   await panel.reload();
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
-  await panel.locator('#settings-button').click();
-  await panel.locator('#answer-reasoning-mode').selectOption('high');
-  await panel.locator('#save-usage-settings').click();
-  await panel.locator('#usage-settings-status').filter({ hasText: /已保存|saved/u }).waitFor();
+  await panel.locator('#composer-model').waitFor({ state: 'visible' });
+  await panel.locator('#composer-model').click();
+  await panel.locator('#composer-reasoning-mode').selectOption('high');
+  await panel.waitForFunction(async () => {
+    const db = await new Promise(resolve => { const open = indexedDB.open('deep-research-reader', 4); open.onsuccess = () => resolve(open.result); });
+    const mode = await new Promise(resolve => { const read = db.transaction('settings').objectStore('settings').get('answerReasoningMode'); read.onsuccess = () => resolve(read.result?.value); });
+    db.close(); return mode === 'high';
+  });
   const savedEffort = await panel.evaluate(async () => {
     const db = await new Promise(resolve => { const open = indexedDB.open('deep-research-reader', 4); open.onsuccess = () => resolve(open.result); });
     const result = await new Promise(resolve => { const read = db.transaction('settings').objectStore('settings').get('answerReasoningMode'); read.onsuccess = () => resolve(read.result?.value); });
     db.close(); return result;
   });
-  assert.equal(savedEffort, 'high', `saved effort differs from UI ${await panel.locator('#answer-reasoning-mode').inputValue()}`);
+  assert.equal(savedEffort, 'high', `saved effort differs from UI ${await panel.locator('#composer-reasoning-mode').inputValue()}`);
+  assert.match(await panel.locator('#composer-reasoning-label').innerText(), /高|High/u);
+  await panel.keyboard.press('Escape');
+  await panel.locator('#composer-model-menu').waitFor({ state: 'hidden' });
 
 
   await page.bringToFront();
@@ -104,7 +112,7 @@ try {
     canvas.getContext('2d').drawImage(image, 0, 0);
     return { id: image.getAttribute('data-deep-research-image'), src: image.src, dataUrl: canvas.toDataURL('image/png'), width: 320, height: 160, alt: image.alt };
   }));
-  const context = { url: `${origin}/`, title: 'Bounded queues', contentHash: 'model-requests', targetLanguage: 'zh-CN', full: true, blocks: [], images };
+  const context = { url: `${origin}/`, title: 'Bounded queues', targetLanguage: 'zh-CN', full: true, blocks: [], images };
   const start = await panel.evaluate(input => chrome.runtime.sendMessage(input), { type: 'deep-research:translation-start', jobId: 'images', tabId, context });
   assert.equal(start.ok, true);
   const imageSelector = '[data-deep-research-image-fallback], [data-deep-research-image-side-translation]';
@@ -116,19 +124,46 @@ try {
 
   // A user-selected high-effort answer must run while the second background
   // image is still waiting. The translation's policy stays independently low.
-  const input = { id: 'answer', mode: 'standalone', scope: 'page', intent: 'ask', question: 'Why a bounded queue?', userMessage: 'Why a bounded queue?', history: [], maxTokens: 5000,
-    context: { ...context, body: 'Bounded queues preserve capacity for interactive work.' } };
-  assert.equal((await panel.evaluate(input => chrome.runtime.sendMessage({ type: 'deep-research:answer-start', input }), input)).ok, true);
-  await panel.waitForFunction(async () => (await chrome.runtime.sendMessage({ type: 'deep-research:answer-state', id: 'answer' }))?.status === 'completed');
+  await panel.locator('#question-input').fill('Why a bounded queue?');
+  await panel.locator('#send-question').click();
+  await panel.locator('#conversation-list .assistant .reader-markdown-heading').waitFor();
   assert.equal(requests.at(-1).reasoning_effort, 'high', JSON.stringify(requests.map(body => ({ model: body.model, effort: body.reasoning_effort, stream: body.stream, image: Array.isArray(body.messages.at(-1).content) }))));
   assert.equal(requests.at(-1).stream, true);
+  assert.match(requests.at(-1).messages[0].content, /separate distinct ideas with blank lines/u);
+  assert.equal(await panel.locator('#conversation-list .assistant .reader-markdown-list li').count(), 2);
   assert.equal(await page.locator(imageSelector).count(), 1);
   releaseImage();
   await page.waitForFunction(selector => document.querySelectorAll(selector).length === 2, imageSelector);
   await panel.reload();
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
-  await panel.locator('#settings-button').click();
-  assert.equal(await panel.locator('#answer-reasoning-mode').inputValue(), 'high');
+  await panel.locator('#composer-model').waitFor({ state: 'visible' });
+  await panel.locator('#composer-model').click();
+  assert.equal(await panel.locator('#composer-reasoning-mode').inputValue(), 'high');
+  await panel.locator('#composer-model-options').getByText('generic-model', { exact: true }).click();
+  await panel.locator('#composer-model').click();
+  assert.equal(await panel.locator('#composer-reasoning-mode').isDisabled(), true);
+  assert.match(await panel.locator('#composer-reasoning-label').innerText(), /默认|Default/u);
+  await panel.locator('#composer-model-options').getByText('grok-4.7', { exact: true }).click();
+  await panel.locator('#composer-model').click();
+  assert.equal(await panel.locator('#composer-reasoning-mode').inputValue(), 'high');
+  for (const width of [320, 447, 800]) {
+    await panel.setViewportSize({ width, height: 900 });
+    await panel.screenshot({ path: join(root, `composer-${width}.png`) });
+    const layout = await panel.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth, menu: document.querySelector('#composer-model-menu').getBoundingClientRect().toJSON() }));
+    assert.ok(layout.scroll <= layout.width + 1, JSON.stringify(layout));
+    assert.ok(layout.menu.left >= 0 && layout.menu.right <= layout.width + 1 && layout.menu.top >= 0, JSON.stringify(layout));
+  }
+  await panel.setViewportSize({ width: 447, height: 900 });
+  await panel.evaluate(() => chrome.storage.local.set({ readerColorScheme: 'dark' }));
+  await panel.waitForFunction(() => document.documentElement.dataset.readerScheme === 'dark');
+  await panel.locator('#composer-model-menu').waitFor({ state: 'visible' });
+  assert.equal(await panel.locator('#persistent-composer').isVisible(), true);
+  assert.equal(await panel.locator('#composer-reasoning-mode').inputValue(), 'high');
+  await panel.screenshot({ path: join(root, 'composer-dark-447.png') });
+  await panel.keyboard.press('Escape');
+  await panel.screenshot({ path: join(root, 'answer-dark-447.png') });
+  const typography = await panel.locator('#conversation-list .assistant .reader-markdown-paragraph').first().evaluate(node => ({ size: parseFloat(getComputedStyle(node).fontSize), leading: parseFloat(getComputedStyle(node).lineHeight) }));
+  assert.ok(typography.leading >= typography.size * 1.6, JSON.stringify(typography));
   const result = { passed: true, requests: requests.length, imagesPaintedIncrementally: 2, rejectedImageRetries: 1, savedAnswerEffort: 'high', translationEffort: 'low', isolatedProfile: root };
   await writeFile(join(root, 'result.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));

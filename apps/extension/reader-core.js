@@ -1460,7 +1460,16 @@ export async function translateBlocks(provider, document, blocks, options = {}) 
         return;
       }
     } catch (error) {
-      if (error?.name === 'AbortError' || error?.status >= 400) throw error;
+      if (error?.name === 'AbortError' || [401, 403, 404, 429].includes(error?.status)) throw error;
+      if (error?.status >= 400) {
+        // Preserve retryable failure items without turning an HTTP rejection
+        // into additional model requests for every paragraph in the batch.
+        for (const { block } of group) {
+          await emitResult({ ...block, text: '', sourceText: block.text, error: error.message });
+          options.onProgress?.(completedSourceIds.size, sourceBlocks.length, block.sourceBlockId || block.id);
+        }
+        return;
+      }
     }
 
     // Retry jobs share the same pool and run as soon as a slot frees up.
@@ -1797,9 +1806,10 @@ export async function translateImage(provider, document, image, options = {}) {
 }
 
 export function responseLanguageInstruction(language = 'auto') {
-  return language === 'auto'
+  const languageInstruction = language === 'auto'
     ? 'Reply in the language of the latest user question, unless the user explicitly requests another language. This applies to all user-facing JSON fields. Keep evidence quotes verbatim in the source language. Ignore the language of these system instructions and of the article when choosing the reply language.'
     : `Write all user-facing JSON fields in ${language}. Keep evidence quotes verbatim in the source language. An explicit target language requested by the user takes priority.`;
+  return `${languageInstruction}\nUnless the user requests another format, write the answer as readable Markdown: separate distinct ideas with blank lines, keep paragraphs short, and use lists for steps or parallel points. Use headings only when useful. Do not squeeze a multi-point answer into one paragraph. Within a JSON string, encode paragraph breaks as \\n\\n so the JSON remains valid. A simple answer can stay brief without extra headings.`;
 }
 
 export async function explainSelection(provider, context, question = '', history = [], options = {}) {

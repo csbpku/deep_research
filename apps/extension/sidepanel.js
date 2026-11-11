@@ -11,6 +11,7 @@ import { SITE_RULES_KEY, normalizeSiteRules, setSiteRule, siteRuleFor } from './
 import { glossaryPrompt, parseGlossary, serializeGlossary } from './glossary.js';
 import { detectLocalModels } from './local-models.js';
 import { readerStore } from './reader-store.js';
+import { modelRequestPolicy, normalizeReasoningMode, providerReasoningCapability } from './model-policy.js';
 import { createLibraryDeletion, libraryFacets, libraryItems, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
 import { libraryFileName, libraryMarkdown } from './reader-export.js';
 import { buildLibraryAnswerMessages, parseLibraryAnswer, selectLibraryEvidence } from './library-answer.js';
@@ -189,6 +190,44 @@ function toggleComposerScopeMenu() {
   const options = visibleScopeOptions();
   (options.find(button => button.getAttribute('aria-checked') === 'true') || options[0])?.focus();
 }
+let reasoningSaveQueue = Promise.resolve();
+let reasoningChange = 0;
+function renderComposerReasoning() {
+  const select = $('composer-reasoning-mode');
+  const label = $('composer-reasoning-label');
+  if (!select || !label) return;
+  const capability = readingMode === 'local' && providerReady(provider) ? providerReasoningCapability(provider) : null;
+  const mode = normalizeReasoningMode(answerReasoningMode);
+  const effective = capability ? modelRequestPolicy(provider, { reasoningMode: mode }).reasoningEffort : undefined;
+  const selected = !capability ? 'provider' : ['auto', 'provider'].includes(mode) ? mode : effective;
+  select.disabled = !capability;
+  select.value = selected;
+  for (const option of select.options) {
+    option.disabled = Boolean(capability && !['auto', 'provider'].includes(option.value) && !capability.efforts.includes(option.value));
+  }
+  label.textContent = t({ auto: '自动', provider: '默认', low: '低', medium: '中', high: '高' }[selected] || '自动');
+  show(label, readingMode === 'local' && providerReady(provider));
+  $('composer-reasoning-status').textContent = capability
+    ? t("用于下一次提问；翻译始终优先速度。")
+    : t("当前模型的思考强度由服务商决定。");
+}
+async function chooseComposerReasoningMode(value) {
+  if (readingMode !== 'local' || !providerReasoningCapability(provider)) return;
+  const mode = normalizeReasoningMode(value);
+  const change = ++reasoningChange;
+  answerReasoningMode = mode;
+  renderComposerReasoning();
+  const save = reasoningSaveQueue.catch(() => {}).then(() => readerStore.setSetting('answerReasoningMode', mode));
+  reasoningSaveQueue = save;
+  try { await save; }
+  catch {
+    const stored = normalizeReasoningMode(await readerStore.getSetting('answerReasoningMode', 'auto').catch(() => 'auto'));
+    if (change !== reasoningChange) return;
+    answerReasoningMode = stored;
+    renderComposerReasoning();
+    $('composer-reasoning-status').textContent = t("思考强度保存失败，请重试。");
+  }
+}
 function renderComposerModelOptions() {
   const search = $('composer-model-search').value.trim().toLocaleLowerCase();
   const models = new Map([[provider.model, { id: provider.model, label: provider.model }]]);
@@ -231,6 +270,7 @@ function toggleComposerModelMenu() {
   if (!providerReady(provider)) { showSettings(); return; }
   if (!$('composer-model-menu').classList.contains('hidden')) { closeComposerModelMenu({ restoreFocus: true }); return; }
   $('composer-model-search').value = '';
+  renderComposerReasoning();
   renderComposerModelOptions();
   show($('composer-model-menu'), true); $('composer-model').setAttribute('aria-expanded', 'true');
   $('composer-model-search').focus();
@@ -568,10 +608,11 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   if (model) {
     model.disabled = readingMode === 'platform';
     $('composer-model-label').textContent = readingMode === 'platform' ? t("平台模型") : (provider?.model || t("配置模型"));
-    model.title = readingMode === 'platform' ? t("由平台配置固定模型") : t("独立模式 · {0} · 点击切换模型", provider?.model || '未配置');
+    model.title = readingMode === 'platform' ? t("由平台配置固定模型") : t("独立模式 · {0} · 点击切换模型与思考强度", provider?.model || '未配置');
     if (readingMode === 'platform') { closeComposerModelMenu(); model.removeAttribute('aria-haspopup'); }
     else model.setAttribute('aria-haspopup', 'dialog');
   }
+  renderComposerReasoning();
   const send = $('send-question');
   if (send) {
     send.dataset.contextReady = String(canSend);
@@ -1768,7 +1809,7 @@ function renderLibraryTagOptions(tags) {
 
 async function loadUsageSettings() {
   translationModel = String(await readerStore.getSetting('translationModel', '')).trim();
-  answerReasoningMode = await readerStore.getSetting('answerReasoningMode', 'auto');
+  answerReasoningMode = normalizeReasoningMode(await readerStore.getSetting('answerReasoningMode', 'auto'));
   const storedPricing = await readerStore.getSetting('pricing', null);
   pricing = {
     inputPerMillion: Math.max(0, Number(storedPricing?.inputPerMillion) || 0),
@@ -1784,21 +1825,17 @@ function renderUsageSettings() {
   if (!$('usage-summary')) return;
   renderUsageSummary();
   if ($('translation-model')) $('translation-model').value = translationModel;
-  if ($('answer-reasoning-mode')) $('answer-reasoning-mode').value = answerReasoningMode;
   if ($('price-input')) $('price-input').value = pricing.inputPerMillion ? String(pricing.inputPerMillion) : '';
   if ($('price-output')) $('price-output').value = pricing.outputPerMillion ? String(pricing.outputPerMillion) : '';
 }
 
 async function saveUsageSettings() {
   const model = String($('translation-model')?.value || '').trim();
-  const reasoningMode = $('answer-reasoning-mode')?.value || 'auto';
   const input = Math.max(0, Number($('price-input')?.value) || 0);
   const output = Math.max(0, Number($('price-output')?.value) || 0);
   translationModel = model;
-  answerReasoningMode = reasoningMode;
   pricing = { inputPerMillion: input, outputPerMillion: output };
   await readerStore.setSetting('translationModel', model);
-  await readerStore.setSetting('answerReasoningMode', reasoningMode);
   await readerStore.setSetting('pricing', pricing);
   $('usage-settings-status').textContent = t("用量设置已保存。");
 }
@@ -3689,6 +3726,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     const result = await requestAnswerTask({
       id: `answer-${crypto.randomUUID()}`, context: requestSource, question: requestPrompt,
       history: requestHistory, userMessage, scope, intent: normalizedIntent,
+      reasoningMode: answerReasoningMode,
       webSearch: webSearchEnabled && normalizedIntent === 'ask' && Boolean(question),
       mode: platformModeReady() ? 'platform' : 'standalone',
       platformUrl, language: currentReadingLanguage(), replyLanguage: normalizedIntent === 'translate' ? currentTranslationLanguage() : question ? 'auto' : currentReadingLanguage(), image: preparedImage,
@@ -4456,6 +4494,7 @@ async function init() {
   $('site-rule-mode').addEventListener('change', event => void saveSiteRule(event.target.value));
   $('save-glossary').addEventListener('click', () => void saveGlossary());
   $('save-usage-settings').addEventListener('click', () => void saveUsageSettings());
+  $('composer-reasoning-mode').addEventListener('change', event => void chooseComposerReasoningMode(event.target.value));
   $('type-scale').addEventListener('change', async event => {
     // The theme provider subscribes to this key and applies the CSS variables.
     await chrome.storage.local.set({ readerTypeScale: ['compact', 'large'].includes(event.target.value) ? event.target.value : 'comfortable' });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { modelRequestPolicy } from './model-policy.js';
-import { requestChat, requestChatStream, translateBlocks, translateImage } from './reader-core.js';
+import { explainSelection, requestChat, requestChatStream, translateBlocks, translateImage } from './reader-core.js';
 import { readerStore } from './reader-store.js';
 
 const originalFetch = globalThis.fetch;
@@ -100,4 +100,16 @@ test('batch, single-block fallback and high-detail image translation all use the
   assert.ok(requests.every(body => body.reasoning_effort === 'low'));
   assert.equal(requests.at(-1).messages.at(-1).content[1].image_url.detail, 'high');
   assert.equal(requests.at(-1).max_tokens, 12000);
+});
+
+test('reading answers request readable paragraphs and preserve the model line breaks', async () => {
+  const answer = '## Result\n\nFirst short paragraph.\n\n- One point\n- Another point';
+  globalThis.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    assert.match(request.messages[0].content, /separate distinct ideas with blank lines/u);
+    assert.match(request.messages[0].content, /\\n\\n/u);
+    return completion(JSON.stringify({ answer, evidence: [], limitations: [] }));
+  };
+  const result = await explainSelection(provider('grok-4.7'), { url: 'https://example.test/', body: 'A bounded queue preserves capacity.' }, 'Explain the queue.');
+  assert.equal(result.answer, answer);
 });

@@ -81,6 +81,16 @@ test('persistent 429 stops a translation after bounded retries without paragraph
   assert.equal(count, 3);
 });
 
+test('a rejected batch retains retryable items without sending per-paragraph fallback calls', async () => {
+  await readerStore.clearAll();
+  let count = 0;
+  globalThis.fetch = async () => { count += 1; return Response.json({ error: { message: 'translation temporarily rejected' } }, { status: 400 }); };
+  const results = await translateBlocks(provider('rejected-batch'), {}, [{ id: 'a', text: 'First source' }, { id: 'b', text: 'Second source' }]);
+  assert.equal(count, 1);
+  assert.equal(results.length, 2);
+  assert.ok(results.every(item => item.error === 'translation temporarily rejected' && !item.text));
+});
+
 test('cancellation during Retry-After never resends, and long quota waits fail without immediate retry', async () => {
   const controller = new AbortController();
   let count = 0;

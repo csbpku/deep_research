@@ -913,5 +913,14 @@
   "中": "Medium",
   "高（更慢）": "High (slower)",
   "服务商默认": "Provider default",
-  "仅对已适配的推理模型生效；其他模型沿用服务商默认。翻译始终优先速度。": "Applies to supported reasoning models; other models keep provider defaults. Translation always prefers speed."
+  "仅对已适配的推理模型生效；其他模型沿用服务商默认。翻译始终优先速度。": "Applies to supported reasoning models; other models keep provider defaults. Translation always prefers speed.",
+  "自动": "Auto",
+  "默认": "Default",
+  "高": "High",
+  "模型与思考强度": "Model and reasoning effort",
+  "思考强度": "Reasoning effort",
+  "用于下一次提问；翻译始终优先速度。": "Applies to the next question. Translation always prefers speed.",
+  "当前模型的思考强度由服务商决定。": "Reasoning effort for this model is managed by the provider.",
+  "思考强度保存失败，请重试。": "Could not save reasoning effort. Please retry.",
+  "独立模式 · {0} · 点击切换模型与思考强度": "Standalone · {0} · Change model and reasoning effort"
 }
