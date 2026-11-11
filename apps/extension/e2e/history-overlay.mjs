@@ -45,6 +45,10 @@ try {
   assert.equal(panel.url(), before, '打开历史不应改变面板地址或重新加载');
   const source = await panel.locator('#history-frame').getAttribute('src');
   assert.match(source, /reading-history\.html\?surface=sidepanel&embedded=1/, '历史以内嵌模式加载');
+  const backgroundInert = await panel.evaluate(() => [...document.querySelector('.shell').children]
+    .filter(node => node.id !== 'history-overlay')
+    .every(node => node.inert));
+  assert.equal(backgroundInert, true, '浮层打开时背景控件不可聚焦');
 
   const frame = panel.frameLocator('#history-frame');
   await frame.locator('#history-search-input').waitFor({ state: 'visible', timeout: 10_000 });
@@ -59,6 +63,10 @@ try {
   await panel.locator('#history-overlay').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#close-history-overlay').click();
   await panel.locator('#history-overlay').waitFor({ state: 'hidden', timeout: 10_000 });
+  const backgroundRestored = await panel.evaluate(() => [...document.querySelector('.shell').children]
+    .filter(node => node.id !== 'history-overlay')
+    .every(node => !node.inert));
+  assert.equal(backgroundRestored, true, '关闭浮层后背景控件恢复可聚焦');
 
   // A separate tab remains available for readers who want history beside the
   // article instead of on top of the chat.

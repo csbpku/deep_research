@@ -148,6 +148,17 @@ test('worker records translation usage only after the job completes', async () =
   assert.ok(usage.totals.translation.tokens > 0);
 });
 
+test('worker records usage for an image-only translation', async () => {
+  const image = { id: 'img-1', src: 'https://example.test/diagram.png', dataUrl: 'data:image/png;base64,AAAA', width: 320, height: 160, alt: 'diagram' };
+  const worker = createBackgroundHarness({
+    translateImage: async (_provider, _document, item) => ({ ...item, regions: [], fallbackText: '图示', confidence: 1 }),
+  });
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'usage-image', tabId: 1, context: { ...context('v-image'), blocks: [], images: [image] } });
+  await waitFor(async () => (await readerStore.getJob('usage-image'))?.status === 'completed', 3000);
+  const usage = await waitFor(() => worker.chrome.storage.local.values.readerUsage, 3000);
+  assert.equal(usage.totals.translation.requests, 1);
+});
+
 test('worker does not record usage for a cancelled translation', async () => {
   globalThis.fetch = async (_url, options) => {
     return new Promise((_resolve, reject) => {

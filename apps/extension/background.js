@@ -327,10 +327,13 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false, g
     // hand-off made a cancelled translation look like a completed one.
     try {
       const usage = estimateTranslation({ blocks, body: boundedContext.body });
-      if (usage.requests) {
+      // An image-only page has no text batches, so `usage.requests` is 0 even
+      // though every image was a billable model call. Count images first.
+      const requests = usage.requests + images.length;
+      if (requests) {
         await recordReaderUsage({
           kind: 'translation',
-          requests: usage.requests + images.length,
+          requests,
           chars: usage.chars,
           tokens: usage.tokens,
         });

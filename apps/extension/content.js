@@ -1320,8 +1320,8 @@
       shadow.innerHTML = `
         <style>
           :host{all:initial}
-          .status{position:relative;box-sizing:border-box;max-width:min(310px,calc(100vw - 96px));padding:var(--reader-space-2) 10px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-small);background:var(--reader-color-text);color:var(--reader-color-inverse-text);box-shadow:var(--reader-elevation-2);font:700 var(--reader-type-caption)/1.4 var(--reader-font-family);opacity:0;transform:translateX(5px);transition:opacity var(--reader-motion-standard),transform var(--reader-motion-standard);pointer-events:none}
-          .status.visible{opacity:1;transform:translateX(0)}
+          .status{position:relative;box-sizing:border-box;max-width:min(310px,calc(100vw - 96px));padding:var(--reader-space-2) 10px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-small);background:var(--reader-color-text);color:var(--reader-color-inverse-text);box-shadow:var(--reader-elevation-2);font:700 var(--reader-type-caption)/1.4 var(--reader-font-family);opacity:0;visibility:hidden;transform:translateX(5px);transition:opacity var(--reader-motion-standard),transform var(--reader-motion-standard);pointer-events:none}
+          .status.visible{opacity:1;visibility:visible;transform:translateX(0)}
           .status.ready{background:var(--reader-color-success);border-color:var(--reader-color-success-container)}
           .status.error{background:var(--reader-color-danger);border-color:var(--reader-color-danger-container)}
           .status.partial{background:var(--reader-color-surface-container);border-color:var(--reader-color-primary);color:var(--reader-color-text)}

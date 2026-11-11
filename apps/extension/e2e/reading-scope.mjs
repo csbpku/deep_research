@@ -161,12 +161,18 @@ try {
     await expect(dismiss).toBeVisible();
     await dismiss.click();
     await expect(strip).not.toHaveClass(/visible/);
+    // Hidden must also mean removed from the tab order and the accessibility
+    // tree, not merely transparent.
+    await expect.poll(() => strip.evaluate(element => getComputedStyle(element).visibility)).toBe('hidden');
+    await expect(dismiss).toBeHidden();
     // A repeat of the same page-context update must not resurrect a notice the
     // reader just dismissed.
     await send(tabId, partialNotice);
     await expect(strip).not.toHaveClass(/visible/);
+    await expect.poll(() => strip.evaluate(element => getComputedStyle(element).visibility)).toBe('hidden');
     await send(tabId, { type: 'deep-research:reader-status', state: 'loading', label: 'Reading article…', detail: '' });
     await expect(strip).toHaveClass(/visible/);
+    await expect.poll(() => strip.evaluate(element => getComputedStyle(element).visibility)).toBe('visible');
     await expect(dismiss).toBeHidden();
     summary.partialStatusDismissible = true;
     await article.close();

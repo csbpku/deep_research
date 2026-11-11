@@ -148,6 +148,26 @@ const libraryDeletion = createLibraryDeletion(readerStore);
 let libraryRenderRequest = 0;
 let libraryMutationBusy = false;
 let historyOverlayReturnFocus = null;
+let historyInertNodes = [];
+
+// `aria-modal` is only a promise unless the background is actually removed
+// from the tab order. Keep the panel controls inert while the history overlay
+// is open so Tab cannot land on a control hidden behind the dialog.
+function isolateHistoryOverlay(isolated) {
+  const overlay = $('history-overlay');
+  const shell = document.querySelector('.shell');
+  if (!shell) return;
+  if (isolated) {
+    // Re-opening while already open must not replace the saved list with an
+    // empty one; otherwise the previous inert nodes would never be restored.
+    if (historyInertNodes.length) return;
+    historyInertNodes = [...shell.children].filter(node => node !== overlay && !node.inert);
+    historyInertNodes.forEach(node => { node.inert = true; });
+    return;
+  }
+  historyInertNodes.forEach(node => { node.inert = false; });
+  historyInertNodes = [];
+}
 let editingInsight = null;
 let pendingInsightSource = null;
 let saveDialogGeneration = 0;
@@ -4008,6 +4028,7 @@ function closeHistoryOverlay({ restoreFocus = true } = {}) {
   const overlay = $('history-overlay');
   if (!overlay || overlay.classList.contains('hidden')) return;
   show(overlay, false);
+  isolateHistoryOverlay(false);
   document.querySelector('.shell')?.removeAttribute('data-history-open');
   const returnFocus = historyOverlayReturnFocus;
   historyOverlayReturnFocus = null;
@@ -4033,6 +4054,7 @@ async function openHistoryPage() {
       frame.dataset.loaded = 'true';
     }
     show(overlay, true);
+    isolateHistoryOverlay(true);
     document.querySelector('.shell')?.setAttribute('data-history-open', 'true');
     $('close-history-overlay')?.focus();
   } catch {
