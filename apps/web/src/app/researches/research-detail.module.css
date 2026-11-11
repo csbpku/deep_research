@@ -70,14 +70,26 @@
 .evidenceDate { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
 .discussionHint { margin: 0; color: var(--dr-color-text-muted); font-size: var(--dr-type-caption); line-height: var(--dr-line-height-body); }
 
-.audit {
+/* 顶部发布披露：只保留一条可见警示，完整清单收进页尾折叠区 */
+.disclosureBanner { margin-bottom: var(--dr-space-5); }
+.disclosureJump { margin: var(--dr-space-2) 0 0; color: var(--dr-color-text-muted); font-size: var(--dr-type-caption); line-height: var(--dr-line-height-body); }
+.disclosureLink { color: var(--dr-color-primary); text-decoration: none; }
+.disclosureLink:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* 页尾唯一折叠区：披露明细 / 元数据 / 修改历史 */
+.reviewAudit {
   margin-top: var(--dr-space-5);
   padding: var(--dr-space-3);
   border: 1px solid var(--dr-color-outline);
   border-radius: var(--dr-radius-medium);
   background: var(--dr-color-surface);
 }
-.auditSummary { color: var(--dr-color-text-secondary); cursor: pointer; font-size: var(--dr-type-body); font-weight: var(--dr-weight-medium); }
+.reviewAuditSummary { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--dr-space-2); cursor: pointer; color: var(--dr-color-text-secondary); }
+.reviewAuditTitle { font-size: var(--dr-type-body); font-weight: var(--dr-weight-medium); }
+.reviewAuditHint { color: var(--dr-color-text-muted); font-size: var(--dr-type-caption); }
+.reviewAuditBody { display: grid; gap: var(--dr-space-4); margin-top: var(--dr-space-3); }
+.reviewAuditBlock { display: grid; gap: var(--dr-space-2); }
+.reviewAuditHeading { margin: 0; color: var(--dr-color-text); font-size: var(--dr-type-body); font-weight: var(--dr-weight-medium); }
 .auditEntries { margin-top: var(--dr-space-2); }
 .auditEntry { padding-block: var(--dr-space-2); border-bottom: 1px solid var(--dr-color-outline); color: var(--dr-color-text-muted); font-size: var(--dr-type-caption); line-height: var(--dr-line-height-body); }
 .auditEntry:last-child { border-bottom: 0; }
@@ -93,5 +105,6 @@
 
 @media (min-width: 1024px) {
   .columns { grid-template-columns: minmax(0, var(--dr-width-reading)) minmax(200px, 240px); }
+  .columns[data-has-aside="false"] { grid-template-columns: minmax(0, 1fr); }
   .aside { position: sticky; top: calc(var(--shell-topbar) + var(--dr-space-2)); }
 }
