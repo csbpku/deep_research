@@ -29,7 +29,7 @@ import {
   RADAR_RESEARCH_SOURCE_TYPES,
 } from '../../../lib/radar/source-labels';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { SUMMARY_STATUS } from '@deep-research/shared/states';
+import { RADAR_JUDGMENT_FEEDBACK_TYPES, SUMMARY_STATUS } from '@deep-research/shared/states';
 import { RADAR_PUBLIC_SCORE_SQL } from '../../../lib/radar/score-validity';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
@@ -56,6 +56,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     per_page: url.searchParams.get('per_page') ?? undefined,
     includeTotal: url.searchParams.get('includeTotal') ?? undefined,
     includeFeedback: url.searchParams.get('includeFeedback') ?? undefined,
+    judged: url.searchParams.get('judged') ?? undefined,
   });
   if (!parsed.success) {
     return toApiErrorResponse({
@@ -76,6 +77,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     per_page: perPage,
     includeTotal,
     includeFeedback,
+    judged,
   } = parsed.data;
   const requestedQualityValues = Array.isArray(quality) ? quality : [quality];
   // Noise is an admin/audit state, never a member-facing radar state.
@@ -231,8 +233,23 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       // The reader page keeps the same quality contract for every role.
       // Admins see incomplete/pending rows only when the governance surface
       // requests an explicit status filter.
-      ...(u?.role !== 'admin' || !status
+      ...(u?.role !== 'admin' || !status || judged
         ? [publicQualityGate]
+        : []),
+      // P0-4 “我判断过的”：仍在同一公共可见性 gate 内，只额外要求当前
+      // 用户对该条打过 read/later/pilot/inaccurate 之一。未登录时没有
+      // 可归属的判断记录，显式返回空集而不是退化成全量列表。
+      ...(judged
+        ? [u?.id
+          ? {
+              feedbacks: {
+                some: {
+                  userId: u.id,
+                  feedbackType: { in: [...RADAR_JUDGMENT_FEEDBACK_TYPES] },
+                },
+              },
+            }
+          : { id: { in: [] } }]
         : []),
       // Recent repository activity is rendered inside the project reader.
       // Keep legacy daily digest rows out of the main stream so one repo has
@@ -262,6 +279,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     ],
   };
 
+  // TODO(P0-4): 判断落点只用于筛选，不参与排序权重。基于已读/稍后/试点/
+  // 不感兴趣的排序再平衡是独立改动，需要先定义信号强度与评估口径。
   const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
     { distilledTotal: { sort: 'desc', nulls: 'last' } },
     { createdAt: 'desc' },
@@ -407,7 +426,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     : new Map<string, { counts: Record<string,number>; mine: string[] }>();
 
   const emptyFeedback = (): { counts: Record<string,number>; mine: string[] } =>
-    ({ counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 }, mine: [] } as const);
+    ({
+      counts: {
+        useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+        read: 0, later: 0, pilot: 0,
+      },
+      mine: [],
+    } as const);
 
   return NextResponse.json({
     page,

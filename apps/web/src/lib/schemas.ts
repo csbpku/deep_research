@@ -169,6 +169,8 @@ export const RadarListQuery = z.object({
   /** 首页等只展示少量卡片的调用可以跳过全量统计和反馈聚合。 */
   includeTotal: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   includeFeedback: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  /** “我判断过的”：只返回当前用户标记过 read/later/pilot/inaccurate 的条目。 */
+  judged: z.enum(['1', 'true', 'false']).default('false').transform((v) => v === '1' || v === 'true'),
 });
 export type RadarListQuery = z.infer<typeof RadarListQuery>;
 
@@ -193,6 +195,9 @@ export const CreateRadarFeedbackInput = z.object({
     RADAR_FEEDBACK_TYPE.USED,
     RADAR_FEEDBACK_TYPE.FAVORITE,
     RADAR_FEEDBACK_TYPE.SUGGEST_RESEARCH,
+    RADAR_FEEDBACK_TYPE.READ,
+    RADAR_FEEDBACK_TYPE.LATER,
+    RADAR_FEEDBACK_TYPE.PILOT,
   ]),
 });
 export type CreateRadarFeedbackInput = z.infer<typeof CreateRadarFeedbackInput>;
@@ -206,6 +211,9 @@ export const DeleteRadarFeedbackQuery = z.object({
     RADAR_FEEDBACK_TYPE.USED,
     RADAR_FEEDBACK_TYPE.FAVORITE,
     RADAR_FEEDBACK_TYPE.SUGGEST_RESEARCH,
+    RADAR_FEEDBACK_TYPE.READ,
+    RADAR_FEEDBACK_TYPE.LATER,
+    RADAR_FEEDBACK_TYPE.PILOT,
   ]),
 });
 export type DeleteRadarFeedbackQuery = z.infer<typeof DeleteRadarFeedbackQuery>;

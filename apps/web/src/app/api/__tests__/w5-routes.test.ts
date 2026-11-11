@@ -408,6 +408,47 @@ describe('GET /api/radar', () => {
     }));
   });
 
+  it('filters the judged view to the current user and the public visibility gate', async () => {
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+
+    await radarList(new Request('http://localhost/api/radar?judged=1') as never);
+
+    const where = mocks.summaryFindMany.mock.calls[0][0].where;
+    expect(where.AND).toEqual(expect.arrayContaining([
+      {
+        feedbacks: {
+          some: {
+            userId: MEMBER.id,
+            feedbackType: { in: ['read', 'later', 'pilot', 'inaccurate'] },
+          },
+        },
+      },
+      expect.objectContaining({
+        OR: expect.arrayContaining([
+          { distilledTier: { in: ['collection', 'deep_read'] } },
+        ]),
+      }),
+    ]));
+  });
+
+  it('returns an empty judged view for anonymous visitors instead of the full stream', async () => {
+    mocks.getCurrentUser.mockResolvedValueOnce(null);
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+
+    const response = await radarList(
+      new Request('http://localhost/api/radar?judged=1') as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([{ id: { in: [] } }]),
+      }),
+    }));
+  });
+
   it('returns 400 on invalid query params', async () => {
     const r = await radarList(
       new Request('http://localhost/api/radar?per_page=999') as never,
@@ -994,6 +1035,28 @@ describe('POST /api/radar-feedback', () => {
     expect(body.created).toBe(false);
   });
 
+  it.each(['read', 'later', 'pilot'] as const)(
+    'accepts the judgment feedback type %s',
+    async (feedbackType) => {
+      mocks.summaryFindUnique.mockResolvedValue({
+        id: SUM_ID, source: 'daily', syncRunId: 'r',
+      });
+      mocks.radarFeedbackGroupBy.mockResolvedValue([]);
+      const req = new Request('http://localhost/api/radar-feedback', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ summaryId: SUM_ID, feedbackType }),
+      });
+
+      const response = await feedbackPost(req as never);
+
+      expect(response.status).toBe(200);
+      expect(mocks.radarFeedbackCreate).toHaveBeenCalledWith({
+        data: { summaryId: SUM_ID, userId: MEMBER.id, feedbackType },
+        select: { id: true },
+      });
+    },
+  );
+
   it('mirrors favorite feedback into user bookmarks atomically', async () => {
     mocks.summaryFindUnique.mockResolvedValue({ id: SUM_ID, source: 'daily', syncRunId: 'r' });
     mocks.radarFeedbackGroupBy.mockResolvedValue([
@@ -1037,6 +1100,20 @@ describe('DELETE /api/radar-feedback', () => {
     const body = await r.json();
     expect(r.status).toBe(200);
     expect(body.removed).toBe(1);
+  });
+
+  it('accepts a judgment feedback type in the query', async () => {
+    mocks.radarFeedbackGroupBy.mockResolvedValue([]);
+    const response = await feedbackDelete(
+      new Request(
+        `http://localhost/api/radar-feedback?summaryId=${SUM_ID}&feedbackType=pilot`,
+      ) as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.radarFeedbackDeleteMany).toHaveBeenCalledWith({
+      where: { summaryId: SUM_ID, userId: MEMBER.id, feedbackType: 'pilot' },
+    });
   });
 
   it('removes favorite feedback and bookmark in one transaction', async () => {

@@ -117,6 +117,9 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     used: 0,
     favorite: 0,
     suggest_research: 0,
+    read: 0,
+    later: 0,
+    pilot: 0,
   };
   for (const row of counts) {
     const ft = row.feedbackType as keyof typeof feedbackCounts;
@@ -208,6 +211,9 @@ export const DELETE = apiHandler<[NextRequest]>(async (req) => {
     used: 0,
     favorite: 0,
     suggest_research: 0,
+    read: 0,
+    later: 0,
+    pilot: 0,
   };
   for (const row of counts) {
     const ft = row.feedbackType as keyof typeof feedbackCounts;
