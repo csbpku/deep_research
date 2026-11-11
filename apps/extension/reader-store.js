@@ -1,3 +1,5 @@
+import { editTags } from './reader-library.js';
+
 const DB_NAME = 'deep-research-reader';
 const DB_VERSION = 4;
 const STORE_NAMES = ['sessions', 'insights', 'annotations', 'settings', 'cache', 'jobs', 'taskInputs'];
@@ -286,6 +288,12 @@ export const readerStore = {
     const matches = (await all('sessions')).filter((session) => pageKey(session.url) === normalized);
     return matches.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt) || '') || String(b.id).localeCompare(String(a.id)))[0] || null;
   },
+  async getHistorySession({ id, url, version = null }) {
+    // Imported/legacy sessions may have explicit IDs instead of sessionKey.
+    const exact = typeof id === 'string' ? await get('sessions', id) : null;
+    if (exact && pageKey(exact.url) === pageKey(url) && (exact.version || null) === (version || null)) return exact;
+    return readerStore.getSession(url, version);
+  },
   async getReadingSession(url, version = null) {
     const matches = (await all('sessions'))
       .filter(session => pageKey(session.url) === pageKey(url))
@@ -417,6 +425,31 @@ export const readerStore = {
       });
       return record;
     } finally { database.close(); }
+  },
+  /**
+   * Tag maintenance is a metadata edit, not a re-save: `updatedAt` stays put so
+   * the library keeps its original reading order after a rename. Returns the
+   * number of records whose tags actually changed.
+   */
+  async updateInsightTags({ renameFrom = '', renameTo = '', remove = '' } = {}) {
+    return withStore('insights', 'readwrite', async objectStore => {
+      // Keep the read and every tag patch in one transaction. A queued edit
+      // or delete must never be overwritten by an earlier whole-store snapshot.
+      const records = objectStore ? await requestToPromise(objectStore.getAll()) : fallbackAll('insights');
+      let changed = 0;
+      for (const snapshot of records) {
+        const record = objectStore ? snapshot : fallbackGet('insights', snapshot.id);
+        if (!record) continue;
+        const current = Array.isArray(record.tags) ? record.tags : [];
+        const next = editTags(current, { renameFrom, renameTo, remove });
+        if (next.length === current.length && next.every((tag, index) => tag === current[index])) continue;
+        const updated = { ...record, tags: next };
+        if (objectStore) await requestToPromise(objectStore.put(updated));
+        else fallbackSet('insights', updated);
+        changed += 1;
+      }
+      return changed;
+    });
   },
   async linkInsightToPlatform(id, researchId, origin) {
     const normalizedId = normalizeRadarSummaryId(researchId);

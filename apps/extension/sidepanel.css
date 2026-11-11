@@ -301,3 +301,28 @@ h1, h2, h3, p { margin:0 }
 .source-scope-details { margin-bottom:var(--reader-space-2) }
 
 @media (max-height: 560px) { .image-preview-meta { display:none } }
+
+/* History is a same-origin overlay so opening it no longer tears down the
+   panel: drafts, in-flight answers and scroll position survive. */
+.history-overlay { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--reader-color-surface); }
+.history-overlay.hidden { display: none; }
+.history-overlay-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--reader-space-2); padding: var(--reader-space-2) var(--reader-space-3); border-bottom: 1px solid var(--reader-color-outline); background: var(--reader-color-surface); }
+.history-overlay-bar strong { font-size: var(--reader-type-label); }
+.history-overlay-actions { display: flex; align-items: center; gap: var(--reader-space-1); }
+#history-frame { flex: 1; width: 100%; border: 0; background: var(--reader-color-surface); }
+.shell[data-history-open="true"] { overflow: hidden; }
+
+/* Tag maintenance stays inline in Saved so the result of a rename is visible
+   in the same list the user is cleaning up. */
+.library-tag-tools { margin-top: var(--reader-space-2); }
+.tag-manager { margin-top: var(--reader-space-3); padding: var(--reader-space-3); border: 1px solid var(--reader-color-outline); border-radius: 8px; display: grid; gap: var(--reader-space-2); }
+.tag-manager.hidden { display: none; }
+.tag-manager-head { display: flex; align-items: center; justify-content: space-between; gap: var(--reader-space-2); }
+.tag-manager-list { display: grid; gap: var(--reader-space-2); }
+.tag-manager-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--reader-space-2); }
+.tag-manager-meta { font-size: var(--reader-type-caption); color: var(--reader-color-text-muted); white-space: nowrap; }
+.tag-manager-actions { display: flex; align-items: center; gap: var(--reader-space-1); }
+@media (max-width: 360px) {
+  .tag-manager-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .tag-manager-actions { grid-column: 1 / -1; justify-content: flex-end; }
+}

@@ -1,7 +1,7 @@
 import { space } from "@deep-research/design-system";
 import { t, initializeLocale } from '../../i18n.js';
 import Typography from '@mui/material/Typography';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Box from '@mui/material/Box';
 import Paper from '@mui/material/Paper';
@@ -16,13 +16,89 @@ import { TranslationLanguagePicker } from '../../components/translation-language
 import { ProviderSelector } from '../../components/provider-selector';
 import { ReadingSaveOptions } from '../../components/reading-save-options';
 import { SettingsModelPicker } from '../../components/settings-model-picker';
+import { readerStore } from '../../reader-store.js';
+import { libraryFacets, libraryItems } from '../../reader-library.js';
 
 /**
  * React owns the panel UI. The reading controller remains an imperative
  * boundary because it coordinates content-script messages and the MV3 worker;
  * it binds to this stable DOM contract after React commits the tree.
  */
+type TagRow = { value: string; count: number };
+
+/** Tag management reads the same shelf the library renders, so counts and
+ * naming rules cannot drift between the two lists. Renaming edits insights in
+ * place; it deliberately does not touch `updatedAt`, because a tag cleanup is
+ * not new reading activity. */
+function TagManager({ open, onClose, onChanged }: { open: boolean; onClose: () => void; onChanged: () => void }) {
+  const [rows, setRows] = useState<TagRow[]>([]);
+  const [draft, setDraft] = useState<Map<string, string>>(() => new Map());
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState('');
+  const load = async () => {
+    const insights = await readerStore.listInsights();
+    setRows(libraryFacets(libraryItems(insights, [])).tags);
+    setDraft(new Map());
+    setConfirming('');
+  };
+  useEffect(() => { if (open) void load(); }, [open]);
+  const rename = async (tag: string) => {
+    const next = String(draft.get(tag) ?? tag).trim();
+    if (!next || next === tag) return;
+    setBusy(true);
+    try {
+      const changed = await readerStore.updateInsightTags({ renameFrom: tag, renameTo: next });
+      setStatus(t("已重命名 {0} 条收藏", changed));
+      await load();
+      onChanged();
+    } catch {
+      setStatus(t("标签重命名失败，请重试。"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async (tag: string) => {
+    if (confirming !== tag) {
+      setConfirming(tag);
+      setStatus(t("再次点击“确认删除”只会移除标签，不会删除收藏内容。"));
+      return;
+    }
+    setBusy(true);
+    try {
+      const changed = await readerStore.updateInsightTags({ remove: tag });
+      setStatus(t("已从 {0} 条收藏移除标签", changed));
+      await load();
+      onChanged();
+    } catch {
+      setStatus(t("标签删除失败，请重试。"));
+    } finally {
+      setBusy(false);
+      setConfirming('');
+    }
+  };
+  return <section id="tag-manager" className={`tag-manager${open ? '' : ' hidden'}`} aria-label={t("管理标签")}>
+    <div className="tag-manager-head"><strong>{t("管理标签")}</strong><ReaderButton id="close-tag-manager" type="button" control="icon" variant="text" aria-label={t("关闭")} title={t("关闭")} onClick={onClose}><ComposerIcon kind="close" size={16} /></ReaderButton></div>
+    <p className="small">{t("重命名会更新所有收藏；删除只会移除标签，不会删除收藏内容。")}</p>
+    {rows.length === 0
+      ? <p className="small">{t("还没有标签。保存时填写标签即可在这里统一管理。")}</p>
+      : <div id="tag-manager-list" className="tag-manager-list">{rows.map(row => {
+        const next = draft.get(row.value) ?? row.value;
+        return <div className="tag-manager-row" key={row.value} data-tag={row.value}>
+          <ReaderTextField slotProps={{ htmlInput: { 'aria-label': t("标签名") } }} value={next} onChange={event => setDraft(current => new Map(current).set(row.value, event.target.value))} />
+          <span className="tag-manager-meta">{t("{0} 条", row.count)}</span>
+          <div className="tag-manager-actions">
+            <ReaderButton type="button" variant="text" disabled={busy || !next.trim() || next.trim() === row.value} onClick={() => void rename(row.value)}>{t("保存")}</ReaderButton>
+            <ReaderButton type="button" variant="text" color="error" disabled={busy} onClick={() => void remove(row.value)}>{confirming === row.value ? t("确认删除") : t("删除")}</ReaderButton>
+          </div>
+        </div>;
+      })}</div>}
+    <p className="small" role="status" aria-live="polite">{status}</p>
+  </section>;
+}
+
 function ReaderPanel() {
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
   useEffect(() => {
     void import('../../sidepanel.js');
   }, []);
@@ -53,7 +129,7 @@ function ReaderPanel() {
             <p className="small">{t("已有调研平台账号时，可在设置里改为平台模式，使用平台 AI Engine。")}</p>
           </Paper>
         </div>
-        <div className="actions"><ReaderButton id="empty-settings" variant="contained">{t("配置模型")}</ReaderButton><ReaderButton id="empty-history" variant="outlined">{t("查看聊天记录")}</ReaderButton><ReaderButton id="empty-platform" variant="text">{t("已有调研平台账号？连接平台")}</ReaderButton></div>
+        <div className="actions"><ReaderButton id="empty-settings" variant="contained">{t("配置模型")}</ReaderButton><ReaderButton id="empty-demo" variant="text">{t("先看 60 秒示例")}</ReaderButton><ReaderButton id="empty-history" variant="outlined">{t("查看聊天记录")}</ReaderButton><ReaderButton id="empty-platform" variant="text">{t("已有调研平台账号？连接平台")}</ReaderButton></div>
       </section>
 
       <Paper component="section" variant="outlined" elevation={0} id="guide-card" className="guide-card hidden" sx={{ mx: space.lg, flexShrink: 0 }}>
@@ -110,6 +186,8 @@ function ReaderPanel() {
             <div className="field"><label htmlFor="library-kind">{t("内容类型")}</label><ReaderSelect id="library-kind" defaultValue="all"><option value="all">{t("全部类型")}</option><option value="insight">{t("摘录与结论")}</option><option value="annotation">{t("原文标注")}</option></ReaderSelect></div>
             <div className="field"><label htmlFor="library-tag">{t("标签")}</label><ReaderSelect id="library-tag" defaultValue=""><option value="">{t("全部标签")}</option></ReaderSelect></div>
           </div>
+          <div className="library-tag-tools"><ReaderButton id="manage-tags" type="button" variant="text" aria-expanded={tagManagerOpen} aria-controls="tag-manager" onClick={() => setTagManagerOpen(open => !open)}>{t("管理标签")}</ReaderButton></div>
+          <TagManager open={tagManagerOpen} onClose={() => setTagManagerOpen(false)} onChanged={() => window.dispatchEvent(new Event('reader-library-refresh'))} />
           <ReaderButton id="clear-library-filters" className="hidden" type="button">{t("清除筛选")}</ReaderButton>
           <Alert id="library-notice" className="library-notice hidden" role="status" aria-live="polite" icon={false} action={<ReaderButton id="undo-library-delete" className="hidden" type="button">{t("撤销删除")}</ReaderButton>}><span id="library-notice-text" /></Alert>
           <p id="library-summary" className="small library-summary" role="status" aria-live="polite" />
@@ -368,6 +446,17 @@ function ReaderPanel() {
         <div className="save-action-bar"><ReaderButton id="confirm-save" className="save-action-primary" variant="contained">{t("保存到阅读库")}</ReaderButton><ReaderButton id="cancel-save" className="save-action-secondary" variant="outlined">{t("取消")}</ReaderButton></div>
       </section>
 
+
+      <div id="history-overlay" className="history-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="history-overlay-title">
+        <div className="history-overlay-bar">
+          <strong id="history-overlay-title">{t("阅读历史")}</strong>
+          <div className="history-overlay-actions">
+            <ReaderButton id="history-open-tab" type="button" variant="text">{t("在标签页打开")}</ReaderButton>
+            <ReaderButton id="close-history-overlay" type="button" variant="outlined">{t("关闭")}</ReaderButton>
+          </div>
+        </div>
+        <iframe id="history-frame" title={t("阅读历史")} />
+      </div>
       <div id="mode-data-note" className="footer">{t("独立模式：模型请求与阅读成果保存在本地，可导出或清除。")}</div>
 
     </Box>

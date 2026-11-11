@@ -922,5 +922,22 @@
   "用于下一次提问；翻译始终优先速度。": "Applies to the next question. Translation always prefers speed.",
   "当前模型的思考强度由服务商决定。": "Reasoning effort for this model is managed by the provider.",
   "思考强度保存失败，请重试。": "Could not save reasoning effort. Please retry.",
-  "独立模式 · {0} · 点击切换模型与思考强度": "Standalone · {0} · Change model and reasoning effort"
+  "独立模式 · {0} · 点击切换模型与思考强度": "Standalone · {0} · Change model and reasoning effort",
+  "关闭提示": "Dismiss message",
+  "{0} 条": "{0} items",
+  "先看 60 秒示例": "Try the 60-second demo",
+  "管理标签": "Manage tags",
+  "标签名": "Tag name",
+  "确认删除": "Confirm deletion",
+  "已重命名 {0} 条收藏": "Renamed tags in {0} saved items",
+  "标签重命名失败，请重试。": "Could not rename the tag. Please retry.",
+  "再次点击“确认删除”只会移除标签，不会删除收藏内容。": "Click Confirm deletion again to remove this tag. Saved content will be kept.",
+  "已从 {0} 条收藏移除标签": "Removed the tag from {0} saved items",
+  "标签删除失败，请重试。": "Could not delete the tag. Please retry.",
+  "重命名会更新所有收藏；删除只会移除标签，不会删除收藏内容。": "Renaming updates the tag in all saved items. Deleting removes the tag and keeps the saved content.",
+  "还没有标签。保存时填写标签即可在这里统一管理。": "No tags yet. Add tags when saving an item to manage them here.",
+  "在标签页打开": "Open in a tab",
+  "阅读历史": "Reading history",
+  "这条会话已被删除，请选择其他会话。": "This conversation was deleted. Please choose another conversation.",
+  "全文翻译失败，请稍后重试。": "Article translation failed. Please try again later."
 }

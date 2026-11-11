@@ -149,6 +149,27 @@ let guideState = { demo: false, translate: false, ask: false, dismissed: false }
 const libraryDeletion = createLibraryDeletion(readerStore);
 let libraryRenderRequest = 0;
 let libraryMutationBusy = false;
+let historyOverlayReturnFocus = null;
+let historyInertNodes = [];
+
+// `aria-modal` is only a promise unless the background is actually removed
+// from the tab order. Keep the panel controls inert while the history overlay
+// is open so Tab cannot land on a control hidden behind the dialog.
+function isolateHistoryOverlay(isolated) {
+  const overlay = $('history-overlay');
+  const shell = document.querySelector('.shell');
+  if (!shell) return;
+  if (isolated) {
+    // Re-opening while already open must not replace the saved list with an
+    // empty one; otherwise the previous inert nodes would never be restored.
+    if (historyInertNodes.length) return;
+    historyInertNodes = [...shell.children].filter(node => node !== overlay && !node.inert);
+    historyInertNodes.forEach(node => { node.inert = true; });
+    return;
+  }
+  historyInertNodes.forEach(node => { node.inert = false; });
+  historyInertNodes = [];
+}
 let editingInsight = null;
 let pendingInsightSource = null;
 let saveDialogGeneration = 0;
@@ -1109,21 +1130,29 @@ async function consumePendingSession(context, currentVersion) {
   const pending = stored?.readerPendingSession;
   if (!pending || readerStore.pageKey(pending.url) !== readerStore.pageKey(context.url)) return null;
   await chrome.storage.session.remove('readerPendingSession').catch(() => {});
-  const stale = Boolean(pending.version && currentVersion && pending.version !== currentVersion);
-  const { id: _id, remote: _remote, pendingEvidenceAnchor, ...rest } = pending;
+  // The history page can outlive a background answer. Re-read the matching
+  // snapshot at hand-off, and use the store's merged result below so a shorter
+  // pending transcript cannot become the next question's input history.
+  const current = await readerStore.getHistorySession(pending);
+  const snapshot = current && (
+    (current.discussion?.length || 0) >= (pending.discussion?.length || 0)
+    || String(current.updatedAt || '') > String(pending.updatedAt || '')
+  ) ? { ...pending, ...current } : pending;
+  const stale = Boolean(snapshot.version && currentVersion && snapshot.version !== currentVersion);
+  const { id: _id, remote: _remote, pendingEvidenceAnchor: _previousAnchor, ...rest } = snapshot;
+  const { pendingEvidenceAnchor } = pending;
   const restored = {
     ...rest,
     url: context.url,
-    title: pending.title || context.title || t("未命名页面"),
-    version: currentVersion || pending.version || null,
+    title: snapshot.title || context.title || t("未命名页面"),
+    version: currentVersion || snapshot.version || null,
     stale,
     staleAgainstVersion: stale ? currentVersion : null,
     resumedFromHistory: true,
     ...(pendingEvidenceAnchor?.quote ? { pendingEvidenceAnchor } : {}),
     updatedAt: new Date().toISOString(),
   };
-  await readerStore.saveSession(restored);
-  return restored;
+  return readerStore.saveSession(restored);
 }
 
 function formatCoverage(context, scope) {
@@ -1421,6 +1450,10 @@ function renderFirstRunPaths() {
   const firstRun = !textModelReady() && readingMode !== 'platform';
   show(paths, firstRun);
   if ($('empty-history')) show($('empty-history'), hasReadingHistory);
+  // The bundled demo is the fastest way to see Reader work, so it must not be
+  // gated behind a configured model. Platform mode still hides it because the
+  // demo does not call the platform engine.
+  if ($('empty-demo')) show($('empty-demo'), readingMode !== 'platform');
   if (!firstRun) return;
   const button = $('detect-local-models');
   const result = $('local-models-result');
@@ -1805,6 +1838,14 @@ function renderLibraryTagOptions(tags) {
   }
   select.replaceChildren(...options);
   select.value = current;
+}
+
+async function refreshUsageFromStorage() {
+  try {
+    const stored = (await chrome.storage.local.get(USAGE_KEY))[USAGE_KEY];
+    usageState = pruneUsage(mergeUsage(usageState, stored), { keepDays: 120 });
+    renderUsageSummary();
+  } catch { /* usage is best-effort */ }
 }
 
 async function loadUsageSettings() {
@@ -3260,11 +3301,8 @@ async function processDocument(context, runId = activeTranslationRun) {
     if (accepted?.ok) {
       try {
         persistJobPatch(job, { workerManaged: true, status: job.status === 'completed' ? 'queued' : job.status || 'queued' });
-        void recordUsageEvent('translation', {
-          requests: usageEstimate.requests + images.length,
-          chars: usageEstimate.chars,
-          tokens: usageEstimate.tokens,
-        });
+        // The worker records usage when the job completes; counting here
+        // would bill a task that the user cancels a second later.
       } catch {
         // The background owns this task now. Panel bookkeeping cannot start
         // another model pipeline; a recreated panel can read worker progress.
@@ -3357,11 +3395,6 @@ async function processDocument(context, runId = activeTranslationRun) {
       ...blocks.filter((block) => block.kind === 'code').map((block) => block.id),
     ]);
     if (runId !== activeTranslationRun) return;
-    void recordUsageEvent('translation', {
-      requests: usageEstimate.requests + images.length,
-      chars: usageEstimate.chars,
-      tokens: usageEstimate.tokens,
-    });
     const finalResults = await applyTranslations([...cachedTranslations, ...translations.filter((item) => item.text)]);
     const renderedById = new Map(finalResults.map((item) => [item.id, item]));
     translations = [...cachedTranslations, ...translations].map((item) => renderedById.get(item.id) || item);
@@ -3390,6 +3423,11 @@ async function processDocument(context, runId = activeTranslationRun) {
       persistJobPatch(job, { imageDone, imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size), processedImageIds: job.processedImageIds });
     }
     if (runId !== activeTranslationRun) return;
+    void recordUsageEvent('translation', {
+      requests: usageEstimate.requests + images.length,
+      chars: usageEstimate.chars,
+      tokens: usageEstimate.tokens,
+    });
     const currentFailures = translations.filter((item) => item.error).map((item) => ({
       id: item.id,
       kind: 'text',
@@ -4034,15 +4072,71 @@ function showReading() {
   show($('settings-view'), false); show(ensureSaveDialog(), false); show($('reader-status-strip'), true); show($('settings-button'), true); $('settings-button').setAttribute('aria-pressed', 'false'); setWorkspaceView(document.querySelector('.shell').dataset.workspaceView || 'chat'); renderPage(); updateLibrary();
 }
 
+function historyPageUrl() {
+  const params = new URLSearchParams({ surface: 'sidepanel', embedded: '1' });
+  if (boundWindowTabId) params.set('sourceTab', String(boundWindowTabId));
+  return chrome.runtime.getURL(`reading-history.html?${params}`);
+}
+
+function closeHistoryOverlay({ restoreFocus = true } = {}) {
+  const overlay = $('history-overlay');
+  if (!overlay || overlay.classList.contains('hidden')) return;
+  show(overlay, false);
+  isolateHistoryOverlay(false);
+  document.querySelector('.shell')?.removeAttribute('data-history-open');
+  const returnFocus = historyOverlayReturnFocus;
+  historyOverlayReturnFocus = null;
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
+}
+
 async function openHistoryPage() {
   try {
     persistQuestionDraft();
     await sessionSaveQueue;
-    window.location.href = chrome.runtime.getURL(`reading-history.html?surface=sidepanel${boundWindowTabId ? `&sourceTab=${boundWindowTabId}` : ''}`);
+    const overlay = $('history-overlay');
+    const frame = $('history-frame');
+    if (!overlay || !frame) return;
+    historyOverlayReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // The list is a same-origin extension page, so an iframe keeps the panel
+    // mounted: opening history no longer stops an in-flight answer or loses the
+    // composer draft. Only resuming a conversation leaves this document.
+    // Refresh the list on every open. The panel itself stays mounted, while
+    // completed answers and library edits become visible in the iframe.
+    frame.src = historyPageUrl();
+    show(overlay, true);
+    isolateHistoryOverlay(true);
+    document.querySelector('.shell')?.setAttribute('data-history-open', 'true');
+    $('close-history-overlay')?.focus();
   } catch {
     setNotice(t("无法打开侧栏内的阅读历史。"));
   }
 }
+
+function openHistoryInTab() {
+  const params = new URLSearchParams({ surface: 'tab' });
+  if (boundWindowTabId) params.set('sourceTab', String(boundWindowTabId));
+  void chrome.tabs.create({ url: chrome.runtime.getURL(`reading-history.html?${params}`), active: true });
+}
+
+window.addEventListener('message', (event) => {
+  if (event.origin !== window.location.origin) return;
+  const frame = $('history-frame');
+  if (!frame || event.source !== frame.contentWindow) return;
+  const data = event.data;
+  if (!data || typeof data !== 'object') return;
+  if (data.type === 'reader-history-close') {
+    closeHistoryOverlay();
+  } else if (data.type === 'reader-history-view') {
+    closeHistoryOverlay();
+    if (data.view === 'library') setWorkspaceView('library');
+    else if (data.view === 'settings') showSettings();
+    else if (data.view === 'chat') showReading();
+  } else if (data.type === 'reader-history-resume') {
+    closeHistoryOverlay({ restoreFocus: false });
+    const tabId = Number(data.tabId);
+    window.location.href = chrome.runtime.getURL(`sidepanel.html${boundWindowTabId && Number.isInteger(tabId) && tabId > 0 ? `?sourceTab=${tabId}` : ''}`);
+  }
+});
 
 const consumedSelectionActions = new Set();
 function handleSelectionAction(message) {
@@ -4287,6 +4381,7 @@ chrome.runtime.onMessage.addListener((message) => {
       : reportedFailures;
     translationRunning = false;
     translationPaused = Boolean(message.cancelled && translationPaused);
+    void refreshUsageFromStorage();
     renderProgress(activeJobRecord.textDone || 0, activeJobRecord.textTotal || 0, activeJobRecord.imageDone || 0, activeJobRecord.imageTotal || 0);
     const failures = failedTranslationItems.length;
     if (!message.cancelled && !failures && activeJobRecord.status === 'completed') {
@@ -4295,7 +4390,9 @@ chrome.runtime.onMessage.addListener((message) => {
     const workerWarnings = Array.isArray(message.warnings) ? message.warnings : (Array.isArray(activeJobRecord.warnings) ? activeJobRecord.warnings : []);
     const explicitCancellation = cancellationRequested || message.job?.error === t("用户取消了翻译");
     cancellationRequested = false;
-    setNotice(message.cancelled
+    setNotice(activeJobRecord.status === 'failed'
+      ? (activeJobRecord.error || t("全文翻译失败，请稍后重试。"))
+      : message.cancelled
       ? (explicitCancellation
         ? t("翻译已取消，已完成内容保留。再次点击“全文翻译”可以继续。")
         : t("翻译已暂停。再次点击全文翻译会从本地缓存继续。"))
@@ -4451,7 +4548,7 @@ async function init() {
   await loadPlatformState();
   updateReadingModeUi();
   renderEmptyState();
-  $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('detect-local-models')?.addEventListener('click', () => void detectLocalServices()); $('guide-demo')?.addEventListener('click', () => void openDemoArticle()); $('guide-translate')?.addEventListener('click', () => void guideTranslate()); $('guide-ask')?.addEventListener('click', () => void guideAsk()); $('dismiss-guide')?.addEventListener('click', () => void saveGuideState({ dismissed: true })); $('empty-platform')?.addEventListener('click', () => { showSettings(); void setReadingMode('platform'); }); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
+  $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('detect-local-models')?.addEventListener('click', () => void detectLocalServices()); $('guide-demo')?.addEventListener('click', () => void openDemoArticle()); $('guide-translate')?.addEventListener('click', () => void guideTranslate()); $('guide-ask')?.addEventListener('click', () => void guideAsk()); $('dismiss-guide')?.addEventListener('click', () => void saveGuideState({ dismissed: true })); $('empty-platform')?.addEventListener('click', () => { showSettings(); void setReadingMode('platform'); }); $('empty-demo')?.addEventListener('click', () => void openDemoArticle()); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('close-history-overlay')?.addEventListener('click', () => closeHistoryOverlay()); $('history-open-tab')?.addEventListener('click', openHistoryInTab); window.addEventListener('reader-library-refresh', () => void updateLibrary()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
   $('mode-local')?.addEventListener('click', () => void setReadingMode('local'));
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
   $('ai-availability-action')?.addEventListener('click', () => {
@@ -4586,7 +4683,9 @@ async function init() {
   $('open-page-chat')?.addEventListener('click', () => openDiscussion('page', 'ask'));
   $('expand-chat')?.addEventListener('click', () => setChatExpanded(!$('page-view')?.classList.contains('chat-expanded')));
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') setChatExpanded(false);
+    if (event.key !== 'Escape') return;
+    if ($('history-overlay') && !$('history-overlay').classList.contains('hidden')) { closeHistoryOverlay(); return; }
+    setChatExpanded(false);
   });
   $('open-history-inline')?.addEventListener('click', () => void openHistoryPage());
   $('composer-scope')?.addEventListener('click', () => toggleComposerScopeMenu());

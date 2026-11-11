@@ -24,3 +24,8 @@ body,.history-shell { min-height: 100dvh; }
 .history-toast.visible { visibility: visible; }
 .history-sidepanel .history-layout { padding: var(--reader-space-6) var(--reader-space-4) var(--reader-space-8); }
 @media (max-width: 479px) { .history-layout { padding-inline: var(--reader-space-4); } .history-detail-header { flex-direction: column; } }
+
+/* Embedded in the panel overlay: the overlay bar supplies the title and close
+   action, so the page masthead would duplicate navigation in a narrow frame. */
+.history-embedded .masthead { display: none; }
+.history-embedded .history-layout { padding-top: var(--reader-space-4); max-width: none; }
