@@ -198,6 +198,35 @@ describe('research provenance input', () => {
     expect(mocks.researchUpdate.mock.calls[0][0].data.aiAssisted).toBe(true);
   });
 
+  it('publishes an AI draft with acknowledged disclosure when no current verdict exists', async () => {
+    const now = new Date();
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'AI draft', body: 'AI output', background: '研究背景', conclusion: '研究结论',
+      risks: '风险与待验证项', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [],
+    });
+    mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
+      id: '22222222-2222-2222-2222-222222222222', type: 'research', status: 'published',
+      title: 'AI draft', body: 'AI output', background: '研究背景', conclusion: '研究结论',
+      risks: '风险与待验证项', tags: [], authorId: '11111111-1111-1111-1111-111111111111',
+      creationMethod: 'ai_research', aiAssisted: data.aiAssisted, publishedAt: now,
+      createdAt: now, updatedAt: now,
+      author: { id: '11111111-1111-1111-1111-111111111111', name: 'User', email: 'u@test' },
+    }));
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ acknowledgeDisclosure: true }),
+      }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).status).toBe('published');
+  });
+
   it('queues private index cleanup when a knowledge draft is published', async () => {
     const id = '33333333-3333-4333-8333-333333333333';
     const authorId = '11111111-1111-1111-1111-111111111111';
