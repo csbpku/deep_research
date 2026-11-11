@@ -132,6 +132,134 @@ try {
   }
   assert.equal(markdown.endsWith('\n') && !markdown.endsWith('\n\n'), true, 'Markdown 应以单个换行结束');
 
+  // Tag maintenance edits every matching record in place; it must not delete
+  // the saved content or reorder the shelf by touching updatedAt.
+  await panel.locator('#manage-tags').click();
+  await panel.locator('#tag-manager').waitFor({ state: 'visible', timeout: 10_000 });
+  // Visibility precedes the async IndexedDB load and React commit on slower
+  // runners. Wait for the actual rows before asserting their contents.
+  await panel.waitForFunction(() => document.querySelectorAll('.tag-manager-row').length === 2);
+  assert.equal(await panel.locator('.tag-manager-row').count(), 2, '标签管理应列出全库两个标签');
+  await panel.locator('.tag-manager-row[data-tag="架构"] input').fill('系统设计');
+  await panel.locator('.tag-manager-row[data-tag="架构"]').getByRole('button', { name: '保存', exact: true }).click();
+  await panel.waitForFunction(() => [...document.querySelectorAll('#library-tag option')].some(option => option.value === '系统设计'), null, { timeout: 10_000 });
+  assert.equal(await panel.locator('#library-tag option[value="架构"]').count(), 0, '旧标签不应残留');
+  assert.match(await panel.locator('#library-list').innerText(), /Alpha guide/, '重命名后收藏仍在原处');
+
+  await panel.locator('.tag-manager-row[data-tag="性能"]').getByRole('button', { name: '删除', exact: true }).click();
+  await panel.locator('.tag-manager-row[data-tag="性能"]').getByRole('button', { name: '确认删除', exact: true }).click();
+  await panel.waitForFunction(() => [...document.querySelectorAll('#library-tag option')].every(option => option.value !== '性能'), null, { timeout: 10_000 });
+  assert.equal(await panel.locator('.insight-row').count(), 3, '删除标签必须保留收藏内容');
+  await panel.waitForFunction(() => document.querySelectorAll('.tag-manager-row').length === 1);
+  assert.equal(await panel.locator('.tag-manager-row').count(), 1, '标签管理应只剩重命名后的标签');
+
+  // Queue the real UI transaction behind a live IndexedDB writer, then queue
+  // a note edit and deletion behind it. A split getAll/put implementation
+  // would read stale rows before those edits and overwrite/resurrect them.
+  await panel.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('deep-research-reader', 4);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const original = IDBDatabase.prototype.transaction;
+    const holder = original.call(database, 'insights', 'readwrite');
+    const state = window.__tagRace = { database, original, release: false, queued: false };
+    const keepAlive = () => {
+      const request = holder.objectStore('insights').get('a1');
+      request.onsuccess = () => { if (!state.release) keepAlive(); };
+    };
+    keepAlive();
+    IDBDatabase.prototype.transaction = function (...args) {
+      const transaction = original.apply(this, args);
+      if (args[0] === 'insights') state.queued = true;
+      return transaction;
+    };
+  });
+  await panel.locator('.tag-manager-row[data-tag="系统设计"] input').fill('并发标签');
+  await panel.locator('.tag-manager-row[data-tag="系统设计"]').getByRole('button', { name: '保存', exact: true }).click();
+  await panel.waitForFunction(() => window.__tagRace.queued);
+  await panel.evaluate(() => {
+    const state = window.__tagRace;
+    IDBDatabase.prototype.transaction = state.original;
+    const transaction = state.database.transaction('insights', 'readwrite');
+    const store = transaction.objectStore('insights');
+    const request = store.get('a1');
+    request.onsuccess = () => store.put({ ...request.result, note: 'Concurrent note retained', platformResearchId: 'new-platform-link' });
+    store.delete('b1');
+    state.done = new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    state.release = true;
+  });
+  await panel.locator('.tag-manager-row[data-tag="并发标签"]').waitFor();
+  const raced = await panel.evaluate(async () => {
+    const state = window.__tagRace;
+    await state.done;
+    const transaction = state.database.transaction('insights', 'readonly');
+    const records = await new Promise((resolve, reject) => {
+      const request = transaction.objectStore('insights').getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    state.database.close();
+    delete window.__tagRace;
+    return records;
+  });
+  assert.equal(raced.find(record => record.id === 'a1').note, 'Concurrent note retained', '标签批量改名不覆盖并发笔记');
+  assert.equal(raced.find(record => record.id === 'a1').platformResearchId, 'new-platform-link', '标签批量改名不覆盖平台链接');
+  assert.equal(raced.some(record => record.id === 'b1'), false, '标签批量改名不恢复已删除收藏');
+  assert.equal(raced.find(record => record.id === 'a1').updatedAt, '2026-11-01T02:00:00.000Z', '标签批量改名不改变收藏排序');
+
+  // Arbitrary user tags are dictionary keys, including Object prototype names.
+  // Exercise them in the English UI to cover both rendering and translations.
+  await panel.evaluate(async records => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('deep-research-reader', 4);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction('insights', 'readwrite');
+      records.forEach((record, index) => transaction.objectStore('insights').put({ ...record, tags: [...record.tags, ...(index ? ['__proto__', 'toString'] : ['constructor'])] }));
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+    await chrome.storage.local.set({ readerUiLanguage: 'en' });
+  }, raced);
+  const pageErrors = [];
+  panel.on('pageerror', error => pageErrors.push(error.message));
+  await panel.reload({ waitUntil: 'domcontentloaded' });
+  await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
+  await article.bringToFront();
+  await worker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+  });
+  await panel.locator('#nav-library').click();
+  await panel.getByRole('button', { name: 'Manage tags', exact: true }).click();
+  await panel.locator('#tag-manager').waitFor();
+  for (const tag of ['constructor', '__proto__', 'toString']) {
+    const row = panel.locator(`.tag-manager-row[data-tag="${tag}"]`);
+    assert.equal(await row.getByRole('textbox', { name: 'Tag name', exact: true }).inputValue(), tag);
+    assert.equal(await row.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+    assert.match(await row.locator('.tag-manager-meta').innerText(), /1 items/);
+  }
+  const constructor = panel.locator('.tag-manager-row[data-tag="constructor"]');
+  await constructor.getByRole('textbox', { name: 'Tag name' }).fill('constructor-safe');
+  await constructor.getByRole('button', { name: 'Save', exact: true }).click();
+  await panel.locator('.tag-manager-row[data-tag="constructor-safe"]').waitFor();
+  assert.match(await panel.locator('#tag-manager [role="status"]').innerText(), /Renamed tags in 1 saved items/);
+  const proto = panel.locator('.tag-manager-row[data-tag="__proto__"]');
+  await proto.getByRole('button', { name: 'Delete', exact: true }).click();
+  assert.match(await panel.locator('#tag-manager [role="status"]').innerText(), /Click Confirm deletion again/);
+  await proto.getByRole('button', { name: 'Confirm deletion', exact: true }).click();
+  await proto.waitFor({ state: 'detached' });
+  assert.match(await panel.locator('#tag-manager [role="status"]').innerText(), /Removed the tag from 1 saved items/);
+  assert.deepEqual(pageErrors, [], '特殊标签名不会导致 React 渲染失败');
+
   console.log(JSON.stringify({
     ok: true,
     checks: [
@@ -140,6 +268,10 @@ try {
       'choosing a tag narrows the list without dropping search',
       'clearing filters restores the full list',
       'the Markdown export downloads a dated file with grouped pages, notes, tags and sources',
+      'tag rename updates every matching record and tag delete keeps the records',
+      'real IndexedDB serialization retains concurrent note edits, platform links and deletions',
+      'prototype-name tags render, rename and delete safely',
+      'tag management controls, counts, confirmation and feedback use English',
     ],
     tags: tagOptions.filter((option) => option.value).map((option) => option.value),
     markdownBytes: Buffer.byteLength(markdown),

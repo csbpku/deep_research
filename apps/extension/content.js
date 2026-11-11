@@ -255,6 +255,7 @@
   let readerDockCollapsed = false;
   let readerStatusHost = null;
   let readerStatusRevision = 0;
+  let readerStatusDismissedKey = '';
   const annotationHighlights = new Map();
   let refreshTimer = 0;
   let viewportTimer = 0;
@@ -381,9 +382,19 @@
     }
   }
 
+  // Reader's own overlays must never become source passages. The image
+  // fallback is a div appended next to an inline image; without this guard
+  // readingBlockNodes would treat it as a new leaf paragraph and change the
+  // page hash, which makes the panel restore (and remove) the translation it
+  // just painted.
+  const READER_OWN_NODE_SELECTOR = '[data-deep-research-translation],[data-deep-research-image-wrap],[data-deep-research-image-fallback],[data-deep-research-image-side-translation],[data-deep-research-status]';
+  function isReaderOwnNode(node) {
+    return Boolean(node.closest(READER_OWN_NODE_SELECTOR));
+  }
+
   function sourceBlockText(node) {
     const clone = node.cloneNode(true);
-    clone.querySelectorAll('[data-deep-research-translation]').forEach((item) => item.remove());
+    clone.querySelectorAll(READER_OWN_NODE_SELECTOR).forEach((item) => item.remove());
     return clean(clone.textContent || '');
   }
 
@@ -400,12 +411,13 @@
     // Publishers sometimes use unadorned divs for article paragraphs.
     // Only add leaf containers outside semantic blocks, preserving structure.
     const leafContainers = collect('div,section')
+      .filter((node) => !isReaderOwnNode(node))
       .filter((node) => !node.closest(READING_BLOCK_SELECTOR))
       .filter((node) => !node.querySelector(`${READING_BLOCK_SELECTOR},div,section,script,style,form,button,input,textarea,select`))
       .filter((node) => /[\p{L}]{2}/u.test(sourceBlockText(node)));
     return [...new Set([...collect(READING_BLOCK_SELECTOR), ...leafContainers])]
       .sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
-      .filter((node) => !node.closest('[data-deep-research-translation]'))
+      .filter((node) => !isReaderOwnNode(node))
       // Never treat a form or an editable control as article text. This is a
       // privacy boundary for pages that mix documentation with a comment,
       // search, or password form.
@@ -1319,27 +1331,52 @@
       shadow.innerHTML = `
         <style>
           :host{all:initial}
-          .status{max-width:min(310px,calc(100vw - 96px));padding:var(--reader-space-2) 10px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-small);background:var(--reader-color-text);color:var(--reader-color-inverse-text);box-shadow:var(--reader-elevation-2);font:700 var(--reader-type-caption)/1.4 var(--reader-font-family);opacity:0;transform:translateX(5px);transition:opacity var(--reader-motion-standard),transform var(--reader-motion-standard)}
-          .status.visible{opacity:1;transform:translateX(0)}
+          .status{position:relative;box-sizing:border-box;max-width:min(310px,calc(100vw - 96px));padding:var(--reader-space-2) 10px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-small);background:var(--reader-color-text);color:var(--reader-color-inverse-text);box-shadow:var(--reader-elevation-2);font:700 var(--reader-type-caption)/1.4 var(--reader-font-family);opacity:0;visibility:hidden;transform:translateX(5px);transition:opacity var(--reader-motion-standard),transform var(--reader-motion-standard);pointer-events:none}
+          .status.visible{opacity:1;visibility:visible;transform:translateX(0)}
           .status.ready{background:var(--reader-color-success);border-color:var(--reader-color-success-container)}
           .status.error{background:var(--reader-color-danger);border-color:var(--reader-color-danger-container)}
+          .status.partial{background:var(--reader-color-surface-container);border-color:var(--reader-color-primary);color:var(--reader-color-text)}
+          .status.dismissible{padding-right:30px}
           .detail{display:block;margin-top:2px;color:var(--reader-color-on-inverse-muted);font-weight:500;font-size:var(--reader-type-caption)}
+          .status.partial .detail{color:var(--reader-color-text-secondary)}
+          .dismiss{display:none;position:absolute;top:2px;right:2px;width:24px;height:24px;align-items:center;justify-content:center;padding:0;border:0;border-radius:999px;background:transparent;color:inherit;font:600 16px/1 var(--reader-font-family);cursor:pointer;pointer-events:auto;opacity:.75}
+          .status.dismissible .dismiss{display:flex}
+          .dismiss:hover,.dismiss:focus-visible{opacity:1}
           @media(prefers-reduced-motion:reduce){.status{transition:none}}
         </style>
-        <div class="status" role="status"><span class="label"></span><span class="detail"></span></div>`;
+        <div class="status" role="status"><span class="label"></span><span class="detail"></span><button type="button" class="dismiss">×</button></div>`;
       readerStatusHost.__statusElement = shadow.querySelector('.status');
+      shadow.querySelector('.dismiss').addEventListener('click', (event) => {
+        event.stopPropagation();
+        const status = readerStatusHost?.__statusElement;
+        if (!status) return;
+        status.classList.remove('visible');
+        window.clearTimeout(readerStatusHost.__hideTimer);
+        readerStatusDismissedKey = readerStatusHost.__statusKey || '';
+      });
       document.documentElement.appendChild(readerStatusHost);
     }
     const status = readerStatusHost.__statusElement;
     if (!status) return revision;
-    status.classList.remove('ready', 'error');
-    if (tone === 'ready' || tone === 'error') status.classList.add(tone);
+    const key = `${label}\u0000${detail}`;
+    if (tone === 'loading') readerStatusDismissedKey = '';
+    if (tone !== 'loading' && key === readerStatusDismissedKey) {
+      status.classList.remove('visible');
+      return revision;
+    }
+    status.classList.remove('ready', 'error', 'partial');
+    if (tone === 'ready' || tone === 'error' || tone === 'partial') status.classList.add(tone);
+    status.classList.toggle('dismissible', tone !== 'loading');
     status.querySelector('.label').textContent = label;
     status.querySelector('.detail').textContent = detail;
+    status.querySelector('.dismiss').setAttribute('aria-label', t('关闭提示'));
+    readerStatusHost.__statusKey = key;
     status.classList.add('visible');
     window.clearTimeout(readerStatusHost.__hideTimer);
     if (tone !== 'loading') {
-      readerStatusHost.__hideTimer = window.setTimeout(() => status.classList.remove('visible'), 2600);
+      // The partial-coverage notice carries two lines of explanation, so it
+      // stays a little longer than the one-line progress confirmations.
+      readerStatusHost.__hideTimer = window.setTimeout(() => status.classList.remove('visible'), tone === 'partial' ? 6000 : 2600);
     }
     return revision;
   }
@@ -2182,7 +2219,7 @@
       return;
     }
     if (message?.type === 'deep-research:reader-status') {
-      const tone = message.state === 'ready' ? 'ready' : message.state === 'error' ? 'error' : 'loading';
+      const tone = message.state === 'ready' || message.state === 'error' || message.state === 'partial' ? message.state : 'loading';
       setReaderStatus(String(message.label || t("正在读取正文")), tone, String(message.detail || ''));
     }
     if (message?.type === 'deep-research:focus-page') {

@@ -10,6 +10,7 @@ import { estimateTranslation, formatTokens } from './cost-estimate.js';
 import { createUsageRecorder } from './usage-persistence.js';
 import { mergeUsage, pruneUsage } from './usage-meter.js';
 import { parseLibraryAnswer } from './library-answer.js';
+import { modelRequestPolicy, normalizeReasoningMode, providerReasoningCapability } from './model-policy.js';
 
 const source = readFileSync(new URL('./sidepanel.js', import.meta.url), 'utf8');
 const t = (text, ...values) => text.replace(/\{(\d+)\}/g, (_, index) => String(values[index]));
@@ -17,8 +18,104 @@ function actualFunction(start, end, globals) {
   const begin = source.indexOf(start);
   const finish = source.indexOf(end, begin);
   assert.ok(begin >= 0 && finish > begin, 'actual function boundaries must exist');
-  return vm.runInNewContext(`${source.slice(begin, finish)}\n${start.match(/function (\w+)/)[1]}`, { t, ...globals });
+  return vm.runInNewContext(`${source.slice(begin, finish)}\n${start.match(/function (\w+)/)[1]}`, { t, normalizeReasoningMode, ...globals });
 }
+
+test('resuming an older history row uses the latest persisted turns, including across article versions', async () => {
+  const turn = n => [{ role: 'user', content: `Q${n}` }, { role: 'assistant', content: `A${n}` }];
+  for (const currentVersion of ['v1', 'v2']) {
+    const url = `https://resume-history.test/${currentVersion}`;
+    const pending = await readerStore.saveSession({ id: `legacy-${currentVersion}`, url, version: 'v1', answer: 'A1', discussion: turn(1) });
+    await readerStore.saveSession({ ...pending, answer: 'A2', discussion: [...turn(1), ...turn(2)] });
+    const consume = actualFunction('async function consumePendingSession(', '\nfunction formatCoverage(', {
+      readerStore,
+      chrome: { storage: { session: { get: async () => ({ readerPendingSession: { ...pending, resumedFromHistory: true, pendingEvidenceAnchor: { quote: 'chosen quote' } } }), remove: async () => {} } } },
+    });
+    const resumed = await consume({ url }, currentVersion);
+    assert.equal(resumed.discussion.length, 4);
+    assert.equal(resumed.pendingEvidenceAnchor.quote, 'chosen quote');
+    await readerStore.saveSession({ ...resumed, discussion: [...resumed.discussion, ...turn(3)], answer: 'A3' });
+    const latest = await readerStore.getSession(url, currentVersion);
+    assert.deepEqual(latest.discussion.filter(m => m.role === 'user').map(m => m.content), ['Q1', 'Q2', 'Q3']);
+  }
+});
+
+test('fatal authentication and quota failures stop the worker and display the failure instead of success', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const status of [401, 429]) {
+      await readerStore.setSetting('provider', { baseUrl: `https://mock-${status}.test/v1`, model: 'generic', apiKey: 'mock-key' });
+      let requests = 0;
+      globalThis.fetch = async () => {
+        requests += 1;
+        return Response.json({ error: { message: 'rejected' } }, { status, headers: { 'retry-after': '0' } });
+      };
+      const worker = createBackgroundHarness({ Error });
+      const id = `fatal-review-${status}`;
+      await worker.dispatch({ type: 'deep-research:translation-start', jobId: id, tabId: 1,
+        context: { url: `https://fatal.test/${status}`, contentHash: 'v1', full: true, blocks: [{ id: 'p1', text: 'A paragraph to translate.' }], images: [] },
+      });
+      const message = await waitFor(() => worker.emitted.find(event => event.type === 'deep-research:translation-complete' && event.jobId === id));
+      assert.equal(message.job.status, 'failed');
+      assert.equal(requests, status === 401 ? 1 : 3);
+      let notice;
+      const start = source.indexOf("  if (message.type === 'deep-research:translation-complete' &&");
+      const end = source.indexOf("  if (message.type === 'deep-research:selection'", start);
+      vm.runInNewContext(source.slice(start, end), {
+        message, activeJobRecord: { id }, retryingTranslationId: null, failedTranslationItems: [],
+        translationPaused: false, cancellationRequested: false,
+        renderProgress() {}, refreshUsageFromStorage: async () => {}, saveGuideState: async () => {}, saveLocalSession() {},
+        t, setNotice: text => { notice = text; },
+      });
+      assert.match(notice, status === 401 ? /认证失败/u : /限流|额度/u);
+      assert.doesNotMatch(notice, /翻译完成/u);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('saving pricing settings does not overwrite the independently saved composer effort', async () => {
+  const nodes = { 'translation-model': { value: '' }, 'price-input': { value: '' }, 'price-output': { value: '' }, 'usage-settings-status': {} };
+  const saved = new Map();
+  const save = actualFunction('async function saveUsageSettings(', '\nasync function recordUsageEvent(', {
+    $: id => nodes[id], translationModel: '', answerReasoningMode: 'high', pricing: {},
+    readerStore: { async setSetting(key, value) { saved.set(key, value); } },
+  });
+  await save();
+  assert.equal(saved.has('answerReasoningMode'), false);
+});
+
+test('composer effort updates immediately, saves changes in order and disables unsupported controls', async () => {
+  const nodes = {
+    'composer-reasoning-mode': { value: '', options: ['auto', 'low', 'medium', 'high', 'provider'].map(value => ({ value })) },
+    'composer-reasoning-label': {}, 'composer-reasoning-status': {},
+  };
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const saved = [];
+  const sandbox = { t, normalizeReasoningMode, providerReasoningCapability, modelRequestPolicy,
+    provider: { model: 'grok-4.7' }, readingMode: 'local', answerReasoningMode: 'auto', providerReady: () => true,
+    $: id => nodes[id], show: (node, visible) => { node.hidden = !visible; },
+    readerStore: { async setSetting(_key, mode) { saved.push(mode); if (saved.length === 1) await waiting; } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source.slice(source.indexOf('let reasoningSaveQueue ='), source.indexOf('function renderComposerModelOptions(')), sandbox);
+  const first = vm.runInContext("chooseComposerReasoningMode('high')", sandbox);
+  assert.equal(nodes['composer-reasoning-label'].textContent, '高');
+  const second = vm.runInContext("chooseComposerReasoningMode('low')", sandbox);
+  assert.equal(nodes['composer-reasoning-label'].textContent, '低');
+  await Promise.resolve(); release(); await Promise.all([first, second]);
+  assert.deepEqual(saved, ['high', 'low']);
+  sandbox.provider.model = 'unknown-model';
+  vm.runInContext('renderComposerReasoning()', sandbox);
+  assert.equal(nodes['composer-reasoning-mode'].disabled, true);
+  assert.equal(nodes['composer-reasoning-label'].textContent, '默认');
+  sandbox.provider.model = 'grok-4.7';
+  sandbox.readerStore.setSetting = async () => { throw new Error('storage failed'); };
+  sandbox.readerStore.getSetting = async () => 'provider';
+  await vm.runInContext("chooseComposerReasoningMode('high')", sandbox);
+  assert.equal(nodes['composer-reasoning-label'].textContent, '默认');
+  assert.match(nodes['composer-reasoning-status'].textContent, /保存失败/u);
+});
 
 function translationPanel({ failBookkeeping = false, sendMessage = async () => ({ ok: true }), localTranslate } = {}) {
   const calls = { worker: 0, local: 0, usage: [] };
@@ -59,8 +156,9 @@ test('a worker-accepted translation never also starts the panel executor', async
   await panel.run(panel.context);
   assert.equal(panel.calls.worker, 1);
   assert.equal(panel.calls.local, 0);
-  assert.equal(panel.calls.usage.length, 1);
-  assert.equal(panel.calls.usage[0].requests, estimateTranslation(panel.context).requests);
+  // The worker records usage when the job completes; billing at hand-off
+  // counted translations the user could still cancel.
+  assert.equal(panel.calls.usage.length, 0);
 });
 
 test('bookkeeping failure after worker acceptance cannot launch another executor', async () => {
@@ -201,4 +299,23 @@ test('opening another panel cannot overwrite a usage event committed while setti
   await opening;
   assert.equal(stored.readerUsage.totals.translation.requests, 1);
   assert.equal(stored.readerUsage.totals.answer.requests, 1);
+});
+
+test('the panel fallback records usage only after the local translation finishes', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const panel = translationPanel({
+    sendMessage: async () => { throw new Error('worker unavailable'); },
+    localTranslate: async (_provider, _document, blocks) => {
+      await gate;
+      return blocks.map((block) => ({ ...block, text: '队列受到保护。', sourceText: block.text }));
+    },
+  });
+  const run = panel.run(panel.context);
+  await waitFor(() => panel.calls.local === 1);
+  assert.equal(panel.calls.usage.length, 0);
+  release();
+  await run;
+  assert.equal(panel.calls.usage.length, 1);
+  assert.equal(panel.calls.usage[0].requests, estimateTranslation(panel.context).requests);
 });

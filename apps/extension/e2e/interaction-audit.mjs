@@ -93,13 +93,14 @@ async function clearTranslationCache() {
   });
   await page.locator('#close-settings').click();
 }
-async function checkMaterialSurface(surface) {
-  const report = await page.evaluate(() => {
+async function checkMaterialSurface(surface, scope = page.locator('html')) {
+  const report = await scope.evaluate(html => {
+    const doc = html.ownerDocument;
     const visible = element => { const s = getComputedStyle(element); const r = element.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
     return {
-      buttons: [...document.querySelectorAll('button')].filter(visible).filter(el => !el.classList.contains('MuiButtonBase-root')).map(el => el.id || el.innerText),
-      fields: [...document.querySelectorAll('input,textarea,select')].filter(visible).filter(el => el.type !== 'file' && !el.closest('.MuiInputBase-root,.MuiCheckbox-root')).map(el => el.id),
-      fonts: [...document.querySelectorAll('button,input,textarea,select')].filter(visible).filter(el => el.type !== 'checkbox' && getComputedStyle(el).fontFamily !== getComputedStyle(document.body).fontFamily).map(el => el.id),
+      buttons: [...doc.querySelectorAll('button')].filter(visible).filter(el => !el.classList.contains('MuiButtonBase-root')).map(el => el.id || el.innerText),
+      fields: [...doc.querySelectorAll('input,textarea,select')].filter(visible).filter(el => el.type !== 'file' && !el.closest('.MuiInputBase-root,.MuiCheckbox-root')).map(el => el.id),
+      fonts: [...doc.querySelectorAll('button,input,textarea,select')].filter(visible).filter(el => el.type !== 'checkbox' && getComputedStyle(el).fontFamily !== getComputedStyle(doc.body).fontFamily).map(el => el.id),
     };
   });
   assert.deepEqual(report, { buttons: [], fields: [], fonts: [] }, `${surface}: visible controls use actual MUI components and the shared font`);
@@ -686,9 +687,11 @@ try {
   assert.equal(new URL(page.url()).searchParams.has('view'), false, '切回聊天同步移除收藏页深链参数');
   await page.locator('#question-input').fill('Keep this draft.');
   await page.locator('#open-history-header').click();
-  await page.locator('#history-tabs[aria-busy="false"]').waitFor();
-  assert.equal(await page.locator('#close-history').evaluate(el => el.classList.contains('MuiButtonBase-root')), true, 'history navigation should use the shared MUI components');
-  const historyControl = await page.locator('#export-history').evaluate(el => ({
+  await page.locator('#history-overlay').waitFor({ state: 'visible' });
+  const history = page.frameLocator('#history-frame');
+  await history.locator('#history-tabs[aria-busy="false"]').waitFor();
+  assert.equal(await history.locator('#close-history').evaluate(el => el.classList.contains('MuiButtonBase-root')), true, 'history navigation should use the shared MUI components');
+  const historyControl = await history.locator('#export-history').evaluate(el => ({
     mui: el.classList.contains('MuiButton-root'),
     radius: getComputedStyle(el).borderRadius,
     font: getComputedStyle(el).fontFamily,
@@ -696,24 +699,25 @@ try {
   assert.equal(historyControl.mui, true, 'history actions should use MUI buttons');
   assert.equal(historyControl.radius, '8px', 'history buttons should share the same MUI control radius');
   assert.match(historyControl.font, /system-ui/i, 'history should use the shared MUI typography');
-  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--reader-color-primary').trim()), '#405c9d', 'history should load the same design tokens');
-  await page.locator('#history-search-input').fill('not-found-unique-audit');
-  assert.equal(await page.locator('.history-card').count(), 0);
-  await page.locator('#history-search-input').fill('Interaction audit');
-  const card = page.locator('.history-card').first(); await card.waitFor();
-  await checkMaterialSurface('history records');
+  assert.equal(await history.locator('html').evaluate(el => getComputedStyle(el).getPropertyValue('--reader-color-primary').trim()), '#405c9d', 'history should load the same design tokens');
+  await history.locator('#history-search-input').fill('not-found-unique-audit');
+  assert.equal(await history.locator('.history-card').count(), 0);
+  await history.locator('#history-search-input').fill('Interaction audit');
+  const card = history.locator('.history-card').first(); await card.waitFor();
+  await checkMaterialSurface('history records', history.locator('html'));
   await card.locator('.history-card-source').evaluate(el => { el.textContent += `/${'long-source-path/'.repeat(40)}`; });
   for (const width of [320, 360, 674]) {
     await page.setViewportSize({ width, height: 720 });
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `history with long source URLs stays within ${width}px`);
+    assert.equal(await history.locator('html').evaluate(el => el.scrollWidth > el.clientWidth), false, `history with long source URLs stays within ${width}px`);
   }
   await page.setViewportSize({ width: 360, height: 720 });
   await card.getByRole('button', { name: '更多记录操作' }).click();
   page.once('dialog', d => d.accept('Audit renamed chat'));
-  await page.getByRole('menuitem', { name: '重命名', exact: true }).click();
-  await page.locator('#history-search-input').fill('Audit renamed chat');
-  await page.locator('.history-card').filter({ hasText: 'Audit renamed chat' }).waitFor();
-  await page.locator('#close-history').click();
+  await history.getByRole('menuitem', { name: '重命名', exact: true }).click();
+  await history.locator('#history-search-input').fill('Audit renamed chat');
+  await history.locator('.history-card').filter({ hasText: 'Audit renamed chat' }).waitFor();
+  await page.locator('#close-history-overlay').click();
+  await page.locator('#history-overlay').waitFor({ state: 'hidden' });
   await page.locator('#question-input').waitFor();
   assert.equal(await page.locator('#question-input').inputValue(), 'Keep this draft.');
   checks.push('收藏导航、历史搜索与重命名、返回保留草稿');
@@ -776,13 +780,15 @@ try {
   assert.equal(overflow, false, '英文侧栏不应横向溢出');
   await page.screenshot({ path: `${artifacts}/chat-en-320.png` });
   await page.locator('#open-history-header').click();
-  await page.locator('#history-tabs[aria-busy="false"]').waitFor();
-  await checkNavigationLayout('en', 'history');
+  await page.locator('#history-overlay').waitFor({ state: 'visible' });
+  const historyEn = page.frameLocator('#history-frame');
+  await historyEn.locator('#history-tabs[aria-busy="false"]').waitFor();
   await page.setViewportSize({ width: 320, height: 720 });
-  assert.equal(await page.locator('#history-section-title').innerText(), 'Chats');
+  assert.equal(await historyEn.locator('#history-section-title').innerText(), 'Chats');
+  assert.equal(await historyEn.locator('html').evaluate(el => el.scrollWidth > el.clientWidth), false, '英文内嵌历史不应横向溢出');
   await page.screenshot({ path: `${artifacts}/history-en-320.png` });
-  await page.locator('#close-history').click();
-  await page.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
+  await page.locator('#close-history-overlay').click();
+  await page.locator('#history-overlay').waitFor({ state: 'hidden' });
   await readCurrentArticle();
   assert.ok(requests.filter(item => item.messages?.[0]?.content?.includes('latest user question')).length >= 3, '回答语言策略跟随用户提问');
   checks.push('中英文界面切换、英文窄侧栏及历史页、聊天无语言下拉、问答语言策略');
@@ -791,11 +797,15 @@ try {
   assert.deepEqual(await page.evaluate(() => window.__readerCspViolations), [], 'MUI style injection must not violate the extension CSP');
   await checkMaterialSurface('chat and generated answer');
   await page.locator('#discussion-followups').waitFor({ state: 'visible' });
-  const followupGaps = await page.locator('.discussion-followup').evaluateAll(elements => elements.slice(1).map((el, index) => el.getBoundingClientRect().top - elements[index].getBoundingClientRect().bottom));
-  assert.ok(followupGaps.length > 0 && followupGaps.every(gap => gap >= 8), 'followup suggestions keep the shared 8px spacing');
-  assert.equal(await page.locator('#discussion-followups').evaluate(el => getComputedStyle(el).borderTopWidth), '1px', 'followup suggestions have one shared frame');
-  const followupRows = await page.locator('.discussion-followup').evaluateAll(elements => elements.map(el => ({ border: getComputedStyle(el).borderTopWidth, height: el.getBoundingClientRect().height, icon: Boolean(el.querySelector('svg')) })));
-  assert.ok(followupRows.every(row => row.border === '0px' && row.height >= 44 && row.icon), 'suggested questions use borderless, clearly clickable rows inside the group');
+  const followupChips = await page.locator('.discussion-followup').evaluateAll(elements => elements.map(el => ({
+    layout: el.getAttribute('data-layout'), height: el.getBoundingClientRect().height,
+    icon: Boolean(el.querySelector('svg')), label: el.getAttribute('aria-label'), text: el.textContent.trim(),
+  })));
+  assert.ok(followupChips.length > 0 && followupChips.every(chip => chip.layout === 'chips'), 'follow-up suggestions default to compact chips');
+  assert.ok(followupChips.every(chip => chip.height >= 32), 'follow-up chips stay tappable at 32px');
+  assert.ok(followupChips.every(chip => chip.label && chip.label === chip.text), 'each chip exposes the full question as its accessible name');
+  assert.ok(followupChips.every(chip => !chip.icon), 'chips do not repeat the action icon');
+  assert.ok(await page.locator('#discussion-followups .discussion-followups').evaluate(el => getComputedStyle(el).gap !== 'normal'), 'follow-up chips keep a consistent gap');
   const actions = await page.locator('#answer-actions').evaluate(el => {
     const copy = el.querySelector('#copy-answer'); const save = el.querySelector('#save-answer');
     return { copyBackground: getComputedStyle(copy).backgroundColor, saveBackground: getComputedStyle(save).backgroundColor,
@@ -814,7 +824,7 @@ try {
   await page.locator('.discussion-followup').first().click();
   await page.waitForFunction(count => document.querySelectorAll('#conversation-list > article').length === count + 2, messageCount);
   assert.equal(await page.locator('#conversation-list > article.user').last().innerText(), followupText);
-  checks.push('追问建议只有一个分组边框，问题为无边框44px点击行，点击后正常生成新一轮对话');
+  checks.push('追问建议默认紧凑 chips（完整问题为可访问名称），点击后正常生成新一轮对话');
   await auditSelectionPopup();
   const legacySource = (await data()).insights[0];
   await worker.evaluate(async source => {

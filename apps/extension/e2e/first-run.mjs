@@ -84,6 +84,25 @@ try {
   assert.equal(narrow.primaryInViewport, true, '320px 下主操作应在首屏内');
   await panel.setViewportSize({ width: 400, height: 900 });
 
+  // The demo must be reachable before any model exists: it is the product
+  // tour, not a reward for finishing setup.
+  assert.equal(await panel.locator('#empty-demo').isVisible(), true, '未配置模型也应提供示例入口');
+  const demoOpened = context.waitForEvent('page');
+  await panel.locator('#empty-demo').click();
+  const demoPage = await demoOpened;
+  await demoPage.waitForLoadState('domcontentloaded');
+  assert.match(demoPage.url(), /demo\.html$/, '示例入口打开打包的示例文章');
+  // The demo page's content script answers request-page; once its context
+  // arrives the panel shows the reading surface even without a model.
+  await panel.waitForFunction(() => document.querySelector('#page-context-status')?.textContent?.includes('正文已读取'), null, { timeout: 10_000 });
+  assert.match(await panel.locator('#page-title').innerText(), /队列|Queue/i, '示例文章标题应出现在页面上下文');
+  assert.equal(await panel.locator('#question-input').isVisible(), true, '示例打开后直接进入可提问的阅读工作台');
+  await demoPage.close();
+  // Reload back to the empty state so the rest of onboarding still exercises
+  // local detection from a fresh panel.
+  await panel.reload({ waitUntil: 'domcontentloaded' });
+  await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
+
   await panel.locator('#detect-local-models').click();
   const ollama = panel.locator('[data-local-model="ollama"]');
   await ollama.waitFor({ state: 'visible', timeout: 10_000 });
@@ -126,6 +145,7 @@ try {
     ok: true,
     checks: [
       'first run shows the local option, the provider option and hides empty history',
+      'the demo article opens without a configured model',
       '320px first run keeps the primary action in view without clipping',
       'detection probes loopback /models and reports reachable services with a chat default',
       'one click saves the local provider without an API key and leaves first-run state',

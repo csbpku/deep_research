@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { createLibraryDeletion, libraryFacets, libraryItems, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
+import { createLibraryDeletion, editTags, libraryFacets, libraryItems, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
 import { readerStore } from './reader-store.js';
 
 const items = (count, prefix) => Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}`, title: `${prefix} ${index}`,
@@ -127,7 +127,7 @@ function nodeMap() {
 
 test('the actual composer follows selection scope, resets to article and hides the starter for images', () => {
   const $ = nodeMap();
-  const sandbox = { $, t, document: { querySelector: () => ({ dataset: { workspaceView: 'chat' } }) },
+  const sandbox = { renderComposerReasoning() {}, $, t, document: { querySelector: () => ({ dataset: { workspaceView: 'chat' } }) },
     activeDiscussionContext: () => ({ selection: { quote: 'Selected source' } }), updateTranslationLanguageUi() {},
     pageReadDescriptor: () => ({ label: 'Ready', detail: '' }), show: (element, visible) => { element.visible = visible; },
     imageContext: { image: {} }, contextHasReadableBody: () => true, discussionScopeLabel: scope => scope, discussionScopeShortLabel: scope => scope,
@@ -418,3 +418,12 @@ test('facets rank by count then value and de-duplicate tags case-insensitively',
 function localIso(month, day, hour = 12, minute = 0, second = 0, year = 2026) {
   return new Date(year, month - 1, day, hour, minute, second).toISOString();
 }
+
+test('tag maintenance renames case-insensitively, removes one tag and keeps the ten-tag limit', () => {
+  assert.deepEqual(editTags(['React', 'react', 'Performance'], { renameFrom: 'react', renameTo: 'React 19' }), ['React 19', 'Performance']);
+  assert.deepEqual(editTags(['React', 'Performance'], { remove: 'performance' }), ['React']);
+  assert.deepEqual(editTags(['A', 'B'], { remove: 'missing' }), ['A', 'B']);
+  const many = Array.from({ length: 12 }, (_, index) => `tag-${index}`);
+  assert.equal(editTags(many, { remove: 'missing' }).length, 10);
+  assert.deepEqual(editTags(['  ', null, 'Keep'], { renameFrom: 'none', renameTo: 'x' }), ['Keep']);
+});

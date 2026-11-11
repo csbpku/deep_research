@@ -251,6 +251,15 @@ if (typeof document !== 'undefined') {
 export function ReaderThemeProvider({ children }: { children: React.ReactNode }) {
   const [mode, setMode] = React.useState<ReaderColorScheme>(() => resolveColorScheme('system', systemPrefersDark()));
 
+  React.useLayoutEffect(() => {
+    // A theme change re-renders MUI controls and restores their authored class
+    // names. Preserve the controller's visibility decisions after that commit.
+    document.querySelectorAll<HTMLElement>('[data-reader-visible]').forEach(node => {
+      node.classList.toggle('hidden', node.dataset.readerVisible !== 'true');
+    });
+    window.dispatchEvent(new CustomEvent('reader:theme-changed'));
+  }, [mode]);
+
   React.useEffect(() => {
     let preference: ReaderColorSchemePreference = 'system';
     const apply = () => {

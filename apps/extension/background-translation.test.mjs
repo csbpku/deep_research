@@ -136,3 +136,96 @@ test('the demo exception does not grant activation to other extension pages', as
   }
   assert.equal(worker.sent.length, 0);
 });
+
+test('the worker paints each image before the next one completes, retaining progress and failures', async () => {
+  let release;
+  const tail = new Promise(resolve => { release = resolve; });
+  const worker = createBackgroundHarness({
+    translateImage: async (_provider, _document, image) => {
+      if (image.id === 'second') { await tail; throw new Error('unreadable'); }
+      return { ...image, regions: [], fallbackText: '第一张图片译文' };
+    },
+  });
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'images', tabId: 1,
+    context: { ...context(), blocks: [], images: [{ id: 'first' }, { id: 'second' }] },
+  });
+  try {
+    await waitFor(() => worker.sent.find(item => item.message.type === 'deep-research:apply-image-translations'));
+    const paints = worker.sent.filter(item => item.message.type === 'deep-research:apply-image-translations');
+    assert.equal(paints.length, 1);
+    assert.deepEqual(Array.from(paints[0].message.translations, item => item.id), ['first']);
+    assert.equal(paints[0].message.documentUrl, context().url);
+    const running = await readerStore.getJob('images');
+    assert.equal(running.status, 'running');
+  } finally { release(); }
+  const job = await waitFor(async () => { const job = await readerStore.getJob('images'); return job?.status === 'completed_with_errors' && job; });
+  assert.equal(job.imageDone, 2);
+  assert.deepEqual(job.failedItems.map(item => item.id), ['second']);
+  assert.equal(worker.sent.filter(item => item.message.type === 'deep-research:apply-image-translations').length, 1);
+});
+
+test('cancelling an image translation does not paint a late result or start the next image', async () => {
+  let release;
+  const tail = new Promise(resolve => { release = resolve; });
+  const started = [];
+  const worker = createBackgroundHarness({
+    translateImage: async (_provider, _document, image) => {
+      started.push(image.id);
+      await tail;
+      return { ...image, fallbackText: 'Late image translation' };
+    },
+  });
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'cancel-images', tabId: 1,
+    context: { ...context(), blocks: [], images: [{ id: 'first' }, { id: 'second' }] },
+  });
+  await waitFor(() => started.length === 1);
+  await worker.dispatch({ type: 'deep-research:translation-cancel', jobId: 'cancel-images' });
+  release();
+  await waitFor(async () => (await readerStore.getJob('cancel-images'))?.status === 'cancelled');
+  assert.deepEqual(started, ['first']);
+  assert.equal(worker.sent.filter(item => item.message.type === 'deep-research:apply-image-translations').length, 0);
+});
+
+test('worker records translation usage only after the job completes', async () => {
+  globalThis.fetch = async () => completion();
+  const worker = createBackgroundHarness();
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'usage-complete', tabId: 1, context: context() });
+  await waitFor(async () => (await readerStore.getJob('usage-complete'))?.status === 'completed', 3000);
+  const usage = await waitFor(() => worker.chrome.storage.local.values.readerUsage, 3000);
+  assert.equal(usage.totals.translation.requests, 1);
+  assert.ok(usage.totals.translation.chars > 0);
+  assert.ok(usage.totals.translation.tokens > 0);
+});
+
+test('worker records usage for an image-only translation', async () => {
+  const image = { id: 'img-1', src: 'https://example.test/diagram.png', dataUrl: 'data:image/png;base64,AAAA', width: 320, height: 160, alt: 'diagram' };
+  const worker = createBackgroundHarness({
+    translateImage: async (_provider, _document, item) => ({ ...item, regions: [], fallbackText: '图示', confidence: 1 }),
+  });
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'usage-image', tabId: 1, context: { ...context('v-image'), blocks: [], images: [image] } });
+  await waitFor(async () => (await readerStore.getJob('usage-image'))?.status === 'completed', 3000);
+  const usage = await waitFor(() => worker.chrome.storage.local.values.readerUsage, 3000);
+  assert.equal(usage.totals.translation.requests, 1);
+});
+
+test('worker does not record usage for a cancelled translation', async () => {
+  globalThis.fetch = async (_url, options) => {
+    return new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    });
+  };
+  const worker = createBackgroundHarness();
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'usage-cancel', tabId: 1, context: context() });
+  await waitFor(async () => (await readerStore.getJob('usage-cancel'))?.status === 'running', 3000);
+  await worker.dispatch({ type: 'deep-research:translation-cancel', jobId: 'usage-cancel' });
+  await waitFor(async () => (await readerStore.getJob('usage-cancel'))?.status === 'cancelled', 3000);
+  assert.equal(worker.chrome.storage.local.values.readerUsage, undefined);
+});
+
+test('worker does not record usage when the job fails before translating', async () => {
+  await readerStore.setSetting('provider', null);
+  const worker = createBackgroundHarness();
+  await worker.dispatch({ type: 'deep-research:translation-start', jobId: 'usage-fail', tabId: 1, context: context() });
+  await waitFor(async () => (await readerStore.getJob('usage-fail'))?.status === 'failed', 5000);
+  assert.equal(worker.chrome.storage.local.values.readerUsage, undefined);
+});

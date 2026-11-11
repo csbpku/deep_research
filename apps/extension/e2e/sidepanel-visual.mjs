@@ -415,20 +415,27 @@ try {
 
   await panel.setViewportSize({ width: 320, height: 820 });
   await panel.locator('#open-history-header').click();
-  await panel.waitForURL(`chrome-extension://${extensionId}/reading-history.html?surface=sidepanel`);
-  await panel.screenshot({ path: tempPath('deep-research-reader-history-320.png'), fullPage: true });
-  const history320 = await layoutReport(panel, 'history-320');
-  const historyBackTop = await panel.locator('#close-history').evaluate((element) => element.getBoundingClientRect().top);
+  await panel.locator('#history-overlay').waitFor({ state: 'visible' });
+  // The embedded overlay hides the masthead, so the standalone page remains
+  // the surface for header and keyboard-order checks.
+  const historyTabPromise = context.waitForEvent('page');
+  await panel.locator('#history-open-tab').click();
+  const history = await historyTabPromise;
+  await history.waitForLoadState('load');
+  await history.setViewportSize({ width: 320, height: 820 });
+  await history.screenshot({ path: tempPath('deep-research-reader-history-320.png'), fullPage: true });
+  const history320 = await layoutReport(history, 'history-320');
+  const historyBackTop = await history.locator('#close-history').evaluate((element) => element.getBoundingClientRect().top);
   if (historyBackTop > 100) throw new Error('history back action is not in the header');
-  const historyActionHeights = await panel.locator('.history-header-actions button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+  const historyActionHeights = await history.locator('.history-header-actions button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
   if (historyActionHeights.some((height) => height > 42)) throw new Error(`history header actions wrap at 320px: ${historyActionHeights}`);
-  const historyCardActionHeights = await panel.locator('.history-card-actions button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+  const historyCardActionHeights = await history.locator('.history-card-actions button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
   if (historyCardActionHeights.length === 0 || historyCardActionHeights.some((height) => height < 32)) {
     throw new Error(`history card actions are missing or have undersized hit areas: ${historyCardActionHeights}`);
   }
-  await panel.locator('body').evaluate((element) => { element.tabIndex = -1; element.focus(); });
-  await panel.keyboard.press('Tab');
-  const firstHistoryFocus = await panel.evaluate(() => ({
+  await history.locator('body').evaluate((element) => { element.tabIndex = -1; element.focus(); });
+  await history.keyboard.press('Tab');
+  const firstHistoryFocus = await history.evaluate(() => ({
     id: document.activeElement?.id,
     outlineStyle: getComputedStyle(document.activeElement).outlineStyle,
     outlineWidth: getComputedStyle(document.activeElement).outlineWidth,
@@ -436,12 +443,13 @@ try {
   if (firstHistoryFocus.id !== 'close-history' || firstHistoryFocus.outlineStyle === 'none' || parseFloat(firstHistoryFocus.outlineWidth) < 2) {
     throw new Error(`history keyboard focus is not visible on the first action: ${JSON.stringify(firstHistoryFocus)}`);
   }
-  await panel.keyboard.press('Tab');
-  if (await panel.evaluate(() => document.activeElement?.id) !== 'history-library') {
+  await history.keyboard.press('Tab');
+  if (await history.evaluate(() => document.activeElement?.id) !== 'history-library') {
     throw new Error('history header keyboard order does not follow the visual order');
   }
-  await panel.locator('#close-history').click();
-  await panel.waitForURL(url => url.pathname === '/sidepanel.html');
+  await history.close();
+  await panel.locator('#close-history-overlay').click();
+  await panel.locator('#history-overlay').waitFor({ state: 'hidden' });
 
   // Localized scope controls used to squeeze the model name down to a few
   // pixels at 320px. Exercise the actual selection state in both languages.

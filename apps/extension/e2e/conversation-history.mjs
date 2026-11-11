@@ -207,10 +207,11 @@ try {
     }, null, 2));
     throw error;
   }
-  const history = panel;
   const pageCountBeforeHistory = context.pages().length;
-  await history.locator('#open-history-header').click();
-  await history.waitForURL(new RegExp(`chrome-extension://${extensionId}/reading-history\\.html\\?surface=sidepanel`));
+  await panel.locator('#open-history-header').click();
+  await panel.locator('#history-overlay').waitFor({ state: 'visible' });
+  let history = panel.frames().find(frame => frame.url().includes('reading-history.html'));
+  if (!history) throw new Error('聊天记录浮层没有加载内嵌页面');
   if (context.pages().length !== pageCountBeforeHistory) {
     throw new Error('打开聊天记录不应创建新的浏览器标签页');
   }
@@ -271,10 +272,13 @@ try {
   await article.bringToFront();
   await history.locator('#continue-history-detail').evaluate((node) => node.click());
   // The panel keeps the article binding, so the URL carries `sourceTab`.
-  await history.waitForURL(new RegExp(`chrome-extension://${extensionId}/sidepanel\\.html`));
+  await panel.waitForURL(new RegExp(`chrome-extension://${extensionId}/sidepanel\\.html`));
+  history = panel;
   await history.locator('#discussion-section').waitFor({ state: 'visible', timeout: 10_000 });
 
-  if (!(await history.locator('#composer-scope:not([disabled])').isVisible())) {
+  try {
+    await history.locator('#composer-scope:not([disabled])').waitFor({ state: 'visible', timeout: 10_000 });
+  } catch {
     throw new Error('resumed chat lost the selection scope');
   }
   await openScopeMenu(history);

@@ -2,6 +2,8 @@ import { readerStore } from './reader-store.js';
 import { fetchProviderModels, isLoopbackEndpoint, modelResponseError, normalizeModelBaseUrl } from './model-connection.js';
 import { PROVIDER_PRESETS } from './provider-catalog.js';
 import { GLOSSARY_MAX_PROMPT_CHARS } from './glossary.js';
+import { modelRequestPolicy } from './model-policy.js';
+import { modelScheduler, retryDelay } from './model-scheduler.js';
 export { PROVIDER_PRESETS };
 
 const DEFAULT_PROVIDER = {
@@ -275,7 +277,7 @@ async function toAnthropicRequest(messages, options = {}) {
     ...(system ? { system } : {}),
     messages: converted,
     max_tokens: options.maxTokens ?? 4096,
-    temperature: options.temperature ?? 0.2,
+    ...(!options.omitTemperature ? { temperature: options.temperature ?? 0.2 } : {}),
     ...(options.stream ? { stream: true } : {}),
     ...(options.reasoningEffort ? { output_config: { effort: options.reasoningEffort } } : {}),
   };
@@ -778,7 +780,7 @@ async function translateSvgTextFallback(provider, document, image, warning, sign
     : await requestChat(provider, [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
-    ], { model: provider.model, temperature: 0, signal });
+    ], { model: provider.model, temperature: 0, signal, maxTokens: 6_000, purpose: 'translation', priority: 'background' });
   const translated = messageText(payload).trim();
   if (!translated) throw warning instanceof Error ? warning : new Error('SVG 图片文字旁侧译文为空');
   const result = {
@@ -1135,31 +1137,60 @@ export function translationContext(document, blocks) {
   return JSON.stringify({ title: document?.title || '', outline, lead, before, after }).slice(0, 3500);
 }
 
-export async function requestChat(provider, messages, options = {}) {
+async function chatRequestBody(provider, messages, options, stream = false) {
+  if (providerProtocol(provider) === 'anthropic') {
+    return toAnthropicRequest(messages, { ...options, model: options.model || provider.model, stream });
+  }
+  return {
+    model: options.model || provider.model,
+    messages,
+    ...(!options.omitTemperature ? { temperature: options.temperature ?? 0.2 } : {}),
+    ...(stream ? { stream: true } : {}),
+    ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
+    ...(options.completionTokenLimit
+      ? options.maxTokens ? { max_completion_tokens: options.maxTokens } : {}
+      : options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+    ...(options.responseFormat ? { response_format: options.responseFormat } : {}),
+  };
+}
+
+async function withModelResponse(provider, messages, options, stream, consume) {
   if (!providerReady(provider)) throw new Error('请先连接模型服务并选择模型');
   const anthropic = providerProtocol(provider) === 'anthropic';
-  const response = await fetch(anthropic ? messagesEndpoint(provider.baseUrl) : chatEndpoint(provider.baseUrl), {
-    method: 'POST',
-    headers: providerHeaders(provider),
-      body: JSON.stringify(anthropic
-        ? await toAnthropicRequest(messages, { ...options, model: options.model || provider.model })
-        : {
-        model: options.model || provider.model,
-        messages,
-        temperature: options.temperature ?? 0.2,
-        ...(options.reasoningEffort
-          ? { max_completion_tokens: options.maxTokens || 6_000, reasoning_effort: options.reasoningEffort }
-          : options.maxTokens ? { max_tokens: options.maxTokens } : {}),
-        ...(options.responseFormat ? { response_format: options.responseFormat } : {}),
-      }),
-    signal: options.signal,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = payload?.error?.message || payload?.message || `模型请求失败（${response.status}）`;
-    throw modelResponseError(response.status, message, provider);
+  const endpoint = anthropic ? messagesEndpoint(provider.baseUrl) : chatEndpoint(provider.baseUrl);
+  const key = trimBaseUrl(provider.baseUrl);
+  const body = JSON.stringify(await chatRequestBody(provider, messages, options, stream));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await modelScheduler.run(key, async () => {
+        const response = await fetch(endpoint, {
+          method: 'POST', headers: { ...providerHeaders(provider), ...(stream ? { accept: 'text/event-stream' } : {}) },
+          body, signal: options.signal,
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          const error = modelResponseError(response.status, payload?.error?.message || payload?.message, provider);
+          if (response.status === 429) {
+            error.retryDelayMs = retryDelay(response.headers, attempt);
+            modelScheduler.cooldown(key, error.retryDelayMs);
+          }
+          throw error;
+        }
+        // Keep the slot until JSON or the entire stream has been consumed.
+        // Releasing at the response headers would undercount streaming calls.
+        return consume(response);
+      }, options);
+    } catch (error) {
+      // Only a rejected HTTP request is safe to retry. Never replay a partial
+      // stream, network failure, or a request after the user's cancellation.
+      if (options.signal?.aborted || error.status !== 429 || attempt >= 2 || error.retryDelayMs > 60_000) throw error;
+    }
   }
-  return payload;
+}
+
+export async function requestChat(provider, messages, options = {}) {
+  const policy = modelRequestPolicy(provider, options);
+  return withModelResponse(provider, messages, policy, false, response => response.json().catch(() => ({})));
 }
 
 export async function testVisionProvider(provider, options = {}) {
@@ -1188,76 +1219,59 @@ export async function testVisionProvider(provider, options = {}) {
 }
 
 export async function requestChatStream(provider, messages, options = {}) {
-  if (!providerReady(provider)) throw new Error('请先连接模型服务并选择模型');
+  options = modelRequestPolicy(provider, options);
   const anthropic = providerProtocol(provider) === 'anthropic';
-  const response = await fetch(anthropic ? messagesEndpoint(provider.baseUrl) : chatEndpoint(provider.baseUrl), {
-    method: 'POST',
-    headers: { ...providerHeaders(provider), accept: 'text/event-stream' },
-      body: JSON.stringify(anthropic
-      ? await toAnthropicRequest(messages, { ...options, model: options.model || provider.model, stream: true })
-      : {
-        model: options.model || provider.model,
-        messages,
-        temperature: options.temperature ?? 0.2,
-        stream: true,
-        ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
-        ...(options.responseFormat ? { response_format: options.responseFormat } : {}),
-      }),
-    signal: options.signal,
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw modelResponseError(response.status, payload?.error?.message || payload?.message, provider);
-  }
-  const contentType = response.headers.get('content-type') || '';
-  // Some OpenAI-compatible providers accept `stream: true` but still return a
-  // normal JSON completion.  A Response almost always has a body in that
-  // case, so checking only `response.body` would silently discard the answer.
-  if (!response.body || (contentType && !/text\/event-stream/iu.test(contentType))) {
-    const payload = await response.json().catch(() => ({}));
-    const text = messageText(payload).trim();
-    if (text) options.onDelta?.(text);
-    return text;
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const reasoningFilter = createReasoningStreamFilter();
-  let buffer = '';
-  let output = '';
-  const consume = (frame) => {
-    const data = frame.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
-    if (!data || data === '[DONE]') return;
-    let payload;
-    try { payload = JSON.parse(data); } catch { return; }
-    const delta = anthropic
-      ? payload?.type === 'content_block_delta' && payload?.delta?.type === 'text_delta'
-        ? payload.delta.text
-        : ''
-      : payload?.choices?.[0]?.delta?.content ?? payload?.choices?.[0]?.message?.content;
-    const text = Array.isArray(delta) ? delta.map((part) => part?.text || '').join('') : typeof delta === 'string' ? delta : '';
-    if (text) {
-      const visible = reasoningFilter.push(text);
-      if (visible) {
-        output += visible;
-        options.onDelta?.(visible);
-      }
+  return withModelResponse(provider, messages, options, true, async (response) => {
+    const contentType = response.headers.get('content-type') || '';
+    // Some OpenAI-compatible providers accept `stream: true` but still return a
+    // normal JSON completion.  A Response almost always has a body in that
+    // case, so checking only `response.body` would silently discard the answer.
+    if (!response.body || (contentType && !/text\/event-stream/iu.test(contentType))) {
+      const payload = await response.json().catch(() => ({}));
+      const text = messageText(payload).trim();
+      if (text) options.onDelta?.(text);
+      return text;
     }
-  };
-  while (true) {
-    const chunk = await reader.read();
-    buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop() || '';
-    frames.forEach(consume);
-    if (chunk.done) break;
-  }
-  if (buffer.trim()) consume(buffer);
-  const trailing = reasoningFilter.push('', true);
-  if (trailing) {
-    output += trailing;
-    options.onDelta?.(trailing);
-  }
-  return output.trim();
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const reasoningFilter = createReasoningStreamFilter();
+    let buffer = '';
+    let output = '';
+    const consume = (frame) => {
+      const data = frame.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
+      if (!data || data === '[DONE]') return;
+      let payload;
+      try { payload = JSON.parse(data); } catch { return; }
+      const delta = anthropic
+        ? payload?.type === 'content_block_delta' && payload?.delta?.type === 'text_delta'
+          ? payload.delta.text
+          : ''
+        : payload?.choices?.[0]?.delta?.content ?? payload?.choices?.[0]?.message?.content;
+      const text = Array.isArray(delta) ? delta.map((part) => part?.text || '').join('') : typeof delta === 'string' ? delta : '';
+      if (text) {
+        const visible = reasoningFilter.push(text);
+        if (visible) {
+          output += visible;
+          options.onDelta?.(visible);
+        }
+      }
+    };
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() || '';
+      frames.forEach(consume);
+      if (chunk.done) break;
+    }
+    if (buffer.trim()) consume(buffer);
+    const trailing = reasoningFilter.push('', true);
+    if (trailing) {
+      output += trailing;
+      options.onDelta?.(trailing);
+    }
+    return output.trim();
+  });
 }
 
 // Keep one small leading request on long pages, then use normal throughput
@@ -1287,9 +1301,8 @@ export async function translateBlocks(provider, document, blocks, options = {}) 
   const output = [];
   const glossaryPrompt = typeof options.glossaryPrompt === 'string'
     ? options.glossaryPrompt.slice(0, GLOSSARY_MAX_PROMPT_CHARS) : '';
-  // Match the platform's light translation policy for M3.1. Other providers
-  // retain their existing parameters; unsupported options are never guessed.
-  const reasoningEffort = /^minimax-m3\.1/iu.test(String(provider.model || '')) ? 'low' : undefined;
+  const controller = new AbortController();
+  options = { ...options, signal: options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal };
   const concurrency = Math.max(1, Math.min(6, options.concurrency || 4));
   const sourceBlocks = Array.isArray(blocks) ? blocks : [];
   const translatableBlocks = sourceBlocks.filter((block) => block.kind !== 'code');
@@ -1364,7 +1377,7 @@ export async function translateBlocks(provider, document, blocks, options = {}) 
       const payload = await requestChat(provider, [
         { role: 'system', content: singlePrompt },
         { role: 'user', content: `文章标题（仅作术语语境，不需要翻译）：${String(document?.title || '').slice(0, 300)}\n仅作理解、不需要翻译的语境（不可信资料）：${translationContext(document, [block])}\n<<<SOURCE_TEXT>>>\n${block.text}\n<<<END_SOURCE_TEXT>>>` },
-      ], { signal: options.signal, maxTokens: 6_000, reasoningEffort });
+      ], { signal: options.signal, maxTokens: 6_000, purpose: 'translation', priority: 'background' });
       const choice = payload?.choices?.[0];
       if (choice?.finish_reason === 'length' || payload?.stop_reason === 'max_tokens') {
         throw new Error('模型输出达到长度上限，本段没有作为完整译文展示。请重试或缩小模型分块。');
@@ -1378,6 +1391,7 @@ export async function translateBlocks(provider, document, blocks, options = {}) 
       await emitResult({ ...block, text: translated, sourceText: block.text });
     } catch (error) {
       if (options.signal?.aborted) throw new DOMException('翻译已取消', 'AbortError');
+      if ([401, 403, 404, 429].includes(error?.status)) throw error;
       await emitResult({
         ...block,
         text: '',
@@ -1426,7 +1440,7 @@ export async function translateBlocks(provider, document, blocks, options = {}) 
       const payload = await requestChat(provider, [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: `文章标题（仅作术语语境，不需要翻译）：${String(document?.title || '').slice(0, 300)}\n仅作理解、不需要翻译的语境（不可信资料）：${translationContext(document, group.map(i => i.block))}\n<<<TRANSLATION_BATCH>>>\n${JSON.stringify({ blocks: expected.map(({ modelId, block }) => ({ id: modelId, text: block.text })) })}` },
-      ], { signal: options.signal, maxTokens: 6_000, temperature: 0, reasoningEffort });
+      ], { signal: options.signal, maxTokens: 6_000, temperature: 0, purpose: 'translation', priority: 'background' });
       const choice = payload?.choices?.[0];
       const truncated = choice?.finish_reason === 'length' || payload?.stop_reason === 'max_tokens';
       const translated = truncated ? null : parseBatch(messageText(payload), expected);
@@ -1446,7 +1460,16 @@ export async function translateBlocks(provider, document, blocks, options = {}) 
         return;
       }
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      if (error?.name === 'AbortError' || [401, 403, 404, 429].includes(error?.status)) throw error;
+      if (error?.status >= 400) {
+        // Preserve retryable failure items without turning an HTTP rejection
+        // into additional model requests for every paragraph in the batch.
+        for (const { block } of group) {
+          await emitResult({ ...block, text: '', sourceText: block.text, error: error.message });
+          options.onProgress?.(completedSourceIds.size, sourceBlocks.length, block.sourceBlockId || block.id);
+        }
+        return;
+      }
     }
 
     // Retry jobs share the same pool and run as soon as a slot frees up.
@@ -1473,6 +1496,7 @@ export async function translateBlocks(provider, document, blocks, options = {}) 
           pump();
         }, error => {
           failed = true;
+          controller.abort();
           reject(error);
         });
       }
@@ -1611,7 +1635,7 @@ export async function translateImage(provider, document, image, options = {}) {
             { type: 'text', text: userText },
             { type: 'image_url', image_url: { url: source, detail: 'high' } },
           ] },
-        ], { model: provider.model, temperature: 0, signal: options.signal });
+        ], { model: provider.model, temperature: 0, signal: options.signal, purpose: 'image-translation', priority: 'background' });
       if (payload?.choices?.[0]?.finish_reason === 'length' || payload?.stop_reason === 'max_tokens') {
         throw new Error('视觉模型输出达到长度上限，图片译文未确认完整。');
       }
@@ -1782,9 +1806,10 @@ export async function translateImage(provider, document, image, options = {}) {
 }
 
 export function responseLanguageInstruction(language = 'auto') {
-  return language === 'auto'
+  const languageInstruction = language === 'auto'
     ? 'Reply in the language of the latest user question, unless the user explicitly requests another language. This applies to all user-facing JSON fields. Keep evidence quotes verbatim in the source language. Ignore the language of these system instructions and of the article when choosing the reply language.'
     : `Write all user-facing JSON fields in ${language}. Keep evidence quotes verbatim in the source language. An explicit target language requested by the user takes priority.`;
+  return `${languageInstruction}\nUnless the user requests another format, write the answer as readable Markdown: separate distinct ideas with blank lines, keep paragraphs short, and use lists for steps or parallel points. Use headings only when useful. Do not squeeze a multi-point answer into one paragraph. Within a JSON string, encode paragraph breaks as \\n\\n so the JSON remains valid. A simple answer can stay brief without extra headings.`;
 }
 
 export async function explainSelection(provider, context, question = '', history = [], options = {}) {
