@@ -126,6 +126,8 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
       if (!(await details.evaluate((el) => (el as HTMLDetailsElement).open))) {
         await details.locator('summary').first().click();
       }
+      await expect(details).toHaveJSProperty('open', true);
+      await expect(chat).toContainText('我会围绕');
     };
     const assertOrder = async () => {
       await expandThread();

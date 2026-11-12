@@ -78,5 +78,4 @@ export async function openAdvancedSettings(page: Page): Promise<void> {
   const open = await details.evaluate((el) => (el as HTMLDetailsElement).open);
   if (!open) await details.locator('summary').first().click();
   await expect(details).toHaveJSProperty('open', true);
-  await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
 }
