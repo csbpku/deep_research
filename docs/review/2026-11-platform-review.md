@@ -525,12 +525,12 @@
 
 **结果页重排（P0-8）**：`apps/web/src/app/researches/[id]/page.tsx` 顺序改为 结论 → 背景 → 风险 → 正文 → 来源与证据 → 团队讨论；披露明细、修改历史、元数据收进页尾唯一 `details#review-audit`。新增 `page.test.ts` 2 例；真实详情页 h2 顺序与唯一 `details` 已核对。
 
-**启动预检（P0-14）**：引擎新增 `GET /health/preflight`（内部 token、60s 缓存、`force=true`），检查 adapter、`RESEARCH_LLM` / `UTILITY_LLM` 槽位与凭据、Tavily 配置，并对研究路线做 8 token / 4s 有界探测；错误信息脱敏。Web BFF `apps/web/src/app/api/ai-research/preflight/route.ts` 做 6s 代理；对话页在方案就绪后检查。只有引擎返回结构化 `ok:false` 才禁用「开始研究」并列出缺失项；引擎不可达、BFF 超时或响应不完整都降级为 `status` 级提示（不占用 `role=alert`），仍可开始并「重新检查」。健康环境实测 `ok:true`、5 项全过，页面不出现阻断 Alert，开始按钮可用。
+**启动预检（P0-14）**：引擎新增 `GET /health/preflight`（内部 token、60s 缓存、`force=true`），检查 adapter、`RESEARCH_LLM` / `UTILITY_LLM` 槽位与凭据、Tavily 配置，并对研究路线做 8 token / 4s 有界探测；错误信息脱敏。Web BFF `apps/web/src/app/api/ai-research/preflight/route.ts` 做 6s 代理；对话页在方案就绪后检查。只有引擎返回结构化 `ok:false` 才禁用「开始研究」并列出缺失项；引擎不可达、BFF 超时或响应不完整都降级为 `status` 级提示（不占用 `role=alert`），仍可开始并「重新检查」。fake adapter 下模型槽位直接视为可用（CI/E2E 不带 provider key）。健康环境实测 `ok:true`、5 项全过，页面不出现阻断 Alert，开始按钮可用。
 
 ### 12.2 验证
 
 - `pnpm --dir apps/web test`：1,433 passed / 2 skipped；`tsc`、`pnpm --dir apps/web build` 通过；`e2e/mui-radar.spec.ts` 26 例、`e2e/mui-domain.spec.ts` 2 例通过。
-- Python：`tests/test_preflight.py` 8 例、`tests/test_server_endpoints.py` 等 46 passed；ruff、mypy 通过。
+- Python：`tests/test_preflight.py` 9 例、`tests/test_server_endpoints.py` 32 例等 47 passed；ruff、mypy 通过。
 - 浏览器：`/radar` 默认非空；未审核精读详情 `surface=content` 返回 `body:null`；已发布详情导出文件内容与页面一致。
 
 ### 12.3 仍未做（按建议顺序）
@@ -540,3 +540,12 @@
 3. **P0-4 的排序回写**：四态已能记录，但尚未改变雷达排序权重。
 
 第 7 节「结果 → 发布率 4%」是改造前口径；带披露发布与批量处置上线后该数字已不代表现状，下一轮应基于新事件重算，不再引用旧值。
+
+### 12.4 Playwright 预检回归（2026-11-12）
+
+预检上线后全量 E2E 连续红了三次，最终定位到两个独立问题：
+
+1. 页面级 `**/api/**` mock 让预检返回 `{}`，前端把「无法判断」当成「配置错误」，开始按钮被禁用，AI 调研用例整片超时。改为只有引擎明确返回 `ok:false` 才阻断，异常/空响应降级为 `role=status` 提示。
+2. Playwright job 的 AI engine 使用 fake adapter 且不带 provider key，预检仍要求 `MINIMAX_API_KEY`，真实数据库的 AI 调研用例同样卡在禁用的开始按钮。改为 fake adapter 直接判定模型槽位可用。
+
+另外套件本身已超过旧的 10 分钟 step 预算，调到 14 分钟。修复后 CI run `43141750438` 七个 job 全绿；本地用 64 位 E2E token + `deep_research_e2e` 库复现 `ai-research-flows.spec.ts:202` 通过。
