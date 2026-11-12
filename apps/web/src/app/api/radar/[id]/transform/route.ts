@@ -12,7 +12,7 @@ import { toApiErrorResponse } from '@/lib/errors';
 import { getWebEnv } from '@/lib/env';
 import { withRequestId } from '@/lib/log';
 import { rateLimitKey } from '@/lib/net/client-ip';
-import { isRadarSummaryVisible } from '@/lib/radar/visibility';
+import { isRadarSummaryVisible, requiresRadarSummaryOnlyReading } from '@/lib/radar/visibility';
 import { RadarIdParam } from '@/lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
@@ -342,6 +342,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       enrichmentStatus: true,
       readerQualityStatus: true,
       contentReviewStatus: true,
+      renderReviewStatus: true,
       shareSource: { select: { status: true } },
     },
   });
@@ -353,7 +354,8 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       requestId,
     });
   }
-  if (summary.tags?.includes('external_reading')) {
+  if (summary.tags?.includes('external_reading')
+    || (user.role !== 'admin' && requiresRadarSummaryOnlyReading(summary))) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
       message: '该候选仅提供来源摘要初筛；请打开原文并使用 Reader 阅读或翻译。',

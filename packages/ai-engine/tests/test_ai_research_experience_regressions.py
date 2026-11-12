@@ -86,15 +86,25 @@ async def test_draft_review_uses_full_revision_hash_not_body_origin_hash() -> No
     import json
 
     assert json.loads(review[-1])["sourceSnapshotFormat"] == "canonical-v1"
-    assert review[3] == research_revision_hash(
-        {
-            "title": snapshot.topic,
-            "body": body,
-            "background": None,
-            "conclusion": None,
-            "risks": None,
-            "tags": [],
-        }
+    # Pre-filled summary fields are part of the reviewed snapshot; the hash
+    # must cover them or the run would look stale as soon as the draft exists.
+    from ai_engine.research_summary import derive_research_summary
+
+    summary = derive_research_summary(body)
+    # Empty suggestions are stored as NULL and hashed as null; the web side
+    # does the same.  Hashing "" here recreates the stale-review bug.
+    assert summary["risks"] == ""
+    expected_snapshot = {
+        "title": snapshot.topic,
+        "body": body,
+        "background": summary["background"] or None,
+        "conclusion": summary["conclusion"] or None,
+        "risks": None,
+        "tags": [],
+    }
+    assert review[3] == research_revision_hash(expected_snapshot)
+    assert review[3] != research_revision_hash(
+        {**expected_snapshot, "risks": ""}
     )
     assert review[3] != research_revision_hash({"title": "edited title", "body": body})
 

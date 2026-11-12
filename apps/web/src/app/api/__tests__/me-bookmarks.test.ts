@@ -82,6 +82,28 @@ beforeEach(() => {
 });
 
 describe('/api/me/bookmarks', () => {
+  it.each([
+    { contentReviewStatus: null, renderReviewStatus: null },
+    { contentReviewStatus: 'needs_manual_review', renderReviewStatus: 'approved' },
+  ])('can save and hydrate a readable summary-only radar bookmark: %j', async (review) => {
+    const summary = { id: TARGET_ID, title: 'Readable summary', ...VISIBLE_SUMMARY, ...review };
+    mocks.summaryFindUnique.mockResolvedValue(summary);
+    mocks.userBookmarkFindUnique.mockResolvedValue(null);
+    mocks.userBookmarkCreate.mockResolvedValue({ id: BOOKMARK_ID, createdAt: new Date() });
+    const created = await POST(new Request('http://localhost/api/me/bookmarks', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ targetType: 'radar_candidate', targetId: TARGET_ID }),
+    }) as never);
+    expect(created.status).toBe(201);
+    mocks.userBookmarkFindMany.mockResolvedValue([{
+      id: BOOKMARK_ID, targetType: 'radar_candidate', targetId: TARGET_ID, note: null, createdAt: new Date(),
+    }]);
+    mocks.summaryFindMany.mockResolvedValue([summary]);
+    const body = await (await GET(new Request('http://localhost/api/me/bookmarks') as never)).json();
+    expect(body.items[0]).toMatchObject({ title: 'Readable summary', available: true, href: `/radar/${TARGET_ID}` });
+    expect(mocks.summaryFindMany.mock.calls[0][0].select.renderReviewStatus).toBe(true);
+  });
+
   it('returns a readable title, type label and target link', async () => {
     mocks.userBookmarkFindMany.mockResolvedValue([{
       id: BOOKMARK_ID,

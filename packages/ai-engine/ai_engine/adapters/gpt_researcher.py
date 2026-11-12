@@ -56,6 +56,7 @@ from ai_engine.adapters.base import (
     ResearchRequest,
 )
 from ai_engine.contracts.errors import AdapterError
+from ai_engine.decision_memo import condense_to_decision_memo, is_valid_decision_memo
 from ai_engine.contracts.states import (
     AI_JOB_STATUS,
     AI_JOB_STEP,
@@ -4869,6 +4870,40 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             # citation/materialization boundary as the primary writer.
             report = _materialize_evidence_citations(report, sources)
             report = _clean_report_output(report, sources)
+            memo_accepted = False
+            if job.request.report_type == "decision_memo":
+                # Condense the report without another search. The resulting
+                # claims still cross the independent fact-review boundary.
+                memo_spec = resolve_spec(
+                    "utility", explicit=os.environ.get("REPORT_FALLBACK_LLM")
+                )
+                memo = await condense_to_decision_memo(
+                    topic=job.request.topic,
+                    report=report,
+                    sources=[
+                        {
+                            "title": source.title,
+                            "url": str((source.source_ref or {}).get("value") or ""),
+                        }
+                        for source in _captured_sources(sources)
+                    ],
+                    request_id=job.request.request_id,
+                    llm_spec=memo_spec,
+                )
+                if memo:
+                    # The converter is a second writer. Use the same captured
+                    # source namespace and citation boundary as the report,
+                    # then replace atomically only when all sections survive.
+                    memo = _materialize_evidence_citations(memo, sources)
+                    memo = _clean_report_output(memo, sources)
+                    memo_accepted = is_valid_decision_memo(memo)
+                    if memo_accepted:
+                        report = memo
+                if not memo_accepted:
+                    logger.warning(
+                        "ai-engine.decision_memo.fallback_to_report",
+                        extra={"request_id": job.request.request_id},
+                    )
             # A fallback writer can still return a bibliography-only response
             # (for example when its provider times out after emitting links).
             # Make the publication boundary deterministic: a successful
@@ -4879,7 +4914,8 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             # useful, inspectable checkpoint, but it is not a reader-facing
             # answer and must therefore never cross the successful-publication
             # boundary.
-            reader_usable_report = _report_has_narrative(report)
+            # A complete memo can be shorter than the full-report prose floor.
+            reader_usable_report = memo_accepted or _report_has_narrative(report)
             if not reader_usable_report:
                 report = _evidence_digest_report(job.request.topic, sources)
                 # A source digest is a recovery checkpoint, not a report. Do
@@ -4944,11 +4980,12 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                         ),
                     }
                 )
-            report = _append_run_audit(
-                report,
-                audit_progress,
-                None,
-            )
+            if job.request.report_type != "decision_memo":
+                report = _append_run_audit(
+                    report,
+                    audit_progress,
+                    None,
+                )
             report = _append_references(report, sources)
 
             async with job.lock:

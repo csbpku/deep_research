@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { loginWithCredentials, openAdvancedSettings } from './fixtures';
 
 const conversationId = 'f0500000-0000-4000-8000-000000000001';
 const question = '比较 Playwright 和 Cypress 的工程取舍';
@@ -34,10 +35,11 @@ for (const mode of ['light', 'dark'] as const) {
     await page.goto('/ai-research');
     await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
     await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
+    await openAdvancedSettings(page);
     await expect(page.getByRole('textbox', { name: '重点回答' })).toHaveValue('适用边界与工程代价');
     const output = page.getByRole('radiogroup', { name: '交付什么', exact: true });
-    await expect(output.getByRole('radio')).toHaveCount(4);
-    await expect(output.getByRole('radio', { name: /^研究稿/ })).toBeChecked();
+    await expect(output.getByRole('radio')).toHaveCount(5);
+    await expect(output.getByRole('radio', { name: /^决策备忘/ })).toBeChecked();
     await output.getByRole('radio', { name: /网页简报/ }).check();
     await expect(page.getByRole('region', { name: '启动配置摘要', exact: true })).toContainText('网页简报');
     const depth = page.getByRole('radiogroup', { name: '投入多少', exact: true });
@@ -56,12 +58,34 @@ for (const mode of ['light', 'dark'] as const) {
     await page.getByRole('checkbox', { name: '使用资料：Python任务实践笔记', exact: true }).check();
     await suggestions.click();
     await expect(page.getByRole('region', { name: '已选历史资料', exact: true })).toContainText('Python任务实践笔记');
+    // 计划刷新期间按钮会短暂禁用（禁用态配色不满足对比度要求），等它恢复后再审无障碍。
+    await expect(page.getByRole('button', { name: '开始调研', exact: true })).toBeEnabled();
     const issues = await new AxeBuilder({ page }).include('[aria-label="AI 调研对话"]').analyze();
     expect(issues.violations).toEqual([]);
     await output.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`research-plan-${mode}.png`), fullPage: true });
   });
 }
+
+test('advanced settings stay open when the pending plan finishes', async ({ page }) => {
+  await mockWorkspace(page);
+  let releasePlan!: () => void;
+  const pendingPlan = new Promise<void>(resolve => { releasePlan = resolve; });
+  await page.route('**/api/ai-research/plan', async route => {
+    await pendingPlan;
+    await route.fallback();
+  });
+  await page.goto('/ai-research');
+  await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
+  await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
+  await openAdvancedSettings(page);
+  await page.getByRole('radio', { name: /^仅使用已选资料/ }).check();
+  releasePlan();
+  await expect(page.getByRole('textbox', { name: '重点回答' })).toHaveValue('适用边界与工程代价');
+  await expect(page.locator('[data-testid="ai-research-advanced"]')).toHaveJSProperty('open', true);
+  await expect(page.getByRole('radio', { name: /^仅使用已选资料/ })).toBeVisible();
+  await expect(page.getByRole('radio', { name: /^仅使用已选资料/ })).toBeChecked();
+});
 
 for (const width of [320, 390, 768, 1024, 1440]) {
   test(`all initial messages and examples remain inside the card at ${width}px`, async ({ page }, testInfo) => {
@@ -79,10 +103,14 @@ for (const width of [320, 390, 768, 1024, 1440]) {
 
 
 test('edited output, effort, sources and focus survive refresh and late planning', async ({ page }) => {
+  // This case reloads the page, so it needs a real session cookie for SSR;
+  // the mocked /api/auth/session response only covers client fetches.
+  await loginWithCredentials(page.context().request, { email: 'member@e2e.local', role: 'member' });
   await mockWorkspace(page);
   await page.goto('/ai-research');
   await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
   await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
+  await openAdvancedSettings(page);
   const focus = page.getByRole('textbox', { name: '重点回答' });
   await expect(focus).toHaveValue('适用边界与工程代价');
   await page.getByRole('radio', { name: /^网页简报/ }).check();
@@ -93,6 +121,7 @@ test('edited output, effort, sources and focus survive refresh and late planning
   await focus.fill('保留我明确编辑的取消行为问题');
   await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('1 条已选资料');
   await page.reload();
+  await openAdvancedSettings(page);
   await expect(page.getByRole('textbox', { name: '重点回答' })).toHaveValue('保留我明确编辑的取消行为问题');
   await expect(page.getByRole('radio', { name: /^网页简报/ })).toBeChecked();
   await expect(page.getByRole('radio', { name: /^单轮研究/ })).toBeChecked();
@@ -113,7 +142,7 @@ test('message save failure never offers a research-submit retry', async ({ page 
   const composer = page.getByRole('textbox', { name: 'AI 调研对话输入' });
   await composer.fill(question);
   await composer.press('Control+Enter');
-  await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
+  await openAdvancedSettings(page);
   await composer.fill('补充官方证据要求');
   await composer.press('Control+Enter');
   await expect(page.getByRole('alert').filter({ hasText: '保存失败' })).toBeVisible();
@@ -132,7 +161,7 @@ test('uncertain submission prevents accidental duplicate jobs', async ({ page })
   await page.goto('/ai-research');
   await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
   await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
-  await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
+  await openAdvancedSettings(page);
   await page.getByRole('button', { name: '开始调研', exact: true }).click();
   await expect(page.getByRole('button', { name: '开始调研', exact: true })).toBeDisabled();
   await expect(page.getByRole('link', { name: /任务历史/ })).toBeVisible();
@@ -147,7 +176,7 @@ for (const width of [320, 390, 768, 1024, 1440]) {
     await page.goto('/ai-research');
     await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
     await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
-    await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
+    await openAdvancedSettings(page);
     await page.getByRole('radio', { name: /^仅使用已选资料/ }).check();
     await page.getByRole('textbox', { name: '添加网页资料（可选）', exact: true }).fill('https://docs.python.org/3/library/asyncio-task.html#asyncio.TaskGroup');
     await page.getByRole('button', { name: '添加网页资料', exact: true }).click();
@@ -179,7 +208,6 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await composer.focus();
   await page.keyboard.insertText(question);
   await page.keyboard.press('Control+Enter');
-  await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
   const tabTo = async (target: import('@playwright/test').Locator) => {
     for (let i = 0; i < 45; i++) {
       if (await target.evaluate(el => el === document.activeElement)) break;
@@ -187,6 +215,22 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
     }
     await expect(target).toBeFocused();
   };
+  const output = page.getByRole('radio', { name: /^决策备忘/ });
+  await tabTo(output);
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: /^完整报告/ })).toBeChecked();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: /^Slides 提纲/ })).toBeChecked();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: /^网页简报/ })).toBeChecked();
+  // 高级设置默认折叠：摘要本身是 Tab 停靠点，展开后其内部控件才进入焦点序列。
+  const advanced = page.locator('[data-testid="ai-research-advanced"] > summary').first();
+  await tabTo(advanced);
+  await expect(advanced).toHaveAccessibleName(/高级设置/);
+  await page.keyboard.press('Enter');
+  const advancedDetails = page.locator('[data-testid="ai-research-advanced"]');
+  await expect(advancedDetails).toHaveJSProperty('open', true);
+  await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
   const objective = page.getByRole('combobox', { name: '研究方式' });
   await tabTo(objective);
   await page.keyboard.press('Space');
@@ -200,13 +244,10 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await page.keyboard.insertText('仅核对异常传播与取消行为');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('textbox', { name: '对比对象' })).toBeFocused();
-  const output = page.getByRole('radio', { name: /^研究稿/ });
-  await tabTo(output);
+  // Single-round is the default now, so it owns the radio group's tab stop.
+  await tabTo(page.getByRole('radio', { name: /^单轮研究/ }));
   await page.keyboard.press('ArrowRight');
-  await expect(page.getByRole('radio', { name: /^Slides 提纲/ })).toBeChecked();
-  await page.keyboard.press('ArrowRight');
-  await expect(page.getByRole('radio', { name: /^网页简报/ })).toBeChecked();
-  await tabTo(page.getByRole('radio', { name: /^多轮研究/ }));
+  await expect(page.getByRole('radio', { name: /^多轮研究/ })).toBeChecked();
   await page.keyboard.press('ArrowLeft');
   await expect(page.getByRole('radio', { name: /^单轮研究/ })).toBeChecked();
   await tabTo(page.getByRole('radio', { name: /^网页搜索/ }));
@@ -226,7 +267,9 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await page.keyboard.press('Space');
   await expect(source).toBeChecked();
   await expect(page.getByRole('region', { name: '已选历史资料' })).toContainText('Python任务实践笔记');
-  await tabTo(page.getByRole('button', { name: '开始调研', exact: true }));
+  // Preflight temporarily disables the action, removing its Tab stop.
+  // Wait for it to become interactive before traversing the focus order.
   await expect(page.getByRole('button', { name: '开始调研', exact: true })).toBeEnabled();
+  await tabTo(page.getByRole('button', { name: '开始调研', exact: true }));
   await expect(focus).toHaveValue('仅核对异常传播与取消行为');
 });

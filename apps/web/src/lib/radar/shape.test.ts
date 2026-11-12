@@ -167,9 +167,9 @@ describe('matchesQuery', () => {
 });
 
 describe('RADAR_FEEDBACK_TYPES', () => {
-  it('contains all five types', () => {
+  it('contains legacy and judgment types', () => {
     expect([...RADAR_FEEDBACK_TYPES].sort()).toEqual(
-      ['favorite', 'inaccurate', 'suggest_research', 'used', 'useful'],
+      ['favorite', 'inaccurate', 'later', 'pilot', 'read', 'suggest_research', 'used', 'useful'],
     );
   });
 });
@@ -177,7 +177,10 @@ describe('RADAR_FEEDBACK_TYPES', () => {
 describe('emptyFeedbackCounts', () => {
   it('returns all zero', () => {
     const c = emptyFeedbackCounts();
-    expect(c).toEqual({ useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 });
+    expect(c).toEqual({
+      useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+      read: 0, later: 0, pilot: 0,
+    });
   });
 });
 
@@ -409,6 +412,7 @@ describe('shapeCandidate', () => {
           zread: { status: 'complete' },
           githubUpdates: { items: [{ title: 'legacy activity' }] },
         },
+        contentReviewStatus: 'approved',
       },
     });
 

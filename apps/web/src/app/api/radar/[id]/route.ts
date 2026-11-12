@@ -18,6 +18,7 @@ import { withRequestId } from '../../../../lib/log';
 import { RadarIdParam } from '../../../../lib/schemas';
 import { aggregateFeedbacks, shapeCandidate } from '../../../../lib/radar/shape';
 import { hasPublicRadarScore } from '../../../../lib/radar/score-validity';
+import { hasPublicRadarReview } from '../../../../lib/radar/visibility';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 type SourceOutlineItem = { heading: string; level: number };
@@ -196,11 +197,17 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
 
   const fb = isContentSurface
     ? {
-        counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
+        counts: {
+          useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+          read: 0, later: 0, pilot: 0,
+        },
         mine: [],
       }
     : (await aggregateFeedbacks(prisma, [summary.id], u?.id)).get(summary.id) ?? {
-    counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
+    counts: {
+          useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+          read: 0, later: 0, pilot: 0,
+        },
     mine: [],
   };
 
@@ -225,11 +232,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     isPublicAutomaticHighValue &&
     u?.role !== 'admin' &&
     !externalReading &&
-    !(
-      summary.enrichmentStatus === 'ready' &&
-      summary.readerQualityStatus === 'ready' &&
-      summary.contentReviewStatus === 'approved'
-    )
+    !hasPublicRadarReview(summary)
   ) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
@@ -238,10 +241,9 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  // External reading uses the source URL/Reader path, never a cached source
-  // snapshot. Keep historical payloads private even if the row was enriched
-  // before it acquired the external-reading contract.
-  const responseCandidate = tier === 'skim' || externalReading
+  // shapeCandidate redacts external/unreviewed cached content for every API
+  // surface. Skim keeps its historical outline-only reading contract here.
+  const responseCandidate = tier === 'skim'
     ? {
         ...shaped,
         body: null,

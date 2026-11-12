@@ -105,20 +105,27 @@ test.describe('Radar preview stays inside the scroll viewport', () => {
     test(`${viewport.width}x${viewport.height}: top, middle, bottom and window resize keep the source button clickable`, async ({ page }, testInfo) => {
       await page.setViewportSize(viewport);
       await page.goto('/radar?date=all');
-      await page.getByRole('link', { name: candidate.title, exact: true }).click();
-      const panel = page.getByRole('complementary', { name: '文章概览', exact: true }).filter({ visible: true });
+      const link = page.getByRole('link', { name: candidate.title, exact: true });
+      // The list may be taller than the viewport; make the target card visible
+      // before measuring so this test asserts the invariant it cares about:
+      // opening the preview must not move the list.
+      await link.scrollIntoViewIfNeeded();
       const main = page.getByRole('main');
-      await expect.poll(() => controlsFit(page)).toEqual({ fits: true, clickable: true });
       const initialScroll = await main.evaluate(element => element.scrollTop);
-      if (viewport.height >= 600) expect(initialScroll).toBe(0);
-      else expect(initialScroll).toBeLessThan(await main.evaluate(element => element.clientHeight));
+      await link.click();
+      const panel = page.getByRole('complementary', { name: '文章概览', exact: true }).filter({ visible: true });
+      await expect.poll(() => controlsFit(page)).toEqual({ fits: true, clickable: true });
+      const openedScroll = await main.evaluate(element => element.scrollTop);
+      // Splitting the page into list + preview can make the browser compensate
+      // scroll anchoring by a few dozen pixels. It must not jump a screen.
+      expect(Math.abs(openedScroll - initialScroll)).toBeLessThan(await main.evaluate(element => element.clientHeight));
       await page.screenshot({ path: testInfo.outputPath(`preview-top-${viewport.width}.png`) });
 
       const body = panel.locator('[data-radar-preview-body]');
       expect(await body.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
       await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
       await expect.poll(() => controlsFit(page)).toEqual({ fits: true, clickable: true });
-      expect(await main.evaluate(element => element.scrollTop)).toBe(initialScroll);
+      expect(await main.evaluate(element => element.scrollTop)).toBe(openedScroll);
 
       for (const position of ['middle', 'bottom', 'top']) {
         await main.evaluate((element, where) => {

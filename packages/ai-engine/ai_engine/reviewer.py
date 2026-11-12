@@ -7,6 +7,7 @@ unverified claim to ``verified``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -30,7 +31,7 @@ from ai_engine.fact_resolvers import (
     resolve_npm_package,
     resolve_pypi_package,
 )
-from ai_engine.llm.client import generate_text
+from ai_engine.llm.client import generate_text, is_quota_error, is_quota_exhausted_error
 from ai_engine.llm.token_budget import (
     TokenBudgetExceeded,
     TokenBudgetUnavailable,
@@ -809,6 +810,12 @@ def _reconcile_unbound_evidence(
         judged_claim_count=result.judged_claim_count,
         total_claim_count=result.total_claim_count,
     )
+
+
+# A dense 6k-token chunk can yield >100 claims; a 5k output cap truncates the
+# JSON and turns the whole review into ``review_unavailable``. Keep the cap
+# above the largest observed inventory while staying inside provider limits.
+_INVENTORY_MAX_OUTPUT_TOKENS = 12000
 
 
 def _review_error_code(exc: BaseException) -> ReviewErrorCode:
@@ -1607,10 +1614,23 @@ def _fact_review_batch_size() -> int:
 def _fact_review_batch_timeout_seconds() -> int:
     """Keep one batch bounded so later batches can still make progress."""
     try:
-        value = int(os.environ.get("FACT_REVIEW_BATCH_TIMEOUT_SECONDS", "45"))
+        value = int(os.environ.get("FACT_REVIEW_BATCH_TIMEOUT_SECONDS", "75"))
     except (TypeError, ValueError):
-        value = 45
+        value = 75
     return min(max(value, 15), 120)
+
+
+def _fact_review_concurrency() -> int:
+    """Number of evidence batches judged in parallel.
+
+    Batches are independent; running 2-3 at a time keeps a 28-batch report
+    inside the review budget without flooding the provider.
+    """
+    try:
+        value = int(os.environ.get("FACT_REVIEW_CONCURRENCY", "3"))
+    except (TypeError, ValueError):
+        value = 3
+    return min(max(value, 1), 4)
 
 
 def _ordered_fact_batches(
@@ -1650,6 +1670,157 @@ def _unverified_batch_claims(
         )
         for item in batch
     )
+
+
+async def _run_adjudication_batch(
+    *,
+    batch: tuple[ClaimInventoryItem, ...],
+    batch_index: int,
+    batch_count: int,
+    topic: str,
+    report_type: str,
+    source_text: str,
+    llm_spec: str | None,
+    semaphore: asyncio.Semaphore,
+    attempts: int = 2,
+) -> tuple[ReviewResult | None, BaseException | None]:
+    """Run one independent batch with bounded retries; never raise to the caller."""
+    last_error: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            adjudication_prompt = (
+                f"主题：{topic}\n报告类型：{report_type}\n"
+                f"当前批次（第 {batch_index}/{batch_count} 批）：\n"
+                f"{json.dumps([asdict(item) for item in batch], ensure_ascii=False)}\n"
+                f"来源证据：\n{source_text}\n"
+                "只判断当前批次中的声明与来源摘录的关系。"
+                f"这是第 {attempt} 次尝试；不得返回当前批次以外的 claim_id。"
+            )
+            async with semaphore:
+                generated = await generate_text(
+                    user_prompt=adjudication_prompt,
+                    system_prompt=_CLAIM_ADJUDICATION_SYSTEM,
+                    llm_spec=llm_spec,
+                    tier="light",
+                    max_tokens=5000,
+                    timeout=_fact_review_batch_timeout_seconds(),
+                    disable_thinking=True,
+                    operation="research.fact_review.adjudication",
+                )
+            parsed = _parse_adjudication_payload(
+                _extract_json_object(generated.text),
+                batch,
+            )
+            if parsed is not None:
+                return parsed, None
+            last_error = ValueError("adjudication payload missing")
+        except Exception as exc:  # provider, timeout, or malformed JSON
+            last_error = exc
+            if _adjudication_request_rejected(exc):
+                return None, exc
+        _review_logger.warning(
+            "adjudication batch failed batch=%s/%s attempt=%s error=%s",
+            batch_index,
+            batch_count,
+            attempt,
+            _review_error_code(last_error or RuntimeError("batch failed")),
+        )
+    return None, last_error
+
+
+def _adjudication_request_rejected(error: BaseException | None) -> bool:
+    """Smaller batches cannot repair credentials, exhausted budgets or throttling."""
+    if error is None:
+        return False
+    if isinstance(error, (TokenBudgetExceeded, TokenBudgetUnavailable)):
+        return True
+    if is_quota_error(error) or is_quota_exhausted_error(error):
+        return True
+    status = getattr(error, "status_code", None)
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+    return status in {401, 403, 404, 429}
+
+
+async def _adjudicate_batch_with_split(
+    *,
+    batch: tuple[ClaimInventoryItem, ...],
+    batch_index: int,
+    batch_count: int,
+    topic: str,
+    report_type: str,
+    source_text: str,
+    llm_spec: str | None,
+    semaphore: asyncio.Semaphore | None = None,
+) -> tuple[ReviewResult | None, BaseException | None]:
+    """Retry a failed batch, then keep splitting it before giving up.
+
+    A failed batch usually means one claim confused the model; the rest are
+    fine. Splitting halves and retrying each half recursively (down to single
+    claims) recovers that coverage without changing review semantics for the
+    successful parts.
+    """
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(_fact_review_concurrency())
+    result, error = await _run_adjudication_batch(
+        batch=batch,
+        batch_index=batch_index,
+        batch_count=batch_count,
+        topic=topic,
+        report_type=report_type,
+        source_text=source_text,
+        llm_spec=llm_spec,
+        semaphore=semaphore,
+        attempts=2,
+    )
+    if result is not None or len(batch) < 2 or _adjudication_request_rejected(error):
+        return result, error
+
+    midpoint = len(batch) // 2
+    parts = (batch[:midpoint], batch[midpoint:])
+    _review_logger.warning(
+        "adjudication batch splitting batch=%s/%s claims=%s",
+        batch_index,
+        batch_count,
+        len(batch),
+    )
+    outcomes = await asyncio.gather(*(
+        _adjudicate_batch_with_split(
+            batch=part,
+            batch_index=batch_index,
+            batch_count=batch_count,
+            topic=topic,
+            report_type=report_type,
+            source_text=source_text,
+            llm_spec=llm_spec,
+            semaphore=semaphore,
+        )
+        for part in parts
+    ))
+
+    claims: list[ClaimVerdict] = []
+    instructions: list[str] = []
+    failed = False
+    for part_result, part_error in outcomes:
+        if part_result is None:
+            failed = True
+            error = part_error or error
+            continue
+        claims.extend(part_result.claims)
+        instructions.extend(part_result.revision_instructions)
+        if part_result.coverage_status == "insufficient":
+            failed = True
+
+    if not claims:
+        return None, error
+    return ReviewResult(
+        status="needs_revision" if failed else "passed",
+        claims=tuple(claims),
+        revision_instructions=tuple(dict.fromkeys(instructions)),
+        coverage_status="insufficient" if failed else "complete",
+        batch_count=1,
+        attempts=3,
+    ), None
 
 
 async def _adjudicate_fact_batches(
@@ -1693,64 +1864,91 @@ async def _adjudicate_fact_batches(
     judged_count = 0
     last_error: BaseException | None = None
 
-    for batch_index, batch in enumerate(batches, start=1):
-        claim_ids = [item.claim_id for item in batch]
-        await emit_phase("adjudicating", {
-            "inventory": inventory_snapshot,
-            "coverage_status": inventory_coverage,
-            "batch_index": batch_index,
-            "batch_count": len(batches),
-            "active_batch_claim_ids": claim_ids,
-            "completed_batch_count": completed_batches,
-            "failed_batch_count": failed_batches,
-            "judged_claim_count": judged_count,
-            "total_claim_count": total_factual_claims,
-            "batch_status": "running",
-            "settled_claims": [asdict(claim) for claim in judged_claims],
-        })
-
-        batch_result: ReviewResult | None = None
-        batch_error: BaseException | None = None
-        for attempt in range(1, 3):
-            try:
-                adjudication_prompt = (
-                    f"主题：{topic}\n报告类型：{report_type}\n"
-                    f"当前批次（第 {batch_index}/{len(batches)} 批）：\n"
-                    f"{json.dumps([asdict(item) for item in batch], ensure_ascii=False)}\n"
-                    f"来源证据：\n{source_text}\n"
-                    "只判断当前批次中的声明与来源摘录的关系。"
-                    f"这是第 {attempt} 次尝试；不得返回当前批次以外的 claim_id。"
-                )
-                generated = await generate_text(
-                    user_prompt=adjudication_prompt,
-                    system_prompt=_CLAIM_ADJUDICATION_SYSTEM,
-                    llm_spec=llm_spec,
-                    tier="light",
-                    max_tokens=5000,
-                    timeout=_fact_review_batch_timeout_seconds(),
-                    disable_thinking=True,
-                    operation="research.fact_review.adjudication",
-                )
-                batch_result = _parse_adjudication_payload(
-                    _extract_json_object(generated.text),
-                    batch,
-                )
-                batch_error = None
-                break
-            except Exception as exc:  # provider, timeout, or malformed JSON
-                batch_error = exc
-                last_error = exc
-
-        if batch_result is None:
-            failed_batches += 1
-            reason = (
-                f"第 {batch_index} 批声明的证据判断未完成；这不是事实冲突，"
-                "请重试审核后再决定是否发布。"
-            )
-            judged_claims.extend(_unverified_batch_claims(batch, reason=reason))
+    concurrency = _fact_review_concurrency()
+    semaphore = asyncio.Semaphore(concurrency)
+    for group_start in range(0, len(batches), concurrency):
+        group = list(enumerate(
+            batches[group_start:group_start + concurrency],
+            start=group_start + 1,
+        ))
+        for batch_index, batch in group:
             await emit_phase("adjudicating", {
                 "inventory": inventory_snapshot,
-                "coverage_status": "insufficient",
+                "coverage_status": inventory_coverage,
+                "batch_index": batch_index,
+                "batch_count": len(batches),
+                "active_batch_claim_ids": [item.claim_id for item in batch],
+                "completed_batch_count": completed_batches,
+                "failed_batch_count": failed_batches,
+                "judged_claim_count": judged_count,
+                "total_claim_count": total_factual_claims,
+                "batch_status": "running",
+                "settled_claims": [asdict(claim) for claim in judged_claims],
+            })
+
+        outcomes = await asyncio.gather(*(
+            _adjudicate_batch_with_split(
+                batch=batch,
+                batch_index=batch_index,
+                batch_count=len(batches),
+                topic=topic,
+                report_type=report_type,
+                source_text=source_text,
+                llm_spec=llm_spec,
+                semaphore=semaphore,
+            )
+            for batch_index, batch in group
+        ))
+
+        for (batch_index, batch), (batch_result, batch_error) in zip(group, outcomes):
+            claim_ids = [item.claim_id for item in batch]
+            if batch_error is not None:
+                last_error = batch_error
+
+            if batch_result is None:
+                failed_batches += 1
+                reason = (
+                    f"第 {batch_index} 批声明的证据判断未完成；这不是事实冲突，"
+                    "请重试审核后再决定是否发布。"
+                )
+                judged_claims.extend(_unverified_batch_claims(batch, reason=reason))
+                await emit_phase("adjudicating", {
+                    "inventory": inventory_snapshot,
+                    "coverage_status": "insufficient",
+                    "batch_index": batch_index,
+                    "batch_count": len(batches),
+                    "active_batch_claim_ids": claim_ids,
+                    "completed_batch_count": completed_batches,
+                    "failed_batch_count": failed_batches,
+                    "judged_claim_count": judged_count,
+                    "total_claim_count": total_factual_claims,
+                    "batch_status": "failed",
+                    "batch_error_code": _review_error_code(batch_error or RuntimeError("batch failed")),
+                    "settled_claims": [asdict(claim) for claim in judged_claims],
+                })
+                continue
+
+            batch_claims = list(batch_result.claims)
+            returned_ids = {claim.claim_id for claim in batch_claims}
+            missing_items = tuple(
+                item for item in batch if item.claim_id not in returned_ids
+            )
+            if missing_items:
+                judged_claims.extend(_unverified_batch_claims(
+                    missing_items,
+                    reason=f"第 {batch_index} 批未返回这些声明的判断结果。",
+                ))
+            missing_count = len(missing_items)
+            if batch_result.coverage_status == "insufficient" or missing_count:
+                failed_batches += 1
+            else:
+                completed_batches += 1
+            judged_count += max(0, len(batch) - missing_count)
+            judged_claims.extend(batch_claims)
+            instructions.extend(batch_result.revision_instructions)
+            await emit_phase("adjudicating", {
+                "inventory": inventory_snapshot,
+                "coverage_status": "insufficient" if failed_batches else inventory_coverage,
                 "batch_index": batch_index,
                 "batch_count": len(batches),
                 "active_batch_claim_ids": claim_ids,
@@ -1758,37 +1956,9 @@ async def _adjudicate_fact_batches(
                 "failed_batch_count": failed_batches,
                 "judged_claim_count": judged_count,
                 "total_claim_count": total_factual_claims,
-                "batch_status": "failed",
-                "batch_error_code": _review_error_code(batch_error or RuntimeError("batch failed")),
+                "batch_status": "partial" if missing_count else "completed",
                 "settled_claims": [asdict(claim) for claim in judged_claims],
             })
-            continue
-
-        batch_claims = list(batch_result.claims)
-        missing_count = sum(
-            1 for claim in batch_claims
-            if "没有返回这条声明的结果" in (claim.reason or "")
-        )
-        if batch_result.coverage_status == "insufficient" or missing_count:
-            failed_batches += 1
-        else:
-            completed_batches += 1
-        judged_count += max(0, len(batch) - missing_count)
-        judged_claims.extend(batch_claims)
-        instructions.extend(batch_result.revision_instructions)
-        await emit_phase("adjudicating", {
-            "inventory": inventory_snapshot,
-            "coverage_status": "insufficient" if failed_batches else inventory_coverage,
-            "batch_index": batch_index,
-            "batch_count": len(batches),
-            "active_batch_claim_ids": claim_ids,
-            "completed_batch_count": completed_batches,
-            "failed_batch_count": failed_batches,
-            "judged_claim_count": judged_count,
-            "total_claim_count": total_factual_claims,
-            "batch_status": "partial" if missing_count else "completed",
-            "settled_claims": [asdict(claim) for claim in judged_claims],
-        })
 
     claims = tuple((*non_fact_claims, *judged_claims))
     coverage_status: Literal["complete", "insufficient", "not_applicable"] = (
@@ -1981,13 +2151,14 @@ class DefaultResearchReviewer:
         inventory_body = _report_body_without_references(report)
         inventory_chunks = split_text_by_token_budget(
             inventory_body,
-            max(1_000, int(os.environ.get("RESEARCH_REVIEW_CHUNK_TOKENS", "6000"))),
+            max(1_000, int(os.environ.get("RESEARCH_REVIEW_CHUNK_TOKENS", "2000"))),
         )
         inventory_prompts = [
             (
                 f"主题：{topic}\n报告类型：{report_type}\n"
                 f"这是报告全文第 {chunk.index}/{len(inventory_chunks)} 块（字符 {chunk.start}-{chunk.end}）。"
-                "只抽取本块中的声明；如果内容不是完整声明，保留原样并标记 coverage_status=insufficient。"
+                "只抽取本块中的声明；块首尾被切断的半句保留原样、不要算作漏检，"
+                "只有本块中间完整段落确实无法抽取时才标记 coverage_status=insufficient。"
                 "请先完成声明清单，不要判断事实是否正确。\n报告正文：\n"
                 f"{chunk.text}"
             )
@@ -1997,7 +2168,7 @@ class DefaultResearchReviewer:
             estimate_call_tokens(
                 user_prompt=prompt,
                 system_prompt=_CLAIM_INVENTORY_SYSTEM,
-                max_output_tokens=5000,
+                max_output_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
             )
             for prompt in inventory_prompts
         )
@@ -2013,27 +2184,74 @@ class DefaultResearchReviewer:
                 operation="research.fact_review.inventory",
                 estimated_tokens=inventory_reserved_tokens,
             ):
-                for chunk, inventory_prompt in zip(inventory_chunks, inventory_prompts):
-                    generated = await generate_text(
-                        user_prompt=inventory_prompt,
-                        system_prompt=_CLAIM_INVENTORY_SYSTEM,
-                        llm_spec=self._llm_spec,
-                        tier="light",
-                        max_tokens=5000,
-                        timeout=60.0,
-                        disable_thinking=True,
-                        operation="research.fact_review.inventory",
+                inventory_semaphore = asyncio.Semaphore(_fact_review_concurrency())
+
+                async def _inventory_one(
+                    chunk: Any, inventory_prompt: str
+                ) -> tuple[int, dict[str, Any] | None, bool]:
+                    parsed_payload: dict[str, Any] | None = None
+                    truncated = False
+                    async with inventory_semaphore:
+                        for attempt in (1, 2):
+                            generated = await generate_text(
+                                user_prompt=inventory_prompt,
+                                system_prompt=_CLAIM_INVENTORY_SYSTEM,
+                                llm_spec=self._llm_spec,
+                                tier="light",
+                                max_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
+                                # Multi-thousand-character chunks can produce
+                                # JSON that takes slower providers past 90s.
+                                # A timeout here discards the whole inventory.
+                                timeout=180.0,
+                                disable_thinking=True,
+                                operation="research.fact_review.inventory",
+                            )
+                            truncated = bool(getattr(generated, "truncated", False))
+                            if not truncated:
+                                parsed_payload = _extract_json_object(generated.text)
+                            if parsed_payload is not None:
+                                break
+                            # Content-free diagnostics: enough to tell a
+                            # truncated JSON from a non-JSON answer without
+                            # logging report text.
+                            _review_logger.warning(
+                                "inventory chunk unusable chunk=%s/%s attempt=%s truncated=%s output_chars=%s",
+                                chunk.index,
+                                len(inventory_chunks),
+                                attempt,
+                                truncated,
+                                len(generated.text),
+                            )
+                    return chunk.index, parsed_payload, truncated
+
+                inventory_tasks = [
+                    asyncio.create_task(_inventory_one(chunk, prompt))
+                    for chunk, prompt in zip(inventory_chunks, inventory_prompts)
+                ]
+                try:
+                    inventory_results = await asyncio.gather(*inventory_tasks)
+                except BaseException:
+                    # A failed gather does not cancel siblings. Stop and await
+                    # every provider request before the enclosing reservation
+                    # can settle, including when the whole review is cancelled.
+                    for task in inventory_tasks:
+                        task.cancel()
+                    await asyncio.gather(*inventory_tasks, return_exceptions=True)
+                    raise
+                failed_inventory = [
+                    (chunk, truncated)
+                    for chunk, (_, payload, truncated) in zip(inventory_chunks, inventory_results)
+                    if payload is None
+                ]
+                if failed_inventory:
+                    failed_chunk, failed_truncated = failed_inventory[0]
+                    raise ValueError(
+                        f"第 {failed_chunk.index}/{len(inventory_chunks)} 个报告块的声明清单"
+                        + ("输出不完整" if failed_truncated else "无法解析")
                     )
-                    if getattr(generated, "truncated", False):
-                        raise ValueError(
-                            f"第 {chunk.index}/{len(inventory_chunks)} 个报告块的声明清单输出不完整"
-                        )
-                    parsed_payload = _extract_json_object(generated.text)
-                    if not parsed_payload:
-                        raise ValueError(
-                            f"第 {chunk.index}/{len(inventory_chunks)} 个报告块的声明清单无法解析"
-                        )
-                    completed_inventory_chunks += 1
+                completed_inventory_chunks = len(inventory_results)
+                for chunk, (_, parsed_payload, _) in zip(inventory_chunks, inventory_results):
+                    assert parsed_payload is not None
                     coverage = parsed_payload.get("coverage_status")
                     inventory_coverages.append(
                         coverage
@@ -2188,7 +2406,7 @@ class DefaultResearchReviewer:
             # degrading to an explicit unavailable review.  This is a
             # recovery attempt, never a pass-through to "verified".
             first_error = exc
-            first_raw = generated.text[:500] if "generated" in locals() and generated.text else "<no output>"
+            first_raw = "<inventory unavailable>"
             retry_prompt = (
                 f"主题：{topic}\n报告类型：{report_type}\n"
                 "只审核报告中最重要的可验证事实；观点和建议使用 not_applicable。\n"

@@ -134,7 +134,7 @@ async def test_review_worker_records_timeout_as_unavailable_not_passed(
             return ReviewResult("passed")
 
     monkeypatch.setattr(reviewer_module, "DefaultResearchReviewer", SlowReviewer)
-    monkeypatch.setattr(app_module, "_fact_review_timeout_seconds", lambda: 0.001)
+    monkeypatch.setattr(app_module, "_fact_review_timeout_seconds", lambda *_args: 0.001)
     store = _RecordingStore([])
 
     await _review_one_item(store, _work())
@@ -194,7 +194,7 @@ async def test_review_timeout_keeps_settled_batches_and_marks_only_active_claims
             return ReviewResult("passed")
 
     monkeypatch.setattr(reviewer_module, "DefaultResearchReviewer", SlowAfterFirstBatch)
-    monkeypatch.setattr(app_module, "_fact_review_timeout_seconds", lambda: 0.001)
+    monkeypatch.setattr(app_module, "_fact_review_timeout_seconds", lambda *_args: 0.001)
     store = _RecordingStore([])
 
     await _review_one_item(store, _work())

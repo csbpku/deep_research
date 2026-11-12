@@ -129,6 +129,7 @@ AiChatRole = Literal["user", "assistant"]
 # persisted in the queue and rendered differently at the presentation boundary.
 REPORT_TYPE: Final[dict[str, str]] = {
     "RESEARCH_REPORT": "research_report",
+    "DECISION_MEMO": "decision_memo",
     "SUMMARY_BRIEF": "summary_brief",
     "SLIDES": "slides",
     "WEB_BRIEF": "web_brief",
@@ -136,7 +137,9 @@ REPORT_TYPE: Final[dict[str, str]] = {
     # must never create a second editable Research draft.
     "EVIDENCE_SEARCH": "evidence_search",
 }
-ReportType = Literal["research_report", "summary_brief", "slides", "web_brief", "evidence_search"]
+ReportType = Literal[
+    "research_report", "decision_memo", "summary_brief", "slides", "web_brief", "evidence_search"
+]
 
 # Helpers for partial-job rule (架构 §九 风险 10 / state-machines §1):
 # mid-failure with at least 3 sources → partial; otherwise failed.

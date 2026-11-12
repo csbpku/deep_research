@@ -13,7 +13,7 @@ import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Typography from '@mui/material/Typography';
 import { space, tokens } from '@deep-research/design-system';
-import { RadarFeedbackBar } from './RadarFeedbackBar';
+import { RADAR_PRIMARY_FEEDBACK_TYPES, RadarFeedbackBar } from './RadarFeedbackBar';
 import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
@@ -187,8 +187,16 @@ export function RadarCandidateCard({
         {isAdminQueue && candidate.sortOrder !== null ? (
           <Typography variant="metadata" color="text.secondary">#{candidate.sortOrder}</Typography>
         ) : null}
-        <Typography component="span" variant="metadata" color="text.secondary" sx={{ marginLeft: 'auto' }} title={`入库于 ${candidate.crawledAt}`}>
-          入库 {formatDate(candidate.crawledAt)}
+        {/* 读者判断新旧看的是原文发布时间；入库时间只在没有发布时间时兜底，
+            并通过 title 保留完整入库时间供排障使用。 */}
+        <Typography
+          component="span"
+          variant="metadata"
+          color="text.secondary"
+          sx={{ marginLeft: 'auto' }}
+          title={candidate.publishedAt ? `发布于 ${candidate.publishedAt}；入库于 ${candidate.crawledAt}` : `入库于 ${candidate.crawledAt}`}
+        >
+          {candidate.publishedAt ? '发布' : '入库'} {formatDate(candidate.publishedAt ?? candidate.crawledAt)}
         </Typography>
       </Box>
 
@@ -250,7 +258,7 @@ export function RadarCandidateCard({
           summaryId={candidate.id}
           initialCounts={candidate.feedbackCounts}
           initialMine={candidate.myFeedbacks}
-          types={['favorite']}
+          types={[...RADAR_PRIMARY_FEEDBACK_TYPES, 'favorite']}
         />
         {candidate.commentCount > 0 ? (
           <Button

@@ -29,7 +29,9 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { resolveResearchSourceLink } from '../../../../lib/research-source-link';
 import { resolveCurrentReviewState } from '../../../../lib/research-review-state';
-import { getReviewDisclosureItems, getReviewPublicationGate, reviewCoverageStatus } from '../../../../lib/research-review-decisions';
+import { resolveResearchReviewInventory } from '../../../../lib/research-review-inventory';
+import { hasCompletedReviewInventory, projectResearchReviewForReader } from '../../../../lib/research-review-reader';
+import { researchPublicationVersion } from '../../../../lib/research-publication-version';
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import {
@@ -301,8 +303,25 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     }).catch(() => undefined);
   }
 
+  let readerReviewRuns = research.reviewRuns;
+  const revisionHash = resolveCurrentReviewState(research, research.reviewRuns, research.reviewStatus).revisionHash;
+  if (research.creationMethod === 'ai_research'
+    && research.reviewRuns.length === researchSelect.reviewRuns.take
+    && !research.reviewRuns.some((run) => run.revisionHash === revisionHash && hasCompletedReviewInventory(run))) {
+    // The history panel is bounded; safety warnings are not. Repeated failed
+    // retries must not push the last complete inventory out of the reader's
+    // evidence window. Only load the tail for this exact text revision.
+    const history = await prisma.research.findUnique({
+      where: { id: research.id },
+      select: { reviewRuns: {
+        where: { revisionHash }, orderBy: { createdAt: 'desc' },
+        select: researchSelect.reviewRuns.select,
+      } },
+    });
+    readerReviewRuns = [...new Map([...readerReviewRuns, ...(history?.reviewRuns ?? [])].map((run) => [run.id, run])).values()];
+  }
   return NextResponse.json({
-    ...shapeResearchDetail(research),
+    ...shapeResearchDetail(research, readerReviewRuns),
     canEdit,
     canManageStatus,
     researchTopics: research.researchTopics ?? [],
@@ -828,8 +847,8 @@ function shapeResearchDetail(r: {
   createdAt: Date;
   updatedAt: Date;
   author: { id: string; name: string; email: string };
-}) {
-  const currentReview = resolveCurrentReviewState(r, r.reviewRuns, r.reviewStatus);
+}, readerReviewRuns = r.reviewRuns) {
+  const currentReview = resolveCurrentReviewState(r, readerReviewRuns, r.reviewStatus);
   const currentRevisionHash = currentReview.revisionHash;
   const parsedBrief = ResearchBriefSchema.safeParse(r.sourceAiJob?.brief);
   const researchSufficiency = evaluateResearchSufficiency({
@@ -839,22 +858,20 @@ function shapeResearchDetail(r: {
     sourcePolicy: r.sourceAiJob?.sourcePolicy
       ?? (parsedBrief.success ? parsedBrief.data.sourcePolicy : null),
   });
-  const currentReviewPublicationGate = currentReview.run
-    ? getReviewPublicationGate({
-        executionStatus: currentReview.run.executionStatus,
-        outcome: currentReview.run.outcome,
-        coverageStatus: reviewCoverageStatus(currentReview.run.summary),
-        researchSufficiencyStatus: researchSufficiency.status,
-        claims: currentReview.run.claims,
-        decisions: currentReview.run.decisions,
+  const currentReviewPublicationGate = resolveResearchReviewInventory({
+    reviewRuns: readerReviewRuns, revisionHash: currentReview.revisionHash,
+    researchSufficiencyStatus: researchSufficiency.status,
+  }).gate;
+  const readerReview = projectResearchReviewForReader({
+    status: r.status, creationMethod: r.creationMethod, currentReview,
+    reviewRuns: readerReviewRuns, researchSufficiencyStatus: researchSufficiency.status,
+  });
+  const publicationDisclosure = r.status === 'draft'
+    ? projectResearchReviewForReader({
+        status: 'published', creationMethod: r.creationMethod, currentReview,
+        reviewRuns: readerReviewRuns, researchSufficiencyStatus: researchSufficiency.status,
       })
-    : null;
-  const reviewDisclosure = currentReview.run && currentReviewPublicationGate?.status === 'publish_with_disclosure'
-    ? getReviewDisclosureItems({
-        claims: currentReview.run.claims,
-        decisions: currentReview.run.decisions,
-      })
-    : [];
+    : readerReview;
   return {
     id: r.id,
     type: r.type,
@@ -880,7 +897,11 @@ function shapeResearchDetail(r: {
     // Published AI research must carry the reader-facing consequence of an
     // accepted low/medium-risk exception. This is derived from the exact
     // current run, so it cannot survive an edit as if it still applied.
-    reviewDisclosure,
+    ...readerReview,
+    publicationVersion: researchPublicationVersion({ ...r, reviewRuns: readerReviewRuns }, researchSufficiency.status),
+    publicationHardBlocked: publicationDisclosure.reviewVerification === 'conflicted' || currentReviewPublicationGate?.status === 'blocked',
+    publicationDisclosure: publicationDisclosure.reviewDisclosure,
+    publicationDisclosureSummary: publicationDisclosure.reviewDisclosureSummary,
     researchSufficiency,
     // `reviewRuns` is the audit trail. This projection is the single state
     // used by current-version UI decisions, so clients do not need to infer

@@ -220,7 +220,10 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
         topic=str(row["topic"]),
         context=context_str,
         report_type=cast(
-            Literal["research_report", "summary_brief", "slides", "web_brief", "evidence_search"],
+            Literal[
+                "research_report", "decision_memo", "summary_brief", "slides",
+                "web_brief", "evidence_search",
+            ],
             str(row.get("reportType", "research_report")),
         ),
         source_policy=cast(
@@ -1176,7 +1179,7 @@ class DbJobStore(JobStore):
             'FROM "research_review_runs" rr '
             'JOIN "researches" r ON r."id" = rr."researchId" '
             'LEFT JOIN "ai_research_jobs" j ON j."id" = rr."aiResearchJobId" '
-            'WHERE r."status" = \'draft\' '
+            'WHERE r."status" IN (\'draft\', \'published\') '
             '  AND rr."executionStatus" IN (\'queued\', \'reviewing\') '
             '  AND (rr."executionStatus" = \'queued\' '
             '       OR (rr."leaseExpiresAt" IS NOT NULL AND rr."leaseExpiresAt" < now()) '

@@ -9,6 +9,7 @@ import {
   FileText,
   Globe2,
   Link2,
+  NotebookPen,
   Presentation,
   Send,
   Sparkles,
@@ -17,12 +18,13 @@ import {
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-import { ResearchConfirmationControls } from './ResearchConfirmationControls';
+import { ResearchAdvancedSettings, ResearchOutputPicker } from './ResearchConfirmationControls';
 import { readResearchDraft, writeResearchDraft } from '@/lib/ai-research-state';
 import { InlineAiResearchStatus } from '@/components/ai-research/InlineAiResearchStatus';
 import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiResearchBrief';
 import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
 import { AppTextField as Input } from '@/components/material/AppTextField';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
@@ -47,7 +49,7 @@ interface RadarSeed {
   body: string | null;
 }
 
-type ReportType = 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
+type ReportType = 'decision_memo' | 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
 type ResearchLength = 'brief' | 'standard' | 'deep';
 type SourcePolicy = 'prefer_user_sources' | 'only_user_sources';
 type ResearchSourceRef = {
@@ -161,7 +163,8 @@ const reportOptions: Array<{
   description: string;
   icon: typeof FileText;
 }> = [
-  { value: 'research_report', label: '研究稿', description: '完整调研、引用和可编辑草稿', icon: FileText },
+  { value: 'decision_memo', label: '决策备忘', description: '默认：一页结论、关键声明、风险与下一步', icon: NotebookPen },
+  { value: 'research_report', label: '完整报告', description: '完整调研、引用和可编辑草稿', icon: FileText },
   { value: 'summary_brief', label: '快速判断', description: '几秒给方向；不做完整检索或逐条依据确认', icon: Sparkles },
   { value: 'slides', label: 'Slides 提纲', description: '按页组织的可编辑提纲（不是 .pptx）', icon: Presentation },
   { value: 'web_brief', label: '网页简报', description: '独立网页阅读版，适合分享和长文阅读', icon: Globe2 },
@@ -205,7 +208,7 @@ function ResearchRunReceipt({ jobId, topic }: { jobId: string; topic: string }) 
       .then(async (response) => { if (!response.ok) throw new Error('receipt unavailable'); return await response.json() as Record<string, unknown>; })
       .then((data) => {
         if (cancelled) return;
-        if (!['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType)) ||
+        if (!['decision_memo', 'research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType)) ||
             !['brief', 'standard', 'deep'].includes(String(data.reportLength)) ||
             !['prefer_user_sources', 'only_user_sources'].includes(String(data.sourcePolicy))) throw new Error('receipt incomplete');
         setReceipt({ reportType: data.reportType as ReportType, reportLength: data.reportLength as ResearchLength,
@@ -332,6 +335,13 @@ interface InlineJobSnapshot {
   artifact: { content: string | null } | null;
 }
 
+type PreflightCheck = {
+  name: string;
+  ok: boolean;
+  message: string;
+  level?: 'warning' | 'error';
+};
+
 const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
 
 export function AiResearchConversation({
@@ -352,12 +362,15 @@ export function AiResearchConversation({
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(conversationId ?? null);
   const currentConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [phase, setPhase] = useState<ResearchConversationPhase>('understand');
+  const [threadExpanded, setThreadExpanded] = useState(false);
   const [topic, setTopic] = useState('');
   const [context, setContext] = useState('');
   const [sourceDraft, setSourceDraft] = useState('');
   const [sourceUrls, setSourceUrls] = useState<string[]>([]);
-  const [reportType, setReportType] = useState<ReportType>('research_report');
-  const [reportLength, setReportLength] = useState<ResearchLength>('deep');
+  const [reportType, setReportType] = useState<ReportType>('decision_memo');
+  // Developers start with one focused round; multi-round is an explicit
+  // choice, not the silent default that turned a narrow question into 12 minutes.
+  const [reportLength, setReportLength] = useState<ResearchLength>('standard');
   const [sourcePolicy, setSourcePolicy] = useState<SourcePolicy>('prefer_user_sources');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
@@ -380,11 +393,93 @@ export function AiResearchConversation({
   const [restoredBrief, setRestoredBrief] = useState<BriefValue | null>(null);
   const [draftStorageError, setDraftStorageError] = useState(false);
   const [submissionUncertain, setSubmissionUncertain] = useState(false);
+  const [preflightStatus, setPreflightStatus] = useState<'idle' | 'checking' | 'ok' | 'warning' | 'blocked'>('idle');
+  const [preflightChecks, setPreflightChecks] = useState<PreflightCheck[]>([]);
+  const [preflightAttempt, setPreflightAttempt] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousConversationIdRef = useRef<string | null>(conversationId ?? null);
   const loadedConversationIdRef = useRef<string | null>(null);
   const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const fromJobAppliedRef = useRef(false);
+
+  // Preflight runs once the plan is ready, before the user can start. A slow
+  // check downgrades to a warning (never a hard block); a returned failure
+  // blocks the start button with the specific reason.
+  const preflightQuestion = brief?.brief?.question?.trim() ?? '';
+  useEffect(() => {
+    if (!preflightQuestion || planning) {
+      setPreflightStatus('idle');
+      setPreflightChecks([]);
+      return;
+    }
+    if (submitting || activeJobId) return;
+    const controller = new AbortController();
+    let timedOut = false;
+    setPreflightStatus('checking');
+    setPreflightChecks([]);
+    const timer = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      setPreflightStatus('warning');
+      setPreflightChecks([{
+        name: 'preflight_timeout',
+        ok: true,
+        level: 'warning',
+        message: '启动前检查超时，暂未确认模型与搜索配置；仍可开始，失败时会显示具体原因。',
+      }]);
+    }, 6000);
+    const preflightUrl = preflightAttempt > 0
+      ? '/api/ai-research/preflight?refresh=1'
+      : '/api/ai-research/preflight';
+    void fetch(preflightUrl, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json() as { ok?: unknown; checks?: unknown };
+      })
+      .then((data) => {
+        if (timedOut || controller.signal.aborted) return;
+        const checks = Array.isArray(data.checks)
+          ? data.checks.filter((check): check is PreflightCheck => {
+              if (!check || typeof check !== 'object') return false;
+              const candidate = check as Record<string, unknown>;
+              return typeof candidate.name === 'string'
+                && typeof candidate.ok === 'boolean'
+                && typeof candidate.message === 'string';
+            })
+          : [];
+        setPreflightChecks(checks);
+        if (data.ok === true) {
+          setPreflightStatus(checks.some((check) => check.level === 'warning') ? 'warning' : 'ok');
+        } else if (data.ok === false && checks.length > 0) {
+          // Only a structured failure from the engine is a reason to block.
+          // A malformed or mocked response cannot prove the config is bad.
+          setPreflightStatus('blocked');
+        } else {
+          setPreflightStatus('warning');
+          setPreflightChecks([{
+            name: 'preflight_unknown',
+            ok: true,
+            level: 'warning',
+            message: '未能确认模型与搜索配置；仍可开始，失败时会显示具体原因。',
+          }]);
+        }
+      })
+      .catch(() => {
+        if (timedOut || controller.signal.aborted) return;
+        setPreflightStatus('warning');
+        setPreflightChecks([{
+          name: 'preflight_unavailable',
+          ok: true,
+          level: 'warning',
+          message: '启动前检查请求失败，暂未确认模型与搜索配置；仍可开始，失败时会显示具体原因。',
+        }]);
+      })
+      .finally(() => window.clearTimeout(timer));
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [preflightQuestion, preflightAttempt, planning, submitting, activeJobId]);
 
   // Task history, the topbar and old /ai-research/<jobId> links land here
   // with a job id. Show that job's result in place; a conversation is only
@@ -413,9 +508,9 @@ export function AiResearchConversation({
         if (cancelled) return;
         const restoredTopic = typeof data.topic === 'string' ? data.topic : '';
         const restoredContext = typeof data.context === 'string' ? data.context : '';
-        const restoredType = ['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
+        const restoredType = ['decision_memo', 'research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
           ? data.reportType as ReportType
-          : 'research_report';
+          : 'decision_memo';
         const restoredLength = ['brief', 'standard', 'deep'].includes(String(data.reportLength))
           ? data.reportLength as ResearchLength
           : restoredType === 'summary_brief' ? 'brief' : 'deep';
@@ -497,7 +592,7 @@ export function AiResearchConversation({
     setContext('');
     setSourceDraft('');
     setSourceUrls([]);
-    setReportType('research_report');
+    setReportType('decision_memo');
     setReportLength('deep');
     setSourcePolicy('prefer_user_sources');
     setInput('');
@@ -826,6 +921,11 @@ export function AiResearchConversation({
 
   async function submit(extraMessages: Message[] = []) {
     if (submitting || activeJobId || conversationCreating || hydrating || submissionUncertain) return;
+    if (preflightStatus === 'blocked') {
+      setErrorKind('validation');
+      setError('启动前检查未通过，请先修复上方列出的模型/凭据/检索配置后重试。');
+      return;
+    }
     if (topic.trim().length < 2) {
       setErrorKind('validation');
       setError('先告诉我至少 2 个字的研究主题。');
@@ -1007,9 +1107,9 @@ export function AiResearchConversation({
       const response = await fetch(`/api/ai-research/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
       if (!response.ok) throw await toApiHttpError(response, '读取原调研配置失败');
       const data = await response.json() as Record<string, unknown>;
-      const restoredType = ['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
+      const restoredType = ['decision_memo', 'research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
         ? data.reportType as ReportType
-        : 'research_report';
+        : 'decision_memo';
       const restoredUrls = Array.isArray(data.sourceRefs)
         ? (data.sourceRefs as Array<Record<string, unknown>>)
           .filter((ref) => ref.type === 'url')
@@ -1065,6 +1165,8 @@ export function AiResearchConversation({
       ? activeJobHasReport ? 'plan' : 'restart'
       : 'running';
   const visibleMessages = messages;
+  // 计划已就绪、等待确认时，把整段对话折叠成一行，让问题与启动按钮留在首屏。
+  const planSettled = Boolean(brief) && !planning && !activeJobId && !hydrating;
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -1083,7 +1185,14 @@ export function AiResearchConversation({
             <Typography variant="metadata" color="text.secondary">对话自动保存；方案草稿仅保存在当前浏览器。</Typography>
           </Box>
         </Box>
-        <StepStepper step={stepIndex} finished={Boolean(activeJobId) && activeJobTerminal} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          {activeJobHasReport ? (
+            <Link component={NextLink} href="/ai-research" underline="always" sx={{ typography: 'metadata', fontWeight: 500 }}>
+              开始新的调研
+            </Link>
+          ) : null}
+          <StepStepper step={stepIndex} finished={Boolean(activeJobId) && activeJobTerminal} />
+        </Box>
       </Box>
 
       <Box sx={{ display: 'flex', minHeight: 0, flexDirection: 'column' }}>
@@ -1099,7 +1208,28 @@ export function AiResearchConversation({
             </Box>
           ) : (
             <>
-              {visibleMessages.map((message) => (
+              {activeJobHasReport ? (
+                <Typography variant="body2" color="text.secondary">
+                  本次调研的对话与追问在下方结果卡片中继续。
+                </Typography>
+              ) : null}
+              <Box
+                component="details"
+                open={!planSettled || threadExpanded}
+                onToggle={(event) => setThreadExpanded(event.currentTarget.open)}
+                data-testid="ai-research-thread"
+                sx={planSettled ? { border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' } : undefined}
+              >
+                <Box
+                  component="summary"
+                  sx={{ display: planSettled ? 'flex' : 'none', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1, typography: 'metadata', fontWeight: 600, color: 'text.secondary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}
+                >
+                  <Box component="span">对话记录 · {visibleMessages.length} 条</Box>
+                  <Box component="span" sx={{ fontWeight: 400 }}>已折叠，展开可查看</Box>
+                </Box>
+                {(!planSettled || threadExpanded) ? (
+                <Box sx={{ display: 'grid', gap: 2.5, px: 1.5, py: 2 }}>
+              {!activeJobHasReport ? visibleMessages.map((message) => (
                 <Box key={message.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flexDirection: message.role === 'user' ? 'row-reverse' : 'row' }}>
                   <Box component="span" sx={{ mt: 0.5, display: 'grid', width: 28, height: 28, flexShrink: 0, placeItems: 'center', borderRadius: 1, bgcolor: message.role === 'assistant' ? 'action.selected' : 'action.hover', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
                     {message.role === 'assistant' ? <Bot size={14} /> : <UserRound size={14} />}
@@ -1113,9 +1243,11 @@ export function AiResearchConversation({
                     </Typography>
                   </Box>
                 </Box>
-              ))}
+              )) : null}</Box>
+                ) : null}
+              </Box>
 
-              {phase === 'understand' && messages.length === 1 ? (
+              {!activeJobHasReport && phase === 'understand' && messages.length === 1 ? (
                 <Box sx={{ ml: 5, minWidth: 0, pt: 0.5 }}>
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                     {EXAMPLE_PROMPTS.map((example) => (
@@ -1136,6 +1268,53 @@ export function AiResearchConversation({
 
               {phase !== 'understand' && !activeJobId && !hydrating ? (
                 <Box sx={{ ml: 5, minWidth: 0 }}>
+                  {preflightStatus === 'checking' ? (
+                    <Box role="status" aria-live="polite" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                      <CircularProgress size={14} thickness={5} aria-hidden />
+                      <Typography sx={{ typography: 'metadata', color: 'text.secondary' }}>
+                        正在检查模型与搜索配置…
+                      </Typography>
+                    </Box>
+                  ) : null}
+                  {preflightStatus === 'blocked' || preflightStatus === 'warning' ? (
+                    <Alert
+                      severity={preflightStatus === 'blocked' ? 'error' : 'warning'}
+                      // A warning is informational; keep role="alert" for the
+                      // blocking state so page-level alerts stay unambiguous.
+                      role={preflightStatus === 'blocked' ? 'alert' : 'status'}
+                      sx={{ mb: 1.5, alignItems: 'flex-start' }}
+                      action={(
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() => setPreflightAttempt((value) => value + 1)}
+                        >
+                          重新检查
+                        </Button>
+                      )}
+                    >
+                      <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, mb: 0.5 }}>
+                        {preflightStatus === 'blocked'
+                          ? '启动前检查未通过，暂时无法开始研究'
+                          : '启动前检查有提示'}
+                      </Typography>
+                      <Box component="ul" sx={{ m: 0, pl: 2, display: 'grid', gap: 0.25 }}>
+                        {(preflightStatus === 'blocked'
+                          ? preflightChecks.filter((check) => !check.ok)
+                          : preflightChecks.filter((check) => check.level === 'warning')
+                        ).map((check) => (
+                          <Box
+                            component="li"
+                            key={check.name}
+                            sx={{ typography: 'metadata', overflowWrap: 'anywhere' }}
+                          >
+                            {check.message}
+                          </Box>
+                        ))}
+                      </Box>
+                    </Alert>
+                  ) : null}
                   <AiResearchBrief
                     initialBrief={restoredBrief}
                     question={topic}
@@ -1147,13 +1326,18 @@ export function AiResearchConversation({
                         size="sm"
                         aria-label="开始调研"
                         onClick={() => void submit()}
-                        disabled={submitting || conversationCreating || hydrating || submissionUncertain || scopeIncomplete || sourceSelectionIncomplete || brief?.contextSelectionIncomplete}
+                        disabled={submitting || conversationCreating || hydrating || submissionUncertain || scopeIncomplete || sourceSelectionIncomplete || brief?.contextSelectionIncomplete || preflightStatus === 'blocked' || preflightStatus === 'checking'}
                       >
                         {submitting ? <CircularProgress size={16} thickness={5} aria-hidden /> : <Send size={16} />}
                         {submitting ? '启动中…' : '开始研究'}
                       </Button>
                     )}
-                      onBriefReady={(value) => setBrief(value)}
+                      onBriefReady={(value) => {
+                        setBrief(value);
+                        // A new plan gets a fresh cached preflight; only an
+                        // explicit "重新检查" should bypass the engine cache.
+                        setPreflightAttempt(0);
+                      }}
                     onPlanningChange={(value) => {
                       setPlanning(value);
                       // Never let a previous question's brief be submitted
@@ -1161,30 +1345,41 @@ export function AiResearchConversation({
                       // intentionally falls back to the current topic.
                       if (value && restoredBrief?.brief?.question !== topic.trim()) setBrief(null);
                     }}
-                  >
-                    <ResearchConfirmationControls
-                      reportType={reportType}
-                      reportLength={reportLength}
-                      sourcePolicy={sourcePolicy}
-                      sourceRefs={sourceRefs}
-                      sourceUrls={sourceUrls}
-                      sourceDraft={sourceDraft}
-                      selectedContextCount={brief?.suggestedContextIds.length ?? 0}
-                      seed={seed}
-                      submitting={submitting}
-                      planning={planning}
-                      scopeIncomplete={scopeIncomplete}
-                      onReportTypeChange={(value) => {
-                        setReportType(value);
-                        setReportLength(value === 'summary_brief' ? 'brief' : 'deep');
-                      }}
-                      onReportLengthChange={setReportLength}
-                      onSourcePolicyChange={setSourcePolicy}
-                      onSourceDraftChange={setSourceDraft}
-                      onAddSource={addSourceUrl}
-                      onRemoveSource={(url) => setSourceUrls((current) => current.filter((value) => value !== url))}
-                    />
-                  </AiResearchBrief>
+                    outputControls={(
+                      <ResearchOutputPicker
+                        reportType={reportType}
+                        reportLength={reportLength}
+                        sourcePolicy={sourcePolicy}
+                        sourceRefs={sourceRefs}
+                        selectedContextCount={brief?.suggestedContextIds.length ?? 0}
+                        submitting={submitting}
+                        scopeIncomplete={scopeIncomplete}
+                        onReportTypeChange={(value) => {
+                          setReportType(value);
+                          setReportLength(value === 'summary_brief' ? 'brief' : 'standard');
+                        }}
+                      />
+                    )}
+                    advancedControls={(
+                      <ResearchAdvancedSettings
+                        reportType={reportType}
+                        reportLength={reportLength}
+                        sourcePolicy={sourcePolicy}
+                        sourceRefs={sourceRefs}
+                        sourceUrls={sourceUrls}
+                        sourceDraft={sourceDraft}
+                        selectedContextCount={brief?.suggestedContextIds.length ?? 0}
+                        seed={seed}
+                        submitting={submitting}
+                        onReportLengthChange={setReportLength}
+                        onSourcePolicyChange={setSourcePolicy}
+                        onSourceDraftChange={setSourceDraft}
+                        onAddSource={addSourceUrl}
+                        onRemoveSource={(url) => setSourceUrls((current) => current.filter((value) => value !== url))}
+                      />
+                    )}
+                  />
+
                 </Box>
               ) : null}
 
@@ -1230,6 +1425,7 @@ export function AiResearchConversation({
           </Box>
         ) : null}
 
+        {activeJobHasReport ? null : (
         <Box component="form" data-ai-research-form onSubmit={handleMessageSubmit} sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper', p: 2 }}>
     <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper', transition: 'border-color 120ms ease-out, box-shadow 120ms ease-out', '&:focus-within': { borderColor: 'primary.main', boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}22` } }}>
             <Textarea
@@ -1266,6 +1462,7 @@ export function AiResearchConversation({
             </Box>
           </Box>
         </Box>
+        )}
       </Box>
     </Paper>
   );
