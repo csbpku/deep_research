@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
+import { validRadarScore } from '@/lib/radar/test-score';
+import type { Prisma } from '@prisma/client';
 
 // Opt in only against this dedicated, local database after applying the Prisma
 // schema. DATABASE_URL must match, so importing the production singleton cannot
@@ -52,6 +54,8 @@ describe.skipIf(!allowed)('radar feedback handlers on isolated PostgreSQL', () =
     const summary = await prisma.summary.create({ data: {
       title: 'Feedback integration fixture', body: 'Public summary', url, canonicalUrl: url,
       source: 'daily', summaryDate: new Date(), syncRunId: runId,
+      distilledScore: validRadarScore as unknown as Prisma.InputJsonValue, distilledTier: 'deep_read',
+      enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
     } });
     summaryId = summary.id;
   });
