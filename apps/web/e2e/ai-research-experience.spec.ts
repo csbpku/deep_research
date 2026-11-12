@@ -267,7 +267,9 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await page.keyboard.press('Space');
   await expect(source).toBeChecked();
   await expect(page.getByRole('region', { name: '已选历史资料' })).toContainText('Python任务实践笔记');
-  await tabTo(page.getByRole('button', { name: '开始调研', exact: true }));
+  // Preflight temporarily disables the action, removing its Tab stop.
+  // Wait for it to become interactive before traversing the focus order.
   await expect(page.getByRole('button', { name: '开始调研', exact: true })).toBeEnabled();
+  await tabTo(page.getByRole('button', { name: '开始调研', exact: true }));
   await expect(focus).toHaveValue('仅核对异常传播与取消行为');
 });
