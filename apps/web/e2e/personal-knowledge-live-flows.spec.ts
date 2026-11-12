@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import type { Page, Response } from '@playwright/test';
-import { expect, loginWithCredentials, test, waitForHydration } from './fixtures';
+import { expect, loginWithCredentials, openAdvancedSettings, test, waitForHydration } from './fixtures';
 
 const prisma = new PrismaClient();
 const AI_ENGINE_ROOT = resolve(process.cwd(), '../../packages/ai-engine');
@@ -200,7 +200,8 @@ test('Reader knowledge is semantically reused through Web and AI Engine, then re
     await expect(page.getByText('研究方案', { exact: true })).toBeVisible();
     await waitForHydration(page);
 
-    const details = page.locator('details').filter({ hasText: '已有资料（可选）' });
+    await openAdvancedSettings(page);
+    const details = page.locator('summary').filter({ hasText: '已有资料（可选）' }).locator('..');
     await expect(details).toHaveCount(1);
     const contextSummary = details.locator('summary');
     const contextResponse: { current: Response | null } = { current: null };

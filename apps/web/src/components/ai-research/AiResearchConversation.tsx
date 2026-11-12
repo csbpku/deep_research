@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-import { ResearchConfirmationControls } from './ResearchConfirmationControls';
+import { ResearchAdvancedSettings, ResearchOutputPicker } from './ResearchConfirmationControls';
 import { readResearchDraft, writeResearchDraft } from '@/lib/ai-research-state';
 import { InlineAiResearchStatus } from '@/components/ai-research/InlineAiResearchStatus';
 import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiResearchBrief';
@@ -362,6 +362,7 @@ export function AiResearchConversation({
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(conversationId ?? null);
   const currentConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [phase, setPhase] = useState<ResearchConversationPhase>('understand');
+  const [threadExpanded, setThreadExpanded] = useState(false);
   const [topic, setTopic] = useState('');
   const [context, setContext] = useState('');
   const [sourceDraft, setSourceDraft] = useState('');
@@ -1164,6 +1165,8 @@ export function AiResearchConversation({
       ? activeJobHasReport ? 'plan' : 'restart'
       : 'running';
   const visibleMessages = messages;
+  // 计划已就绪、等待确认时，把整段对话折叠成一行，让问题与启动按钮留在首屏。
+  const planSettled = Boolean(brief) && !planning && !activeJobId && !hydrating;
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -1210,6 +1213,22 @@ export function AiResearchConversation({
                   本次调研的对话与追问在下方结果卡片中继续。
                 </Typography>
               ) : null}
+              <Box
+                component="details"
+                open={!planSettled || threadExpanded}
+                onToggle={(event) => setThreadExpanded(event.currentTarget.open)}
+                data-testid="ai-research-thread"
+                sx={planSettled ? { border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' } : undefined}
+              >
+                <Box
+                  component="summary"
+                  sx={{ display: planSettled ? 'flex' : 'none', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1, typography: 'metadata', fontWeight: 600, color: 'text.secondary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}
+                >
+                  <Box component="span">对话记录 · {visibleMessages.length} 条</Box>
+                  <Box component="span" sx={{ fontWeight: 400 }}>已折叠，展开可查看</Box>
+                </Box>
+                {(!planSettled || threadExpanded) ? (
+                <Box sx={{ display: 'grid', gap: 2.5, px: 1.5, py: 2 }}>
               {!activeJobHasReport ? visibleMessages.map((message) => (
                 <Box key={message.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flexDirection: message.role === 'user' ? 'row-reverse' : 'row' }}>
                   <Box component="span" sx={{ mt: 0.5, display: 'grid', width: 28, height: 28, flexShrink: 0, placeItems: 'center', borderRadius: 1, bgcolor: message.role === 'assistant' ? 'action.selected' : 'action.hover', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
@@ -1224,7 +1243,9 @@ export function AiResearchConversation({
                     </Typography>
                   </Box>
                 </Box>
-              )) : null}
+              )) : null}</Box>
+                ) : null}
+              </Box>
 
               {!activeJobHasReport && phase === 'understand' && messages.length === 1 ? (
                 <Box sx={{ ml: 5, minWidth: 0, pt: 0.5 }}>
@@ -1324,30 +1345,41 @@ export function AiResearchConversation({
                       // intentionally falls back to the current topic.
                       if (value && restoredBrief?.brief?.question !== topic.trim()) setBrief(null);
                     }}
-                  >
-                    <ResearchConfirmationControls
-                      reportType={reportType}
-                      reportLength={reportLength}
-                      sourcePolicy={sourcePolicy}
-                      sourceRefs={sourceRefs}
-                      sourceUrls={sourceUrls}
-                      sourceDraft={sourceDraft}
-                      selectedContextCount={brief?.suggestedContextIds.length ?? 0}
-                      seed={seed}
-                      submitting={submitting}
-                      planning={planning}
-                      scopeIncomplete={scopeIncomplete}
-                      onReportTypeChange={(value) => {
-                        setReportType(value);
-                        setReportLength(value === 'summary_brief' ? 'brief' : 'standard');
-                      }}
-                      onReportLengthChange={setReportLength}
-                      onSourcePolicyChange={setSourcePolicy}
-                      onSourceDraftChange={setSourceDraft}
-                      onAddSource={addSourceUrl}
-                      onRemoveSource={(url) => setSourceUrls((current) => current.filter((value) => value !== url))}
-                    />
-                  </AiResearchBrief>
+                    outputControls={(
+                      <ResearchOutputPicker
+                        reportType={reportType}
+                        reportLength={reportLength}
+                        sourcePolicy={sourcePolicy}
+                        sourceRefs={sourceRefs}
+                        selectedContextCount={brief?.suggestedContextIds.length ?? 0}
+                        submitting={submitting}
+                        scopeIncomplete={scopeIncomplete}
+                        onReportTypeChange={(value) => {
+                          setReportType(value);
+                          setReportLength(value === 'summary_brief' ? 'brief' : 'standard');
+                        }}
+                      />
+                    )}
+                    advancedControls={(
+                      <ResearchAdvancedSettings
+                        reportType={reportType}
+                        reportLength={reportLength}
+                        sourcePolicy={sourcePolicy}
+                        sourceRefs={sourceRefs}
+                        sourceUrls={sourceUrls}
+                        sourceDraft={sourceDraft}
+                        selectedContextCount={brief?.suggestedContextIds.length ?? 0}
+                        seed={seed}
+                        submitting={submitting}
+                        onReportLengthChange={setReportLength}
+                        onSourcePolicyChange={setSourcePolicy}
+                        onSourceDraftChange={setSourceDraft}
+                        onAddSource={addSourceUrl}
+                        onRemoveSource={(url) => setSourceUrls((current) => current.filter((value) => value !== url))}
+                      />
+                    )}
+                  />
+
                 </Box>
               ) : null}
 

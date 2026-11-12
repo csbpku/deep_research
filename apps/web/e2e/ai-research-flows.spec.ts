@@ -9,7 +9,7 @@
 import { test, expect } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
-import { loginWithCredentials } from './fixtures';
+import { loginWithCredentials, openAdvancedSettings } from './fixtures';
 
 const prisma = new PrismaClient();
 
@@ -238,6 +238,7 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.getByRole('button', { name: '发送消息' }).click();
     const output = page.getByRole('radiogroup', { name: '交付什么' });
     await expect(output.getByRole('radio', { name: /决策备忘.*关键声明/u })).toBeChecked();
+    await openAdvancedSettings(page);
     const sources = page.getByRole('radiogroup', { name: '参考什么' });
     await expect(sources.getByRole('radio', { name: /网页搜索 \+ 已选资料/u })).toBeChecked();
     await sources.getByRole('radio', { name: /仅使用已选资料/u }).check();
