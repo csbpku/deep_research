@@ -10,7 +10,7 @@ import Alert from '@mui/material/Alert';
 import Chip from '@mui/material/Chip';
 import { AppButton } from '@/components/material/AppButton';
 import { AppDialog } from '@/components/material/AppDialog';
-import type { ExternalReadingDetail } from './RadarExternalReadingLanding';
+import type { ExternalReadingDetail } from './radar-reading-detail';
 import {
   clearJudgmentDraft,
   readJudgmentDraft,
