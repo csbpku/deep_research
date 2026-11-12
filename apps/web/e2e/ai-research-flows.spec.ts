@@ -311,6 +311,10 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({ status: 404, body: 'not found' }));
     await page.goto(`/ai-research/${jobId}`);
     await expect(page.getByText('Slides 提纲已生成，可继续编辑或追问。')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'AI 调研对话输入' })).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: '研究对话输入' })).toBeVisible();
+    await expect(page.getByText('本次调研的对话与追问在下方结果卡片中继续。')).toBeVisible();
+    await expect(page.getByRole('link', { name: '开始新的调研' })).toBeVisible();
     await expect(page.getByLabel('Slides 提纲预览')).toHaveCount(1);
     await expect(page.getByText('1 / 3 页', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '跳到第 3 页' }).click();

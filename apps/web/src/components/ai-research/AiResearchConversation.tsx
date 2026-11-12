@@ -1182,7 +1182,14 @@ export function AiResearchConversation({
             <Typography variant="metadata" color="text.secondary">对话自动保存；方案草稿仅保存在当前浏览器。</Typography>
           </Box>
         </Box>
-        <StepStepper step={stepIndex} finished={Boolean(activeJobId) && activeJobTerminal} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          {activeJobHasReport ? (
+            <Link component={NextLink} href="/ai-research" underline="always" sx={{ typography: 'metadata', fontWeight: 500 }}>
+              开始新的调研
+            </Link>
+          ) : null}
+          <StepStepper step={stepIndex} finished={Boolean(activeJobId) && activeJobTerminal} />
+        </Box>
       </Box>
 
       <Box sx={{ display: 'flex', minHeight: 0, flexDirection: 'column' }}>
@@ -1198,7 +1205,12 @@ export function AiResearchConversation({
             </Box>
           ) : (
             <>
-              {visibleMessages.map((message) => (
+              {activeJobHasReport ? (
+                <Typography variant="body2" color="text.secondary">
+                  本次调研的对话与追问在下方结果卡片中继续。
+                </Typography>
+              ) : null}
+              {!activeJobHasReport ? visibleMessages.map((message) => (
                 <Box key={message.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flexDirection: message.role === 'user' ? 'row-reverse' : 'row' }}>
                   <Box component="span" sx={{ mt: 0.5, display: 'grid', width: 28, height: 28, flexShrink: 0, placeItems: 'center', borderRadius: 1, bgcolor: message.role === 'assistant' ? 'action.selected' : 'action.hover', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
                     {message.role === 'assistant' ? <Bot size={14} /> : <UserRound size={14} />}
@@ -1212,9 +1224,9 @@ export function AiResearchConversation({
                     </Typography>
                   </Box>
                 </Box>
-              ))}
+              )) : null}
 
-              {phase === 'understand' && messages.length === 1 ? (
+              {!activeJobHasReport && phase === 'understand' && messages.length === 1 ? (
                 <Box sx={{ ml: 5, minWidth: 0, pt: 0.5 }}>
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                     {EXAMPLE_PROMPTS.map((example) => (
@@ -1381,6 +1393,7 @@ export function AiResearchConversation({
           </Box>
         ) : null}
 
+        {activeJobHasReport ? null : (
         <Box component="form" data-ai-research-form onSubmit={handleMessageSubmit} sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper', p: 2 }}>
     <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper', transition: 'border-color 120ms ease-out, box-shadow 120ms ease-out', '&:focus-within': { borderColor: 'primary.main', boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}22` } }}>
             <Textarea
@@ -1417,6 +1430,7 @@ export function AiResearchConversation({
             </Box>
           </Box>
         </Box>
+        )}
       </Box>
     </Paper>
   );
