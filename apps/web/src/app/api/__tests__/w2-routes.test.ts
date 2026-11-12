@@ -164,7 +164,7 @@ describe('CreateAiJobInput validation', async () => {
     expect(r.success).toBe(true);
     if (r.success) {
       expect(r.data.sourcePolicy).toBe('prefer_user_sources');
-      expect(r.data.reportType).toBe('research_report');
+      expect(r.data.reportType).toBe('decision_memo');
     }
   });
 

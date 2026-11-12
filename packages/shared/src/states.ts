@@ -104,8 +104,20 @@ export const RADAR_FEEDBACK_TYPE = {
   USED: 'used',
   FAVORITE: 'favorite',
   SUGGEST_RESEARCH: 'suggest_research',
+  // P0-4 判断落点：轻量判断，与旧的 useful/inaccurate 等并存。
+  READ: 'read',
+  LATER: 'later',
+  PILOT: 'pilot',
 } as const;
 export type RadarFeedbackType = (typeof RADAR_FEEDBACK_TYPE)[keyof typeof RADAR_FEEDBACK_TYPE];
+
+// P0-4 “我判断过的”集合：不感兴趣复用 inaccurate，避免再引入同义枚举值。
+export const RADAR_JUDGMENT_FEEDBACK_TYPES = [
+  'read',
+  'later',
+  'pilot',
+  'inaccurate',
+] as const satisfies readonly RadarFeedbackType[];
 
 // Week 5 雷达：候选处理状态（同步批次内）
 export const RADAR_CANDIDATE_STATUS = {

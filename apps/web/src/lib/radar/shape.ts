@@ -19,6 +19,9 @@ export type RadarFeedbackCount = {
   used: number;
   favorite: number;
   suggest_research: number;
+  read: number;
+  later: number;
+  pilot: number;
 };
 
 export const RADAR_FEEDBACK_TYPES = [
@@ -27,6 +30,9 @@ export const RADAR_FEEDBACK_TYPES = [
   'used',
   'favorite',
   'suggest_research',
+  'read',
+  'later',
+  'pilot',
 ] as const satisfies readonly RadarFeedbackType[];
 
 export type RadarCandidateShape = {
@@ -91,7 +97,16 @@ export type RadarCandidateShape = {
 
 /** 列表默认反馈计数（避免每个候选都 groupBy 一次）。 */
 export function emptyFeedbackCounts(): RadarFeedbackCount {
-  return { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 };
+  return {
+    useful: 0,
+    inaccurate: 0,
+    used: 0,
+    favorite: 0,
+    suggest_research: 0,
+    read: 0,
+    later: 0,
+    pilot: 0,
+  };
 }
 
 function sanitizeOriginalMeta(value: unknown): unknown {

@@ -9,7 +9,7 @@
 // 因而只断言稳定的 UI 契约，不依赖某条真实综述内容是否已生成。
 
 import { test, expect } from '@playwright/test';
-import { loginWithCredentials } from './fixtures';
+import { loginWithCredentials, openAdvancedSettings } from './fixtures';
 
 test.describe('Topics list filter chips (V2)', () => {
   test('filter chips are present and clicking changes the URL', async ({ page }) => {
@@ -162,6 +162,7 @@ test.describe('AI Research V2 brief', () => {
 
     // Brief 卡片应出现
     await expect(page.getByText('研究方案', { exact: true })).toBeVisible({ timeout: 5000 });
+    await openAdvancedSettings(page);
     const objective = page.getByRole('combobox', { name: '研究方式', exact: true });
     await expect(objective).toHaveText('主题概览');
     await objective.click();

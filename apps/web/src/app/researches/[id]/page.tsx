@@ -6,8 +6,10 @@
 // published: 全员可见；owner 可编辑，admin 仅可编辑已发布内容
 // （W3 canEdit / canManageStatus 由服务端计算）
 //
-// type='research'（研究报告）：研究摘要 → 正文 → 参考文献由正文引用承担
-// type='knowledge'（知识卡片）：sourceComment 引用 → 短 body → 来源评论跳转
+// 阅读顺序（P0-8 结果页重排）：结论/背景/风险 → 正文 → 证据/来源 → 审查。
+//   - 发布披露只保留顶部一条可见警示条；完整披露明细、修改历史与原始元数据
+//     统一收进页尾唯一的「审查与元数据」折叠区（不再堆叠多个 details）。
+//   - type='knowledge'（知识卡片）沿用同一顺序：结论 → 正文 → 来源评论 → 来源。
 // W9：评论使用右侧 Sheet 抽屉；正文 SectionCard 减少（仅保留 tone 区分手感）。
 //
 // 布局：max-w-measure（760px）—— 中文长文的舒适量度。
@@ -27,6 +29,7 @@ import MarkdownContent from '@/components/MarkdownContent';
 import { EmptyState } from '@/components/EmptyState';
 import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
+import { ExportResearchMarkdownButton } from '@/components/research/ExportResearchMarkdownButton';
 import { MetaItem, MetaRow } from '@/components/domain/MetaRow';
 import { SectionCard } from '@/components/domain/SectionCard';
 import { StatusBadge } from '@/components/domain/StatusBadge';
@@ -102,6 +105,7 @@ interface ResearchDetail {
   createdAt: string;
   updatedAt: string;
   author: { id: string; name: string };
+  reviewStatus?: string | null;
   canEdit: boolean;
   canManageStatus: boolean;
   researchSources: ResearchSourceItem[];
@@ -109,11 +113,22 @@ interface ResearchDetail {
   reviewDisclosure?: Array<{
     claimId: string;
     claim: string;
-    action: 'accept_uncertainty';
+    action?: 'accept_uncertainty';
     label: string;
-    reason: string | null;
+    reason?: string | null;
     evidenceStatus: 'supported' | 'unverified' | 'contradicted';
   }>;
+  reviewVerification?: 'verified' | 'disclosed' | null;
+  reviewDisclosureSummary?: {
+    coverageStatus: 'complete' | 'insufficient' | 'not_applicable' | null;
+    researchSufficiencyStatus: 'sufficient' | 'insufficient' | 'not_assessed' | null;
+    openCount: number;
+    unsupportedCount: number;
+    conflictCount: number;
+    highRiskOpenCount: number;
+    disclosedCount: number;
+    machineIncomplete: boolean;
+  } | null;
   sourceComment: SourceCommentItem | null;
   audits?: AuditEntry[];
   commentCount?: number;
@@ -156,12 +171,58 @@ function addReaderAnchor(href: string, anchor: SavedSourceAnchor): string {
   }
 }
 
+/** 来源/证据列表：研究报告与知识卡片共用，保证证据区只有一套渲染。 */
+function ResearchSourceList({ sources }: { sources: ResearchSourceItem[] }) {
+  return (
+    <div className={styles.sourceItems}>
+      {sources.map((source) => {
+        const ref = source.sourceRef && typeof source.sourceRef === 'object'
+          ? source.sourceRef as { type?: string; value?: string; anchor?: SavedSourceAnchor | null; radarSummaryId?: string }
+          : {};
+        const link = resolveResearchSourceLink(ref, source.canonicalKey);
+        if (!link) return null;
+        const anchor = ref.anchor && typeof ref.anchor === 'object' ? ref.anchor : null;
+        const readerHref = anchor?.quote ? addReaderAnchor(link.href, anchor) : link.href;
+        return (
+          <div key={source.id} className={styles.sourceItem}>
+            <a
+              href={readerHref}
+              target={link.external ? '_blank' : undefined}
+              rel={link.external ? 'noreferrer' : undefined}
+              className={styles.sourceLink}
+            >
+              <ArrowUpRight size={14} className={styles.sourceLinkIcon} />
+              <span className={styles.sourceLinkText}>{cleanResearchLabel(source.title ?? source.canonicalKey)}</span>
+            </a>
+            {ref.radarSummaryId && /^[0-9a-f-]{36}$/iu.test(ref.radarSummaryId) ? (
+              <Link href={`/radar/${ref.radarSummaryId}`} className={styles.sourceLink}>关联雷达</Link>
+            ) : null}
+            {source.description ? (
+              <p className={styles.sourceDescription}>{cleanResearchText(source.description)}</p>
+            ) : null}
+            {anchor?.quote ? (
+              <div className={styles.anchor}>
+                <p className={styles.anchorTitle}>已保存原文锚点</p>
+                <p className={styles.anchorQuote}>“{cleanResearchText(anchor.quote)}”</p>
+                <p className={styles.anchorHelp}>打开原文后点击阅读插件会尝试定位；如果正文已变化，插件会明确提示无法准确定位。</p>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ResearchDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const me = useCurrentUser();
   const [discussionOpen, setDiscussionOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [loadingElapsed, setLoadingElapsed] = useState(0);
 
   const { data, isLoading, isError, error, refetch } = useQuery<ResearchDetail>({
@@ -244,9 +305,16 @@ export default function ResearchDetailPage() {
   }
 
   const isLongResearch = data.type === 'research';
+  // Decision memos are markdown research drafts; the format is carried by the
+  // artifact heading rather than researches.type, so surface it as a badge.
+  const isDecisionMemo = isLongResearch && data.body.trimStart().startsWith('# 决策备忘');
   const isKnowledge = data.type === 'knowledge';
   const isDraft = data.status === 'draft';
   const isArchived = data.status === 'archived';
+
+  const disclosureItems = data.reviewDisclosure ?? [];
+  const hasDisclosure = Boolean(data.reviewDisclosureSummary) || disclosureItems.length > 0;
+  const hasAudits = Boolean(data.audits && data.audits.length > 0);
 
   const displayTitle = cleanResearchLabel(data.title);
 
@@ -269,9 +337,15 @@ export default function ResearchDetailPage() {
           </Typography>
 
           <div className={styles.badges}>
-            <StatusBadge kind="researchType" value={isLongResearch ? 'research' : 'knowledge'} />
+            <StatusBadge kind="researchType" value={isDecisionMemo ? 'decision_memo' : isLongResearch ? 'research' : 'knowledge'} />
             <StatusBadge kind="method" value={data.creationMethod} />
             {isDraft && <StatusBadge kind="research" value="draft" />}
+            {!isDraft && data.reviewVerification === 'verified'
+              ? <StatusBadge kind="verification" value="verified" icon={<CheckCircle2 size={14} />} />
+              : null}
+            {!isDraft && data.reviewVerification === 'disclosed'
+              ? <StatusBadge kind="verification" value="disclosed" icon={<AlertTriangle size={14} />} />
+              : null}
             {data.featuredAt && <StatusBadge kind="featured" value="true" icon={<Star />} />}
           </div>
 
@@ -289,8 +363,21 @@ export default function ResearchDetailPage() {
           </MetaRow>
         </div>
 
-        {data.canEdit || data.canManageStatus ? (
+        {!isDraft || data.canEdit || data.canManageStatus ? (
           <div className={styles.actions}>
+            {!isDraft ? (
+              <ExportResearchMarkdownButton
+                research={{
+                  title: data.title,
+                  background: data.background,
+                  conclusion: data.conclusion,
+                  risks: data.risks,
+                  body: data.body,
+                  tags: data.tags,
+                  publishedAt: data.publishedAt,
+                }}
+              />
+            ) : null}
             {isDraft && data.canEdit ? (
               <DeleteDraftButton
                 researchId={data.id}
@@ -313,6 +400,29 @@ export default function ResearchDetailPage() {
                 }}
               />
             )}
+            {!isDraft && data.canEdit && data.creationMethod === 'ai_research' ? (
+              <AppButton
+                variant="outlined"
+                size="small"
+                disabled={reviewBusy || data.reviewStatus === 'queued' || data.reviewStatus === 'reviewing'}
+                onClick={() => {
+                  setReviewBusy(true);
+                  setReviewError(null);
+                  void fetch(`/api/researches/${data.id}/review`, { method: 'POST' })
+                    .then(async (response) => {
+                      if (!response.ok) throw new Error(`核验请求失败（${response.status}）`);
+                      await queryClient.invalidateQueries({ queryKey: ['research', data.id] });
+                      router.refresh();
+                    })
+                    .catch((err: unknown) => {
+                      setReviewError(err instanceof Error ? err.message : '核验请求失败，请稍后重试。');
+                    })
+                    .finally(() => setReviewBusy(false));
+                }}
+              >
+                {reviewBusy || data.reviewStatus === 'queued' || data.reviewStatus === 'reviewing' ? '核验进行中…' : '重新核验'}
+              </AppButton>
+            ) : null}
             {data.canEdit && (
               <AppButton
                 component={Link}
@@ -327,6 +437,7 @@ export default function ResearchDetailPage() {
           </div>
         ) : null}
       </div>
+      {reviewError ? <Typography component="p" variant="metadata" color="error.main" role="alert">{reviewError}</Typography> : null}
 
       {data.tags.length > 0 && (
         <TagList className={styles.tags}>
@@ -336,7 +447,55 @@ export default function ResearchDetailPage() {
         </TagList>
       )}
 
-      <div className={styles.columns}>
+      {/* 发布披露：仅保留一条可见警示；完整清单与审查信息统一收进页尾折叠区。 */}
+      {!isDraft && hasDisclosure && (
+        <SectionCard
+          title="发布时披露"
+          tone="warning"
+          icon={AlertTriangle}
+          className={styles.disclosureBanner}
+        >
+          <p className={styles.disclosureIntro}>
+            {data.reviewDisclosureSummary ? (
+              <>
+                {data.reviewDisclosureSummary.machineIncomplete
+                  ? '本轮自动核验只覆盖了报告的一部分，机器清单未完整产出。'
+                  : null}
+                {data.reviewDisclosureSummary.openCount > 0
+                  ? `发布时仍有 ${data.reviewDisclosureSummary.openCount} 条声明未完成核验`
+                    + (data.reviewDisclosureSummary.conflictCount > 0
+                      ? `，其中 ${data.reviewDisclosureSummary.conflictCount} 条存在来源冲突`
+                      : '')
+                    + '。'
+                  : null}
+                {data.reviewDisclosureSummary.researchSufficiencyStatus === 'insufficient'
+                  ? '研究资料尚未覆盖原问题的全部关键部分。'
+                  : null}
+                {data.reviewDisclosureSummary.disclosedCount > 0
+                  ? `作者已明确接受 ${data.reviewDisclosureSummary.disclosedCount} 条不确定性。`
+                  : null}
+                {' '}阅读时请结合原文证据和风险说明判断。
+              </>
+            ) : (
+              '这份调研保留了尚未完全确定的结论，阅读时请结合原文证据和风险说明判断。'
+            )}
+          </p>
+          <p className={styles.disclosureJump}>
+            {disclosureItems.length > 0 ? `共 ${disclosureItems.length} 条披露声明。` : null}
+            {hasAudits ? `修改历史 ${data.audits?.length} 条。` : null}
+            {' '}
+            <a
+              href="#review-audit"
+              className={styles.disclosureLink}
+              onClick={() => setReviewOpen(true)}
+            >
+              查看披露明细、修改历史与元数据
+            </a>
+          </p>
+        </SectionCard>
+      )}
+
+      <div className={styles.columns} data-has-aside={data.status === 'published' ? 'true' : 'false'}>
       <div className={styles.mainColumn}>
         {/* ── 长文布局：研究摘要 → 正文；参考文献由正文引用承担 ── */}
         {isLongResearch && (
@@ -350,14 +509,14 @@ export default function ResearchDetailPage() {
                 bodySpacing="top"
               >
                 <div className={styles.summarySections}>
-                  {data.background && (
-                    <SectionCard tone="info" icon={Info} title="背景">
-                      <MarkdownContent content={cleanResearchMarkdown(data.background)} />
-                    </SectionCard>
-                  )}
                   {data.conclusion && (
                     <SectionCard tone="success" icon={CheckCircle2} title="结论">
                       <MarkdownContent content={cleanResearchMarkdown(data.conclusion)} />
+                    </SectionCard>
+                  )}
+                  {data.background && (
+                    <SectionCard tone="info" icon={Info} title="背景">
+                      <MarkdownContent content={cleanResearchMarkdown(data.background)} />
                     </SectionCard>
                   )}
                   {data.risks && (
@@ -373,30 +532,41 @@ export default function ResearchDetailPage() {
               <MarkdownContent content={cleanResearchMarkdown(data.body)} />
             </SectionCard>
 
-            {data.reviewDisclosure && data.reviewDisclosure.length > 0 && (
-              <SectionCard title="不确定性说明" tone="warning" icon={AlertTriangle}>
-                <p className={styles.disclosureIntro}>
-                  这份调研保留了以下尚未完全确定的结论，阅读时请结合原文证据和风险说明判断。
-                </p>
-                <ul className={styles.disclosureList}>
-                  {data.reviewDisclosure.map((item) => (
-                    <li key={item.claimId} className={styles.disclosureItem}>
-                      <p className={styles.disclosureClaim}>{item.claim}</p>
-                      <p className={styles.disclosureNote}>
-                        {item.label}{item.reason ? ` · ${item.reason}` : ''}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
+            {data.researchSources.length > 0 && (
+              <SectionCard title="来源与证据" tone="muted">
+                <ResearchSourceList sources={data.researchSources} />
               </SectionCard>
             )}
 
           </>
         )}
 
-        {/* ── 精华布局：sourceComment 引用 + 短 body + 来源评论跳转 ── */}
+        {/* ── 知识卡片：结论 → 正文 → 来源评论/来源，证据统一排在正文之后 ── */}
         {isKnowledge && (
           <>
+            {data.conclusion && (
+              <SectionCard title="结论" tone="success" icon={CheckCircle2}>
+                <MarkdownContent content={cleanResearchMarkdown(data.conclusion)} />
+              </SectionCard>
+            )}
+
+            {data.background && (
+              <SectionCard title="背景">
+                <MarkdownContent content={cleanResearchMarkdown(data.background)} />
+              </SectionCard>
+            )}
+
+            {/* 风险字段:knowledge 布局也读 risks,字段对齐 research 布局 */}
+            {data.risks && (
+              <SectionCard title="风险与待验证项" tone="destructive" icon={AlertTriangle}>
+                <MarkdownContent content={cleanResearchMarkdown(data.risks)} />
+              </SectionCard>
+            )}
+
+            <SectionCard title="正文">
+              <MarkdownContent content={cleanResearchMarkdown(data.body)} />
+            </SectionCard>
+
             {data.sourceComment && (
               <SectionCard title="来源评论" tone="accent">
                 <blockquote className={styles.quote}>
@@ -422,90 +592,23 @@ export default function ResearchDetailPage() {
               </SectionCard>
             )}
 
+            {data.researchSources.length > 0 && (
+              <SectionCard title="来源" tone="muted">
+                <ResearchSourceList sources={data.researchSources} />
+              </SectionCard>
+            )}
+
             {data.researchTopics?.length ? (
               <Box component="nav" aria-label="关联专题" sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                 {data.researchTopics.map(({ topic }) => <Link key={topic.id} href={`/topics/${topic.slug}`}>{topic.name}</Link>)}
               </Box>
             ) : null}
-            {data.researchSources.length > 0 && (
-              <SectionCard title="来源" tone="muted">
-                <div className={styles.sourceItems}>
-                  {data.researchSources.map((source) => {
-                    const ref = source.sourceRef && typeof source.sourceRef === 'object'
-                      ? source.sourceRef as { type?: string; value?: string; anchor?: SavedSourceAnchor | null; radarSummaryId?: string }
-                      : {};
-                    const link = resolveResearchSourceLink(ref, source.canonicalKey);
-                    if (!link) return null;
-                    const anchor = ref.anchor && typeof ref.anchor === 'object' ? ref.anchor : null;
-                    const readerHref = anchor?.quote ? addReaderAnchor(link.href, anchor) : link.href;
-                    return (
-                      <div key={source.id} className={styles.sourceItem}>
-                        <a
-                          href={readerHref}
-                          target={link.external ? '_blank' : undefined}
-                          rel={link.external ? 'noreferrer' : undefined}
-                          className={styles.sourceLink}
-                        >
-                          <ArrowUpRight size={14} className={styles.sourceLinkIcon} />
-                          <span className={styles.sourceLinkText}>{cleanResearchLabel(source.title ?? source.canonicalKey)}</span>
-                        </a>
-                        {ref.radarSummaryId && /^[0-9a-f-]{36}$/iu.test(ref.radarSummaryId) ? (
-                          <Link href={`/radar/${ref.radarSummaryId}`} className={styles.sourceLink}>关联雷达</Link>
-                        ) : null}
-                        {source.description ? (
-                          <p className={styles.sourceDescription}>{cleanResearchText(source.description)}</p>
-                        ) : null}
-                        {anchor?.quote ? (
-                          <div className={styles.anchor}>
-                            <p className={styles.anchorTitle}>已保存原文锚点</p>
-                            <p className={styles.anchorQuote}>“{cleanResearchText(anchor.quote)}”</p>
-                            <p className={styles.anchorHelp}>打开原文后点击阅读插件会尝试定位；如果正文已变化，插件会明确提示无法准确定位。</p>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              </SectionCard>
-            )}
-
-            <SectionCard title="正文">
-              <MarkdownContent content={cleanResearchMarkdown(data.body)} />
-            </SectionCard>
-
-            {data.background && (
-              <SectionCard title="背景">
-                <MarkdownContent content={cleanResearchMarkdown(data.background)} />
-              </SectionCard>
-            )}
-
-            {data.conclusion && (
-              <SectionCard title="结论" tone="success" icon={CheckCircle2}>
-                <MarkdownContent content={cleanResearchMarkdown(data.conclusion)} />
-              </SectionCard>
-            )}
-
-            {/* 风险字段:knowledge 布局也读 risks,字段对齐 research 布局 */}
-            {data.risks && (
-              <SectionCard title="风险与待验证项" tone="destructive" icon={AlertTriangle}>
-                <MarkdownContent content={cleanResearchMarkdown(data.risks)} />
-              </SectionCard>
-            )}
           </>
         )}
       </div>
-
-      <aside className={styles.aside}>
-        <SectionCard title="证据卡" tone="muted" icon={Info}>
-          {/* D5/D6:证据卡「内容类型」「更新时间」对齐 SectionCard tone="muted" 风格;
-              顶部 MetaRow 已展示「作者/创建/发布/评论数」,证据卡不重复 */}
-          <dl className={styles.evidenceList}>
-            <div className={styles.evidenceItem}><dt>状态</dt><dd>{isDraft ? '草稿' : data.status === 'published' ? '已发布' : '已归档'}</dd></div>
-            <div className={styles.evidenceItem}><dt>内容类型</dt><dd>{isLongResearch ? '研究报告' : '知识卡片'}</dd></div>
-            <div className={styles.evidenceItem}><dt>更新时间</dt><dd className={styles.evidenceDate}>{new Date(data.updatedAt).toISOString().slice(0, 10)}</dd></div>
-          </dl>
-        </SectionCard>
-        {data.status === 'published' ? (
+      {/* 次要栏：只保留协作入口，元数据已移入页尾「审查与元数据」 */}
+      {data.status === 'published' ? (
+        <div className={styles.aside}>
           <SectionCard
             title="团队讨论"
             tone="muted"
@@ -519,53 +622,98 @@ export default function ResearchDetailPage() {
           >
             <p className={styles.discussionHint}>发布后可在这里查看评论、回复并继续协作。</p>
           </SectionCard>
-        ) : null}
-      </aside>
+        </div>
+      ) : null}
       </div>
 
-      {/* 审计历史 */}
-      {data.audits && data.audits.length > 0 && (
-        <details className={styles.audit}>
-          <summary className={styles.auditSummary}>
-            修改历史 ({data.audits.length})
-          </summary>
-          <div className={styles.auditEntries}>
-            {data.audits.map((a) => (
-              <div key={a.id} className={styles.auditEntry}>
-                <span className={styles.auditAction}>
-                  {a.action === 'create'
-                    ? '创建'
-                    : a.action === 'edit'
-                      ? '编辑'
-                      : a.action === 'publish'
-                    ? '发布'
-                    : a.action === 'archive'
-                      ? '归档'
-                      : a.action === 'restore'
-                        ? '恢复'
-                        : a.action === 'feature'
-                          ? '设为精华'
-                          : a.action === 'unfeature'
-                            ? '取消精华'
-                    : a.action}
-                </span>{' '}
-                by {a.editor.name} at {new Date(a.createdAt).toLocaleString('zh-CN')}
-                {a.diff &&
-                typeof a.diff === 'object' &&
-                Object.keys(a.diff as Record<string, unknown>).length > 0 ? (
-                  <span> （{Object.keys(a.diff as Record<string, unknown>).join(', ')} 变更）</span>
-                ) : null}
-                {a.sourceIntent === 'revise' ? (
-                  <div className={styles.auditRevision}>
-                    <span className={styles.auditRevisionLabel}>来自追问修订</span>
-                    {a.sourceQuestion ? <span className={styles.auditQuestion}>：{a.sourceQuestion}</span> : null}
-                  </div>
-                ) : null}
-              </div>
-            ))}
+      {/* 审查与审计：披露明细、原始元数据、修改历史合并为唯一折叠区（默认收起） */}
+      <details
+        id="review-audit"
+        className={styles.reviewAudit}
+        open={reviewOpen}
+        onToggle={(event) => setReviewOpen(event.currentTarget.open)}
+      >
+        <summary className={styles.reviewAuditSummary}>
+          <span className={styles.reviewAuditTitle}>审查与元数据</span>
+          <span className={styles.reviewAuditHint}>披露明细 · 修改历史 · 原始元数据（默认收起）</span>
+        </summary>
+
+        <div className={styles.reviewAuditBody}>
+          {disclosureItems.length > 0 ? (
+            <div className={styles.reviewAuditBlock}>
+              <h3 className={styles.reviewAuditHeading}>披露声明（{disclosureItems.length}）</h3>
+              <p className={styles.disclosureIntro}>
+                以下结论在发布时尚未完全核验，阅读时请结合原文证据与风险说明判断。
+              </p>
+              <ul className={styles.disclosureList}>
+                {disclosureItems.map((item) => (
+                  <li key={item.claimId} className={styles.disclosureItem}>
+                    <p className={styles.disclosureClaim}>{item.claim}</p>
+                    <p className={styles.disclosureNote}>
+                      {item.label}{item.reason ? ` · ${item.reason}` : ''}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              {data.reviewDisclosureSummary && data.reviewDisclosureSummary.openCount > disclosureItems.length ? (
+                <p className={styles.disclosureNote}>
+                  其余 {data.reviewDisclosureSummary.openCount - disclosureItems.length} 条未在此展开。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className={styles.reviewAuditBlock}>
+            <h3 className={styles.reviewAuditHeading}>元数据</h3>
+            <dl className={styles.evidenceList}>
+              <div className={styles.evidenceItem}><dt>状态</dt><dd>{isDraft ? '草稿' : data.status === 'published' ? '已发布' : '已归档'}</dd></div>
+              <div className={styles.evidenceItem}><dt>内容类型</dt><dd>{isLongResearch ? '研究报告' : '知识卡片'}</dd></div>
+              <div className={styles.evidenceItem}><dt>更新时间</dt><dd className={styles.evidenceDate}>{new Date(data.updatedAt).toISOString().slice(0, 10)}</dd></div>
+            </dl>
           </div>
-        </details>
-      )}
+
+          {hasAudits ? (
+            <div className={styles.reviewAuditBlock}>
+              <h3 className={styles.reviewAuditHeading}>修改历史（{data.audits?.length}）</h3>
+              <div className={styles.auditEntries}>
+                {(data.audits ?? []).map((a) => (
+                  <div key={a.id} className={styles.auditEntry}>
+                    <span className={styles.auditAction}>
+                      {a.action === 'create'
+                        ? '创建'
+                        : a.action === 'edit'
+                          ? '编辑'
+                          : a.action === 'publish'
+                        ? '发布'
+                        : a.action === 'archive'
+                          ? '归档'
+                          : a.action === 'restore'
+                            ? '恢复'
+                            : a.action === 'feature'
+                              ? '设为精华'
+                              : a.action === 'unfeature'
+                                ? '取消精华'
+                        : a.action}
+                    </span>{' '}
+                    by {a.editor.name} at {new Date(a.createdAt).toLocaleString('zh-CN')}
+                    {a.diff &&
+                    typeof a.diff === 'object' &&
+                    Object.keys(a.diff as Record<string, unknown>).length > 0 ? (
+                      <span> （{Object.keys(a.diff as Record<string, unknown>).join(', ')} 变更）</span>
+                    ) : null}
+                    {a.sourceIntent === 'revise' ? (
+                      <div className={styles.auditRevision}>
+                        <span className={styles.auditRevisionLabel}>来自追问修订</span>
+                        {a.sourceQuestion ? <span className={styles.auditQuestion}>：{a.sourceQuestion}</span> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </details>
 
       {data.status === 'published' ? (
         <Drawer open={discussionOpen} anchor="right" onClose={() => setDiscussionOpen(false)} slotProps={{

@@ -56,6 +56,7 @@ from ai_engine.adapters.base import (
     ResearchRequest,
 )
 from ai_engine.contracts.errors import AdapterError
+from ai_engine.decision_memo import condense_to_decision_memo
 from ai_engine.contracts.states import (
     AI_JOB_STATUS,
     AI_JOB_STEP,
@@ -4869,6 +4870,32 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             # citation/materialization boundary as the primary writer.
             report = _materialize_evidence_citations(report, sources)
             report = _clean_report_output(report, sources)
+            if job.request.report_type == "decision_memo":
+                # The memo is derived from the same evidence the report used;
+                # it never triggers another search and never invents claims.
+                memo_spec = resolve_spec(
+                    "utility", explicit=os.environ.get("REPORT_FALLBACK_LLM")
+                )
+                memo = await condense_to_decision_memo(
+                    topic=job.request.topic,
+                    report=report,
+                    sources=[
+                        {
+                            "title": source.title,
+                            "url": str((source.source_ref or {}).get("value") or ""),
+                        }
+                        for source in sources
+                    ],
+                    request_id=job.request.request_id,
+                    llm_spec=memo_spec,
+                )
+                if memo:
+                    report = memo
+                else:
+                    logger.warning(
+                        "ai-engine.decision_memo.fallback_to_report",
+                        extra={"request_id": job.request.request_id},
+                    )
             # A fallback writer can still return a bibliography-only response
             # (for example when its provider times out after emitting links).
             # Make the publication boundary deterministic: a successful
@@ -4944,11 +4971,12 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                         ),
                     }
                 )
-            report = _append_run_audit(
-                report,
-                audit_progress,
-                None,
-            )
+            if job.request.report_type != "decision_memo":
+                report = _append_run_audit(
+                    report,
+                    audit_progress,
+                    None,
+                )
             report = _append_references(report, sources)
 
             async with job.lock:

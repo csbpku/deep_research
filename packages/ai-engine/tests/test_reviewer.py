@@ -600,8 +600,9 @@ async def test_failed_adjudication_batch_is_unverified_without_discarding_other_
         "部分批次失败",
     )
 
-    # Inventory + batch 1 + failed batch attempt/retry + batch 3.
-    assert len(calls) == 5
+    # Inventory + batch 1 + batch 3, plus retries and recursive splits of
+    # the failing [C3, C4] batch (each singleton is retried too).
+    assert len(calls) >= 7
     verdicts = {claim.claim_id: claim.verdict for claim in result.claims}
     assert verdicts["C1"] == "verified"
     assert verdicts["C2"] == "verified"
@@ -625,16 +626,23 @@ async def test_missing_inventory_coverage_marker_is_not_treated_as_complete(
     calls: list[dict[str, object]] = []
 
     async def review(**kwargs: object) -> SimpleNamespace:
+        # Inventory chunks now run concurrently, so route by prompt instead of
+        # call order: only the first report chunk yields a claim, and neither
+        # chunk declares a coverage marker.
         calls.append(kwargs)
-        if len(calls) == 1:
-            return SimpleNamespace(text=json.dumps({
-                "claims": [{
+        prompt = str(kwargs.get("user_prompt", ""))
+        if "这是报告全文第" in prompt:
+            claims = (
+                [{
                     "claim_id": "C1",
                     "claim": "事实声明",
                     "claim_type": "external_fact",
                     "risk": "medium",
-                }],
-            }, ensure_ascii=False))
+                }]
+                if "第 1/" in prompt
+                else []
+            )
+            return SimpleNamespace(text=json.dumps({"claims": claims}, ensure_ascii=False))
         return SimpleNamespace(text=json.dumps({
             "claims": [{
                 "claim_id": "C1",
@@ -655,7 +663,7 @@ async def test_missing_inventory_coverage_marker_is_not_treated_as_complete(
         "覆盖检查",
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 3  # two inventory chunks + one adjudication batch
     assert result.coverage_status == "insufficient"
     assert result.to_dict()["review_outcome"] == "attention"
 

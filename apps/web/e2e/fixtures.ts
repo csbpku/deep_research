@@ -67,3 +67,15 @@ export async function loginWithCredentials(
 export async function waitForHydration(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle');
 }
+
+/**
+ * 研究确认页把「研究方式 / 重点回答 / 投入多少 / 参考什么」收进了默认折叠的
+ * 「高级设置」。任何需要操作这些控件（或断言其可见）的用例都先展开它。
+ */
+export async function openAdvancedSettings(page: Page): Promise<void> {
+  const details = page.locator('[data-testid="ai-research-advanced"]');
+  await details.waitFor({ state: 'attached' });
+  const open = await details.evaluate((el) => (el as HTMLDetailsElement).open);
+  if (!open) await details.locator('summary').first().click();
+  await expect(details).toHaveJSProperty('open', true);
+}

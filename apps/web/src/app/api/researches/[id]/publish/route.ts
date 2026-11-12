@@ -18,16 +18,28 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { queuePersonalKnowledgeIndex } from '../../../../../lib/personal-knowledge-index';
 import { resolveCurrentReviewState } from '../../../../../lib/research-review-state';
-import { getReviewPublicationGate, reviewCoverageStatus } from '../../../../../lib/research-review-decisions';
+import {
+  getReviewPublicationGate,
+  getReviewPublishDisposition,
+  reviewCoverageStatus,
+} from '../../../../../lib/research-review-decisions';
 import { evaluateResearchSufficiency } from '../../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 
 const IdParam = z.object({ id: z.string().uuid() });
+const PublishBody = z.object({
+  // A team publish with residual uncertainty is allowed only when the author
+  // explicitly acknowledges it. The flag is an action, not a hidden default.
+  acknowledgeDisclosure: z.boolean().optional(),
+});
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
   const u = await requireUser(req);
   if (u instanceof NextResponse) return u;
+
+  const body = PublishBody.safeParse(await req.json().catch(() => ({})));
+  const acknowledgeDisclosure = body.success ? body.data.acknowledgeDisclosure === true : false;
 
   const parsed = IdParam.safeParse(await ctx.params);
   if (!parsed.success) {
@@ -160,6 +172,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     : reviewState.isLegacyFallback && reviewState.status === 'passed'
       ? {
           status: 'clear' as const,
+          coverageStatus: 'complete' as const,
+          coverageIncomplete: false,
+          researchSufficiencyStatus: researchSufficiency.status,
           openCount: 0,
           highRiskOpenCount: 0,
           conflictCount: 0,
@@ -169,27 +184,26 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           hardBlockCount: 0,
         }
       : null;
-  if (publicationGate?.status === 'blocked' || reviewState.status === 'blocked') {
+  const disposition = getReviewPublishDisposition(publicationGate, {
+    claims: reviewState.run?.claims,
+    decisions: reviewState.run?.decisions,
+  });
+  if (disposition.hardBlocked || reviewState.status === 'blocked') {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: '事实审核发现冲突，修订并重新审核后才能发布',
+      message: '事实审核发现高风险冲突；修订相关结论并重新审核后才能发布',
       requestId,
-      details: { publicationGate },
+      details: { publicationGate, disclosure: disposition.disclosure },
     });
   }
   if (
     existing.creationMethod === 'ai_research'
-    && (!publicationGate || !['clear', 'publish_with_disclosure'].includes(publicationGate.status))
+    && (disposition.requiresAcknowledgement || !publicationGate)
+    && !acknowledgeDisclosure
   ) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: publicationGate?.status === 'needs_action'
-        ? '还有未处理的审核声明；请修改正文或明确接受允许保留的不确定性后再发布'
-        : publicationGate?.status === 'coverage_insufficient'
-          ? '本轮审核覆盖不足，不能据此发布；请重新审核当前版本'
-        : publicationGate?.status === 'unavailable'
-          ? '自动审核尚未完成，请重试或转人工审核后再发布'
-          : '事实审核尚未完成，审核通过后才能发布 AI 调研',
+      message: '这份调研还有未完成核验的内容；确认带披露发布后才能继续',
       requestId,
       details: {
         reviewStatus: reviewState.status,
@@ -198,15 +212,23 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         reviewRunOutcome: reviewState.outcome,
         reviewRevisionMatches: reviewState.isCurrentRevision,
         publicationGate,
+        requiresDisclosureAcknowledgement: true,
+        disclosure: disposition.disclosure,
       },
     });
   }
 
-  const missingSummaryFields = [
-    !existing.background?.trim() ? '背景' : null,
-    !existing.conclusion?.trim() ? '结论' : null,
-    !existing.risks?.trim() ? '风险或待验证项' : null,
-  ].filter((field): field is string => Boolean(field));
+  // Knowledge cards are a pointer plus a short judgment, not a research
+  // report: background/risk sections are optional, so their own gate only
+  // requires a non-empty body.
+  const isKnowledgeCard = existing.type === 'knowledge';
+  const missingSummaryFields = isKnowledgeCard
+    ? (!existing.body.trim() ? ['正文'] : [])
+    : [
+      !existing.background?.trim() ? '背景' : null,
+      !existing.conclusion?.trim() ? '结论' : null,
+      !existing.risks?.trim() ? '风险或待验证项' : null,
+    ].filter((field): field is string => Boolean(field));
   if (missingSummaryFields.length > 0) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
@@ -345,10 +367,29 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
                 decisions: freshState.run.decisions,
               })
             : freshState.isLegacyFallback && freshState.status === 'passed'
-              ? { status: 'clear' as const }
+              ? {
+                  status: 'clear' as const,
+                  coverageStatus: 'complete' as const,
+                  coverageIncomplete: false,
+                  researchSufficiencyStatus: freshResearchSufficiency.status,
+                  openCount: 0,
+                  highRiskOpenCount: 0,
+                  conflictCount: 0,
+                  acceptedCount: 0,
+                  unsupportedCount: 0,
+                  disclosedCount: 0,
+                  hardBlockCount: 0,
+                }
               : null;
-          if (!freshGate || !['clear', 'publish_with_disclosure'].includes(freshGate.status)) {
+          const freshDisposition = getReviewPublishDisposition(freshGate, {
+            claims: freshState.run?.claims,
+            decisions: freshState.run?.decisions,
+          });
+          if (freshDisposition.hardBlocked) {
             throw new Error('RESEARCH_PUBLISH_REVIEW_GATE');
+          }
+          if ((freshDisposition.requiresAcknowledgement || !freshGate) && !acknowledgeDisclosure) {
+            throw new Error('RESEARCH_PUBLISH_DISCLOSURE_REQUIRED');
           }
         }
       }
@@ -464,6 +505,12 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       return published;
     });
   } catch (error) {
+    if (error instanceof Error && error.message === 'RESEARCH_PUBLISH_DISCLOSURE_REQUIRED') {
+      return NextResponse.json(
+        { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '审核状态已更新；请重新确认本次带披露发布。', requestId },
+        { status: 409 },
+      );
+    }
     if (error instanceof Error && (error.message === 'RESEARCH_PUBLISH_CONFLICT' || error.message === 'RESEARCH_PUBLISH_REVIEW_GATE')) {
       return NextResponse.json(
         { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '草稿或审核状态已发生变化，请刷新后重新确认发布。', requestId },

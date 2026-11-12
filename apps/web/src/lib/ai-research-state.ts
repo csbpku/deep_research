@@ -2,7 +2,7 @@ import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import type { BriefValue } from '@/components/ai-research/AiResearchBrief';
 
 export type ResearchDraft = {
-  reportType: 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
+  reportType: 'decision_memo' | 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
   reportLength: 'brief' | 'standard' | 'deep';
   sourcePolicy: 'prefer_user_sources' | 'only_user_sources';
   sourceUrls: string[];
@@ -36,7 +36,7 @@ export function stripResearchCitationMarkers(content: string): string {
 function isDraft(value: unknown): value is ResearchDraft {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const v = value as Record<string, unknown>;
-  if (!['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(v.reportType)) ||
+  if (!['decision_memo', 'research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(v.reportType)) ||
       !['brief', 'standard', 'deep'].includes(String(v.reportLength)) ||
       !['prefer_user_sources', 'only_user_sources'].includes(String(v.sourcePolicy)) ||
       !Array.isArray(v.sourceUrls) || v.sourceUrls.length > 10 ||

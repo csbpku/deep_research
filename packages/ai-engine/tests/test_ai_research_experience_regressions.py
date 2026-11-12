@@ -86,13 +86,18 @@ async def test_draft_review_uses_full_revision_hash_not_body_origin_hash() -> No
     import json
 
     assert json.loads(review[-1])["sourceSnapshotFormat"] == "canonical-v1"
+    # Pre-filled summary fields are part of the reviewed snapshot; the hash
+    # must cover them or the run would look stale as soon as the draft exists.
+    from ai_engine.research_summary import derive_research_summary
+
+    summary = derive_research_summary(body)
     assert review[3] == research_revision_hash(
         {
             "title": snapshot.topic,
             "body": body,
-            "background": None,
-            "conclusion": None,
-            "risks": None,
+            "background": summary["background"],
+            "conclusion": summary["conclusion"],
+            "risks": summary["risks"],
             "tags": [],
         }
     )

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
-import { loginWithCredentials } from './fixtures';
+import { loginWithCredentials, openAdvancedSettings } from './fixtures';
 
 test('database transcript writes stay ordered across concurrent batches', async ({ request }) => {
   await loginWithCredentials(request, { email: 'member@e2e.local', role: 'member' });
@@ -121,12 +121,22 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     const chat = page.getByRole('region', { name: 'AI 调研对话', exact: true });
     await expect(chat).not.toContainText('没能确定具体的调研对象');
     await expect(chat).not.toContainText('这份调研将支持什么决策');
+    const expandThread = async () => {
+      const details = page.locator('[data-testid="ai-research-thread"]');
+      if (!(await details.evaluate((el) => (el as HTMLDetailsElement).open))) {
+        await details.locator('summary').first().click();
+      }
+      await expect(details).toHaveJSProperty('open', true);
+      await expect(chat).toContainText('我会围绕');
+    };
     const assertOrder = async () => {
+      await expandThread();
       const text = await chat.innerText();
       expect(text.indexOf('告诉我你想弄清楚的问题')).toBeLessThan(text.indexOf(question));
       expect(text.indexOf(question)).toBeLessThan(text.indexOf('我会围绕'));
     };
     await assertOrder();
+    await openAdvancedSettings(page);
     const focus = page.getByRole('textbox', { name: '重点回答' });
     await expect(focus).toHaveValue('概念和入门路径');
     await focus.fill('先讲概念，再给入门示例');
@@ -156,7 +166,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     expect((submitted?.context as string).length).toBeGreaterThan(2000);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.reload();
-    await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
+    await openAdvancedSettings(page);
     await assertOrder();
     const restored = await chat.innerText();
     expect(restored.indexOf('最后务必保留安全边界')).toBeLessThan(restored.indexOf('再给使用示例'));

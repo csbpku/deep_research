@@ -27,6 +27,7 @@ import inspect
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
@@ -66,6 +67,7 @@ from ai_engine.job_runner.store import (
 )
 from ai_engine.job_runner.models import JobSnapshot, ReviewWorkItem
 from ai_engine.reviewer import ClaimVerdict
+from ai_engine.research_summary import derive_research_summary
 from ai_engine.llm.client import (
     TextGenerationResult,
     generate_text,
@@ -73,7 +75,13 @@ from ai_engine.llm.client import (
     sanitize_llm_error,
     stream_text,
 )
-from ai_engine.llm.config import config_snapshot, resolve_spec
+from ai_engine.llm.config import (
+    LlmPurpose,
+    LlmRoute,
+    config_snapshot,
+    resolve_route,
+    resolve_spec,
+)
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 from ai_engine.llm.token_budget import (
     TokenBudgetExceeded,
@@ -465,13 +473,24 @@ async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
             await asyncio.sleep(1.0)
 
 
-def _fact_review_timeout_seconds() -> int:
-    """Bound one independent review attempt; it must not hold the job queue."""
+def _fact_review_timeout_seconds(report_chars: int = 0) -> int:
+    """Bound one independent review attempt; it must not hold the job queue.
+
+    The budget scales with report length: a 30k-character report needs a dozen
+    inventory chunks plus several adjudication batches, and a flat 180s cut
+    the review off mid-batch (``review_unavailable``) even though every model
+    call succeeded. The base covers one inventory wave; one extra second per
+    ~30 characters keeps the queue bound while letting long reports finish.
+    """
     try:
-        value = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "180"))
+        base = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "300"))
     except (TypeError, ValueError):
-        value = 180
-    return min(max(value, 30), 600)
+        base = 300
+    # Observed locally: inventory alone can take ~10 minutes for 31k characters
+    # when the provider needs 60-180s per chunk; adjudication adds ~6 minutes
+    # at concurrency 3. 1s per 30 characters keeps that inside the bound.
+    scaled = base + max(0, report_chars) // 30
+    return min(max(scaled, 30), 1500)
 
 
 def _fact_review_heartbeat_seconds(store: JobStore) -> float:
@@ -724,7 +743,7 @@ async def _review_one_item(store: JobStore, work: ReviewWorkItem) -> None:
                             risk=cast(Any, target_risk),
                             phase_callback=review_progress,
                         ),
-                        timeout=_fact_review_timeout_seconds(),
+                        timeout=_fact_review_timeout_seconds(len(work.report)),
                     )
                 if result.claims:
                     challenged = result.claims[0]
@@ -759,7 +778,7 @@ async def _review_one_item(store: JobStore, work: ReviewWorkItem) -> None:
                             report_type=work.report_type,
                             phase_callback=review_progress,
                         ),
-                        timeout=_fact_review_timeout_seconds(),
+                        timeout=_fact_review_timeout_seconds(len(work.report)),
                     )
         except asyncio.TimeoutError:
             checkpoint_claims = _claims_from_review_inventory(workflow_checkpoints)
@@ -3268,6 +3287,263 @@ async def review_research(body: ReviewResearchBody, request: Request) -> dict[st
     }
 
 
+_PREFLIGHT_CACHE_TTL_SECONDS = 60.0
+_PREFLIGHT_PROBE_TIMEOUT_SECONDS = 4.0
+_PREFLIGHT_CACHE: tuple[str, float, dict[str, Any]] | None = None
+
+
+def _preflight_credential(profile: str, suffix: str) -> str:
+    """Read a credential the same way ``llm.config`` resolves it.
+
+    Profiles accept both ``MINIMAX_API_KEY`` and the lowercase alias
+    ``minimax_api_key``; the preflight must not report a cached "ok" for a
+    profile whose lowercase key was removed.
+    """
+    upper = f"{profile.upper()}_{suffix}"
+    lower = f"{profile.lower()}_{suffix.lower()}"
+    return os.environ.get(upper, "").strip() or os.environ.get(lower, "").strip()
+
+
+def _preflight_cache_key() -> str:
+    """Fingerprint the non-secret inputs that can change a preflight result."""
+    profiles = ("minimax", "deepseek", "openai", "anthropic")
+    credentials = {
+        profile: {
+            "key": bool(_preflight_credential(profile, "API_KEY")),
+            "key_heavy": bool(_preflight_credential(profile, "API_KEY_HEAVY")),
+            "base_url": bool(_preflight_credential(profile, "BASE_URL")),
+            "base_url_heavy": bool(_preflight_credential(profile, "BASE_URL_HEAVY")),
+            "protocol": _preflight_credential(profile, "PROTOCOL"),
+        }
+        for profile in profiles
+    }
+    return json.dumps(
+        {
+            "adapter": os.environ.get("AI_ENGINE_ADAPTER", "gpt_researcher"),
+            "research": os.environ.get("RESEARCH_LLM", "").strip(),
+            "primary": os.environ.get("PRIMARY_LLM", "").strip(),
+            "smart": os.environ.get("SMART_LLM", "").strip(),
+            "utility": os.environ.get("UTILITY_LLM", "").strip(),
+            "brief": os.environ.get("BRIEF_LLM", "").strip(),
+            "fallback": os.environ.get("FALLBACK_LLM", "").strip(),
+            "llm_fallback": os.environ.get("LLM_FALLBACK_LLM", "").strip(),
+            "retriever": os.environ.get("RETRIEVER", "").strip(),
+            "tavily": bool(os.environ.get("TAVILY_API_KEY", "").strip()),
+            "credentials": credentials,
+        },
+        sort_keys=True,
+    )
+
+
+def _preflight_check(
+    name: str,
+    ok: bool,
+    message: str,
+    *,
+    level: str | None = None,
+) -> dict[str, Any]:
+    check: dict[str, Any] = {"name": name, "ok": ok, "message": message}
+    if level is not None:
+        check["level"] = level
+    return check
+
+
+def _check_llm_slot(purpose: LlmPurpose) -> tuple[dict[str, Any], LlmRoute | None]:
+    """Resolve one canonical slot without exposing credentials or secrets."""
+    label = "RESEARCH_LLM" if purpose == "research" else "UTILITY_LLM"
+    try:
+        route = resolve_route(purpose)
+    except ValueError as exc:
+        return (
+            _preflight_check(
+                f"{purpose}_llm",
+                False,
+                f"{label} 配置无效：{exc}。请检查 AI engine 环境变量。",
+            ),
+            None,
+        )
+    if route.api_key:
+        return (
+            _preflight_check(f"{purpose}_llm", True, f"{label} 槽位可用：{route.spec}"),
+            route,
+        )
+
+    profile = route.vendor.upper()
+    explicit_gateway = bool(
+        _preflight_credential(route.vendor, "BASE_URL")
+        or _preflight_credential(route.vendor, "BASE_URL_HEAVY")
+    )
+    if explicit_gateway:
+        return (
+            _preflight_check(
+                f"{purpose}_llm",
+                True,
+                f"{label} 使用无密钥兼容网关（{profile}_BASE_URL 已配置）；"
+                f"如果网关需要鉴权，请补充 {profile}_API_KEY。",
+                level="warning",
+            ),
+            route,
+        )
+    return (
+        _preflight_check(
+            f"{purpose}_llm",
+            False,
+            f"缺少 {profile}_API_KEY，无法调用 {route.spec}。"
+            f"请在 packages/ai-engine/.env 中配置 {profile}_API_KEY 后重启 AI engine。",
+        ),
+        None,
+    )
+
+
+def _check_search_config() -> dict[str, Any]:
+    configured = os.environ.get("RETRIEVER", "").strip().lower()
+    has_tavily_key = bool(os.environ.get("TAVILY_API_KEY", "").strip())
+    if configured == "tavily":
+        if has_tavily_key:
+            return _preflight_check("search", True, "Tavily 检索器已配置")
+        return _preflight_check(
+            "search",
+            True,
+            "未配置 TAVILY_API_KEY，将自动使用 DuckDuckGo（无需密钥）。",
+        )
+    if configured:
+        return _preflight_check("search", True, f"检索器：{configured}")
+    if has_tavily_key:
+        return _preflight_check("search", True, "Tavily 已配置，将使用 Tavily 检索")
+    return _preflight_check("search", True, "使用 DuckDuckGo（无需密钥）")
+
+
+async def _probe_llm_route(route: LlmRoute) -> dict[str, Any]:
+    """One bounded, non-retrying provider call to prove the route works."""
+    try:
+        async with asyncio.timeout(_PREFLIGHT_PROBE_TIMEOUT_SECONDS):
+            await generate_text(
+                user_prompt="Reply with exactly OK.",
+                llm_spec=route.spec,
+                tier="light",
+                max_tokens=8,
+                timeout=_PREFLIGHT_PROBE_TIMEOUT_SECONDS,
+                disable_thinking=True,
+                operation="health.preflight",
+                single_attempt=True,
+            )
+    except Exception as exc:  # provider/auth/quota/network errors are blocking
+        # A provider timeout is inconclusive, not a configuration failure:
+        # let the user start rather than hard-block on a slow probe.
+        if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+            return _preflight_check(
+                "model_probe",
+                True,
+                "模型连通性探测超时，未确认可用性；仍可启动，失败时会显示具体错误。",
+                level="warning",
+            )
+        return _preflight_check(
+            "model_probe",
+            False,
+            f"模型调用失败：{sanitize_llm_error(exc)}。"
+            "请检查 API key、额度与 base URL。",
+        )
+    return _preflight_check("model_probe", True, f"模型连通性正常：{route.spec}")
+
+
+async def _run_preflight() -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    adapter: ResearchEngineAdapter | None = None
+    try:
+        adapter = _adapter_singleton()
+        health = await adapter.health()
+    except Exception as exc:
+        checks.append(
+            _preflight_check(
+                "adapter",
+                False,
+                f"研究引擎适配器不可用：{sanitize_llm_error(exc)}。"
+                "请检查 AI_ENGINE_ADAPTER 配置。",
+            )
+        )
+    else:
+        if health.ok:
+            checks.append(
+                _preflight_check("adapter", True, f"适配器已就绪：{health.adapter_name}")
+            )
+        else:
+            checks.append(
+                _preflight_check(
+                    "adapter",
+                    False,
+                    f"适配器 {health.adapter_name} 自检未通过。请检查 AI engine 日志。",
+                )
+            )
+
+    if isinstance(adapter, FakeAdapter):
+        # The fake adapter answers from a fixture and never calls a model, so
+        # missing provider keys are expected in CI/E2E rather than a fault.
+        checks.append(
+            _preflight_check(
+                "research_llm",
+                True,
+                "测试适配器（fake）使用内置响应，不需要模型凭据。",
+            )
+        )
+        checks.append(
+            _preflight_check(
+                "utility_llm",
+                True,
+                "测试适配器（fake）使用内置响应，不需要模型凭据。",
+            )
+        )
+        research_check, research_route = checks[-2], None
+    else:
+        research_check, research_route = _check_llm_slot("research")
+        checks.append(research_check)
+        utility_check, _ = _check_llm_slot("utility")
+        checks.append(utility_check)
+    checks.append(_check_search_config())
+
+    probe_ready = (
+        adapter is not None
+        and not isinstance(adapter, FakeAdapter)
+        and research_check["ok"]
+        and research_route is not None
+    )
+    if probe_ready and research_route is not None:
+        checks.append(await _probe_llm_route(research_route))
+    else:
+        reason = (
+            "测试适配器（fake）"
+            if isinstance(adapter, FakeAdapter)
+            else "适配器或模型凭据检查未通过"
+        )
+        checks.append(
+            _preflight_check("model_probe", True, f"已跳过模型探测：{reason}。")
+        )
+
+    return {
+        "ok": all(check["ok"] for check in checks),
+        "checks": checks,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/health/preflight")
+async def health_preflight(force: bool = False) -> dict[str, Any]:
+    """Report whether a research job can start without burning a run.
+
+    Results are cached briefly so the confirmation page can poll without
+    sending a model request every time. The payload never contains secrets.
+    """
+    global _PREFLIGHT_CACHE
+    key = _preflight_cache_key()
+    now = time.monotonic()
+    if not force and _PREFLIGHT_CACHE is not None:
+        cached_key, cached_at, payload = _PREFLIGHT_CACHE
+        if cached_key == key and now - cached_at < _PREFLIGHT_CACHE_TTL_SECONDS:
+            return payload
+    payload = await _run_preflight()
+    _PREFLIGHT_CACHE = (key, time.monotonic(), payload)
+    return payload
+
+
 @app.get("/health")
 async def health_alias(
     request: Request,
@@ -3571,13 +3847,30 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"deep-research:ai-job:{snapshot.job_id}"))
             body = output_text.strip()
             origin_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
-            revision_sha256 = research_revision_hash({"title": snapshot.topic[:300], "body": body})
+            # Pre-fill the three publish-gate fields from the report itself.
+            # The author can edit them in the editor; publishing still takes an
+            # explicit click, so this removes retyping without bypassing review.
+            summary_fields = derive_research_summary(body)
+            # The review is scoped to the whole snapshot, including the
+            # summary fields we just derived. Hashing only title/body here
+            # would make every pre-filled draft look stale immediately.
+            revision_sha256 = research_revision_hash(
+                {
+                    "title": snapshot.topic[:300],
+                    "body": body,
+                    "background": summary_fields["background"],
+                    "conclusion": summary_fields["conclusion"],
+                    "risks": summary_fields["risks"],
+                    "tags": [],
+                }
+            )
             sql = (
                 'INSERT INTO "researches" '
                 '("id", "type", "status", "title", "body", "authorId", "creationMethod", '
+                ' "background", "conclusion", "risks", '
                 ' "reviewStatus", "reviewAttempts", "reviewSummary", "reviewClaims", "reviewDetails", "reviewedAt", '
                 ' "aiAssisted", "originContentSha256", "createdAt", "updatedAt") '
-                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NULL, true, %s, now(), now()) "
+                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NULL, true, %s, now(), now()) "
                 'ON CONFLICT ("id") DO NOTHING'
             )
             review_status = review_details.get("status") if review_details else None
@@ -3610,6 +3903,9 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                             snapshot.topic[:300],
                             body,
                             snapshot.requester_id,
+                            summary_fields["background"] or None,
+                            summary_fields["conclusion"] or None,
+                            summary_fields["risks"] or None,
                             review_status,
                             review_attempts,
                             json.dumps(review_summary, ensure_ascii=False) if review_summary is not None else None,

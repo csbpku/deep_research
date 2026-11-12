@@ -9,7 +9,7 @@
 import { test, expect } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
-import { loginWithCredentials } from './fixtures';
+import { loginWithCredentials, openAdvancedSettings } from './fixtures';
 
 const prisma = new PrismaClient();
 
@@ -237,7 +237,8 @@ test.describe('AI Research parent (UI polish)', () => {
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
     const output = page.getByRole('radiogroup', { name: '交付什么' });
-    await expect(output.getByRole('radio', { name: /研究稿.*完整论证与引用/u })).toBeChecked();
+    await expect(output.getByRole('radio', { name: /^决策备忘/u })).toBeChecked();
+    await openAdvancedSettings(page);
     const sources = page.getByRole('radiogroup', { name: '参考什么' });
     await expect(sources.getByRole('radio', { name: /网页搜索 \+ 已选资料/u })).toBeChecked();
     await sources.getByRole('radio', { name: /仅使用已选资料/u }).check();
@@ -252,8 +253,8 @@ test.describe('AI Research parent (UI polish)', () => {
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
     const output = page.getByRole('radiogroup', { name: '交付什么' });
-    await expect(output.getByRole('radio', { name: /研究稿.*完整论证与引用/u })).toBeChecked();
-    await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('本次将生成 研究稿');
+    await expect(output.getByRole('radio', { name: /^决策备忘/u })).toBeChecked();
+    await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('本次将生成 决策备忘');
   });
 
   test('slides artifact is rendered once as a bounded outline', async ({ page }) => {
@@ -311,6 +312,10 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({ status: 404, body: 'not found' }));
     await page.goto(`/ai-research/${jobId}`);
     await expect(page.getByText('Slides 提纲已生成，可继续编辑或追问。')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'AI 调研对话输入' })).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: '研究对话输入' })).toBeVisible();
+    await expect(page.getByText('本次调研的对话与追问在下方结果卡片中继续。')).toBeVisible();
+    await expect(page.getByRole('link', { name: '开始新的调研' })).toBeVisible();
     await expect(page.getByLabel('Slides 提纲预览')).toHaveCount(1);
     await expect(page.getByText('1 / 3 页', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '跳到第 3 页' }).click();

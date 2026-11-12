@@ -29,8 +29,9 @@ import {
   RADAR_RESEARCH_SOURCE_TYPES,
 } from '../../../lib/radar/source-labels';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { SUMMARY_STATUS } from '@deep-research/shared/states';
+import { RADAR_JUDGMENT_FEEDBACK_TYPES, SUMMARY_STATUS } from '@deep-research/shared/states';
 import { RADAR_PUBLIC_SCORE_SQL } from '../../../lib/radar/score-validity';
+import { RADAR_LIST_ORDER_BY } from '../../../lib/radar/judgment-score';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
@@ -56,6 +57,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     per_page: url.searchParams.get('per_page') ?? undefined,
     includeTotal: url.searchParams.get('includeTotal') ?? undefined,
     includeFeedback: url.searchParams.get('includeFeedback') ?? undefined,
+    judged: url.searchParams.get('judged') ?? undefined,
   });
   if (!parsed.success) {
     return toApiErrorResponse({
@@ -76,6 +78,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     per_page: perPage,
     includeTotal,
     includeFeedback,
+    judged,
   } = parsed.data;
   const requestedQualityValues = Array.isArray(quality) ? quality : [quality];
   // Noise is an admin/audit state, never a member-facing radar state.
@@ -170,6 +173,28 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             readerQualityStatus: 'ready',
             contentReviewStatus: 'approved',
           },
+          // Rows whose automatic pipeline is complete but that were never
+          // manually reviewed used to disappear from Radar. Their cached body
+          // is redacted at the detail route, so the card behaves like an
+          // external-reading item instead of being invisible.
+          {
+            distilledTier: { in: ['collection', 'deep_read'] },
+            enrichmentStatus: 'ready',
+            readerQualityStatus: 'ready',
+            contentReviewStatus: null,
+          },
+          // Content review can fail for presentation-only reasons (an image
+          // URL, a broken link) while the rendered page itself is approved.
+          // Those rows are useful as summaries; the detail route still
+          // redacts their cached body because contentReviewStatus is not
+          // approved.
+          {
+            distilledTier: { in: ['collection', 'deep_read'] },
+            enrichmentStatus: 'ready',
+            readerQualityStatus: 'ready',
+            contentReviewStatus: 'needs_manual_review',
+            renderReviewStatus: 'approved',
+          },
         ],
       },
     ],
@@ -221,8 +246,23 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       // The reader page keeps the same quality contract for every role.
       // Admins see incomplete/pending rows only when the governance surface
       // requests an explicit status filter.
-      ...(u?.role !== 'admin' || !status
+      ...(u?.role !== 'admin' || !status || judged
         ? [publicQualityGate]
+        : []),
+      // P0-4 “我判断过的”：仍在同一公共可见性 gate 内，只额外要求当前
+      // 用户对该条打过 read/later/pilot/inaccurate 之一。未登录时没有
+      // 可归属的判断记录，显式返回空集而不是退化成全量列表。
+      ...(judged
+        ? [u?.id
+          ? {
+              feedbacks: {
+                some: {
+                  userId: u.id,
+                  feedbackType: { in: [...RADAR_JUDGMENT_FEEDBACK_TYPES] },
+                },
+              },
+            }
+          : { id: { in: [] } }]
         : []),
       // Recent repository activity is rendered inside the project reader.
       // Keep legacy daily digest rows out of the main stream so one repo has
@@ -252,13 +292,9 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     ],
   };
 
-  const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
-    { distilledTotal: { sort: 'desc', nulls: 'last' } },
-    { createdAt: 'desc' },
-    // A unique tie-breaker keeps bounded selection and pagination stable when
-    // a sync inserts several equally scored rows at the same timestamp.
-    { id: 'asc' },
-  ];
+  // P0-4: 判断分只在同 distilledTotal 的条目之间再平衡，质量分仍是第一
+  // 排序键；createdAt/id 继续兜底，保证分页稳定（id 是最后一个 tie-breaker）。
+  const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [...RADAR_LIST_ORDER_BY];
 
   // The score-validity query only needs to inspect rows that can survive the
   // list's top-level status, quality, and date filters. In particular, the
@@ -397,7 +433,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     : new Map<string, { counts: Record<string,number>; mine: string[] }>();
 
   const emptyFeedback = (): { counts: Record<string,number>; mine: string[] } =>
-    ({ counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 }, mine: [] } as const);
+    ({
+      counts: {
+        useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+        read: 0, later: 0, pilot: 0,
+      },
+      mine: [],
+    } as const);
 
   return NextResponse.json({
     page,

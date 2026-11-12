@@ -196,11 +196,17 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
 
   const fb = isContentSurface
     ? {
-        counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
+        counts: {
+          useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+          read: 0, later: 0, pilot: 0,
+        },
         mine: [],
       }
     : (await aggregateFeedbacks(prisma, [summary.id], u?.id)).get(summary.id) ?? {
-    counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
+    counts: {
+          useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+          read: 0, later: 0, pilot: 0,
+        },
     mine: [],
   };
 
@@ -228,7 +234,10 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     !(
       summary.enrichmentStatus === 'ready' &&
       summary.readerQualityStatus === 'ready' &&
-      summary.contentReviewStatus === 'approved'
+      (summary.contentReviewStatus === 'approved' ||
+        summary.contentReviewStatus === null ||
+        (summary.contentReviewStatus === 'needs_manual_review' &&
+          summary.renderReviewStatus === 'approved'))
     )
   ) {
     return toApiErrorResponse({
@@ -241,10 +250,18 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   // External reading uses the source URL/Reader path, never a cached source
   // snapshot. Keep historical payloads private even if the row was enriched
   // before it acquired the external-reading contract.
-  const responseCandidate = tier === 'skim' || externalReading
+  // Unreviewed full-text rows stay readable as summaries, but their cached
+  // body is not public: Radar points readers at the source instead.
+  const unreviewedCachedBody =
+    tier !== 'skim' && !externalReading && summary.contentReviewStatus !== 'approved';
+  const responseCandidate = tier === 'skim' || externalReading || unreviewedCachedBody
     ? {
         ...shaped,
         body: null,
+        // The excerpt is normally the first 1,200 characters of the cached
+        // body. For an unreviewed row that would leak the very text we are
+        // redacting, so fall back to the editorial interpretation.
+        ...(unreviewedCachedBody ? { excerpt: summary.interpretation ?? '' } : {}),
         // Keep the content kind for the detail header.  Redacting the
         // enrichment payload must not turn an arXiv paper into a generic
         // webpage label.

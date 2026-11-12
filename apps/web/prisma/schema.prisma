@@ -155,6 +155,10 @@ enum RadarFeedbackType {
   used
   favorite
   suggest_research
+  // P0-4 判断落点：轻量判断按钮。仅新增枚举值，历史反馈保持有效。
+  read
+  later
+  pilot
 }
 
 // Week 6 [db]：AI 多轮追问会话状态
@@ -331,6 +335,10 @@ model Summary {
   syncRunId          String?  @db.Uuid // radar_sync_runs.id
   sortOrder          Int? // Admin 排列的序号（每日 1-4）
   selectionReason    String?  @db.VarChar(500) // 入选每日摘要理由
+  // P0-4: 四个轻量判断（已读/稍后/试点/不感兴趣）的群体聚合分，用来在同
+  // distilledTotal 的条目之间再排序。由 /api/radar-feedback 在写反馈的同一
+  // 事务内重算；没有判断记录的历史行保持 0（不参与再平衡）。
+  judgmentScore      Int      @default(0)
 
   // Phase 0 deep-dive 字段：sync 时抓取的原始内容，供后续 chat 读原文/结构化视图使用
   originalMarkdown  String?   @db.Text // ≤64KB markdown
@@ -592,7 +600,7 @@ model AiResearchJob {
   requesterId    String      @db.Uuid
   topic          String      @db.VarChar(200)
   context        String?     @db.VarChar(2000)
-  reportType     String      @default("research_report") @db.VarChar(40) // research_report | summary_brief | slides | web_brief | evidence_search (internal)
+  reportType     String      @default("research_report") @db.VarChar(40) // decision_memo | research_report | summary_brief | slides | web_brief | evidence_search (internal)
   artifactType   String      @default("markdown") @db.VarChar(24) // markdown (research_report/web_brief) | slides | table | chart
   sourcePolicy   String      @default("prefer_user_sources") @db.VarChar(40)
   // 研究深度必须随任务持久化，否则重启后的队列 worker 会退回默认轻量档。

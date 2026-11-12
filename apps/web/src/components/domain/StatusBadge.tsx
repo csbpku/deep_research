@@ -63,6 +63,7 @@ const FEATURED_TONES: Record<string, Tone> = {
 /** researches.type —— "研究报告 / 知识卡片" 区分 */
 const RESEARCH_TYPE_TONES: Record<string, Tone> = {
   research: { palette: 'evidence', label: '研究报告' },
+  decision_memo: { palette: 'evidence', label: '决策备忘' },
   knowledge: { palette: 'neutral', label: '知识卡片' },
 };
 
@@ -82,6 +83,12 @@ const ISSUE_TONES: Record<string, Tone> = {
 };
 
 /** search results type —— 搜索结果类型徽章，使用中性 palette 不与 job status 混淆 */
+/** research publication verification state */
+const VERIFICATION_TONES: Record<string, Tone> = {
+  verified: { palette: 'success', label: '已核验' },
+  disclosed: { palette: 'warning', outlined: true, label: '带披露发布' },
+};
+
 const SEARCH_TYPE_TONES: Record<string, Tone> = {
   radar: { palette: 'neutral', label: '雷达' },
   summary: { palette: 'neutral', label: '摘要' },
@@ -100,6 +107,7 @@ const REGISTRY = {
   topicTier: TOPIC_TIER_TONES,
   issue: ISSUE_TONES,
   searchType: SEARCH_TYPE_TONES,
+  verification: VERIFICATION_TONES,
 } as const;
 
 export type StatusKind = keyof typeof REGISTRY;

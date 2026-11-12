@@ -175,8 +175,8 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   }
 
   const topic = briefFallbackTopic(v2?.brief, v1?.topic ?? v2?.topic);
-  const reportType = v2?.reportType ?? v1?.reportType ?? 'research_report';
-  const reportLength = v2?.reportLength ?? v1?.reportLength ?? (reportType === 'summary_brief' ? 'brief' : 'deep');
+  const reportType = v2?.reportType ?? v1?.reportType ?? 'decision_memo';
+  const reportLength = v2?.reportLength ?? v1?.reportLength ?? (reportType === 'summary_brief' ? 'brief' : 'standard');
   const maxUrlsToScrape = v2?.maxUrlsToScrape ?? v1?.maxUrlsToScrape ?? null;
   const sourcePolicy = v2?.sourcePolicy ?? v1?.sourcePolicy ?? 'prefer_user_sources';
   const sourceRefs = v2?.sourceRefs ?? v1?.sourceRefs ?? [];

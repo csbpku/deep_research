@@ -64,7 +64,8 @@ const STEP_LABEL: Record<string, string> = {
 };
 
 const REPORT_TYPE_LABEL: Record<string, string> = {
-  research_report: '研究稿',
+  decision_memo: '决策备忘',
+  research_report: '完整报告',
   summary_brief: '快速判断',
   slides: 'Slides 提纲',
   web_brief: '网页简报',

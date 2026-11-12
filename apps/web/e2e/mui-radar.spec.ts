@@ -189,7 +189,7 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
 
   test('nested menu Escape returns to drawer, then trigger, without losing filters', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/radar?date=all');
+    await page.goto('/radar?date=all&quality=deep_read');
     const trigger = page.getByRole('button', { name: '筛选', exact: true });
     await trigger.click();
     const drawer = page.getByRole('dialog', { name: '筛选雷达内容' });
@@ -497,7 +497,7 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
       : route.fulfill({ json: { page: 1, perPage: 20, total: mode === 'empty' ? 0 : 1, totalPages: 1, items: mode === 'empty' ? [] : [candidate] } }));
     await page.goto('/radar');
     await expect(page.getByRole('heading', { name: '当前筛选没有内容' })).toBeVisible();
-    await page.getByRole('button', { name: '查看全部时间' }).click();
+    await page.getByRole('button', { name: '放宽到全部时间与可读内容' }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get('date')).toBe('all');
     mode = 'error';
     await page.reload();
