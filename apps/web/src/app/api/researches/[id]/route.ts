@@ -29,10 +29,7 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { resolveResearchSourceLink } from '../../../../lib/research-source-link';
 import { resolveCurrentReviewState } from '../../../../lib/research-review-state';
-import {
-  getReviewPublicationGate,
-  reviewCoverageStatus,
-} from '../../../../lib/research-review-decisions';
+import { resolveResearchReviewInventory } from '../../../../lib/research-review-inventory';
 import { hasCompletedReviewInventory, projectResearchReviewForReader } from '../../../../lib/research-review-reader';
 import { researchPublicationVersion } from '../../../../lib/research-publication-version';
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
@@ -861,16 +858,10 @@ function shapeResearchDetail(r: {
     sourcePolicy: r.sourceAiJob?.sourcePolicy
       ?? (parsedBrief.success ? parsedBrief.data.sourcePolicy : null),
   });
-  const currentReviewPublicationGate = currentReview.run
-    ? getReviewPublicationGate({
-        executionStatus: currentReview.run.executionStatus,
-        outcome: currentReview.run.outcome,
-        coverageStatus: reviewCoverageStatus(currentReview.run.summary),
-        researchSufficiencyStatus: researchSufficiency.status,
-        claims: currentReview.run.claims,
-        decisions: currentReview.run.decisions,
-      })
-    : null;
+  const currentReviewPublicationGate = resolveResearchReviewInventory({
+    reviewRuns: readerReviewRuns, revisionHash: currentReview.revisionHash,
+    researchSufficiencyStatus: researchSufficiency.status,
+  }).gate;
   const readerReview = projectResearchReviewForReader({
     status: r.status, creationMethod: r.creationMethod, currentReview,
     reviewRuns: readerReviewRuns, researchSufficiencyStatus: researchSufficiency.status,

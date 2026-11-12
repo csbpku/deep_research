@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { hashResearchRevision } from '../../../lib/research-revision';
 import { researchPublicationVersion } from '../../../lib/research-publication-version';
@@ -20,6 +20,7 @@ vi.mock('../../../lib/auth/session.js', () => ({ requireUser: async () => ({ id:
 let db: PrismaClient;
 let writer: PrismaClient;
 let POST: typeof import('../researches/[id]/publish/route').POST;
+let GET: typeof import('../researches/[id]/route').GET;
 let afterSnapshotRead: (() => Promise<void>) | undefined;
 let readCount = 0;
 
@@ -44,11 +45,15 @@ async function publish(id: string, publicationVersion: string) {
     body: JSON.stringify({ acknowledgeDisclosure: true, publicationVersion }),
   }) as never, { params: Promise.resolve({ id }) });
 }
-async function addRun(row: Awaited<ReturnType<typeof fixture>>, data: { outcome?: string; executionStatus?: string; claims?: object[] }) {
+async function addRun(row: Awaited<ReturnType<typeof fixture>>, data: {
+  outcome?: string; executionStatus?: string; claims?: object[];
+  details?: Prisma.InputJsonValue; triggeredBy?: string; createdAt?: Date;
+}) {
   return db.researchReviewRun.create({ data: {
     researchId: row.id, revisionHash: hashResearchRevision(row), sourceSnapshotHash: '0'.repeat(64),
     executionStatus: data.executionStatus ?? 'completed', outcome: data.outcome ?? 'attention',
     summary: { coverage_status: 'complete' }, claims: data.claims ?? [], attempt: 1,
+    details: data.details, triggeredBy: data.triggeredBy, createdAt: data.createdAt,
   } });
 }
 
@@ -66,6 +71,7 @@ describe.skipIf(!allowed)('publication on isolated PostgreSQL', () => {
     const user = await db.user.create({ data: { email: `publication-${crypto.randomUUID()}@e2e.local`, name: 'Publication regression evidence' } });
     shared.actorId = user.id;
     ({ POST } = await import('../researches/[id]/publish/route'));
+    ({ GET } = await import('../researches/[id]/route'));
   });
   afterAll(async () => { await db?.$disconnect(); await writer?.$disconnect(); });
 
@@ -125,5 +131,40 @@ describe.skipIf(!allowed)('publication on isolated PostgreSQL', () => {
     expect(response.status).toBe(400);
     expect((await db.research.findUniqueOrThrow({ where: { id: row.id } })).status).toBe('draft');
     expect(await db.researchAudit.count({ where: { researchId: row.id } })).toBe(0);
+  });
+
+  it.each(['high', 'medium'])('preserves another %s-risk fact after a one-claim challenge completes clear', async (risk) => {
+    const row = await fixture('passed');
+    const a = { claim_id: 'a', claim: '全文清单中仍需处理的声明A', risk, verdict: risk === 'high' ? 'contradicted' : 'unverified' };
+    const b = { claim_id: 'b', claim: '有证据支持的声明B', risk: 'medium', verdict: 'verified', evidence: { excerpt: 'B的直接支持原文' } };
+    const full = await addRun(row, { outcome: risk === 'high' ? 'blocked' : 'attention', claims: [a, b] });
+    await addRun(row, { outcome: 'clear', claims: [b], createdAt: new Date(full.createdAt.getTime() + 1000),
+      triggeredBy: 'evidence_challenge', details: { reviewMode: 'evidence_challenge', targetClaim: b, requestedFromRunId: full.id } });
+    const response = await POST(new Request(`http://localhost/api/researches/${row.id}/publish`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ acknowledgeDisclosure: risk === 'high', publicationVersion: await version(row.id) }),
+    }) as never, { params: Promise.resolve({ id: row.id }) });
+    expect(response.status).toBe(400);
+    expect(await db.researchAudit.count({ where: { researchId: row.id, action: 'publish' } })).toBe(0);
+    await db.research.update({ where: { id: row.id }, data: { status: 'published', publishedAt: new Date() } });
+    const readerResponse = await GET(new Request(`http://localhost/api/researches/${row.id}`) as never, { params: Promise.resolve({ id: row.id }) });
+    const reader = await readerResponse.json();
+    expect(reader.reviewVerification).toBe(risk === 'high' ? 'conflicted' : 'unverified');
+    expect(reader.reviewDisclosure).toEqual([expect.objectContaining({ claimId: 'a' })]);
+  });
+
+  it('withdraws the same target risk only, after a completed settled challenge with valid lineage', async () => {
+    const row = await fixture('passed');
+    const a = { claim_id: 'a', claim: '本次重新确认的相同声明A', risk: 'high', verdict: 'contradicted' };
+    const b = { claim_id: 'b', claim: '尚未确认的独立声明B', risk: 'medium', verdict: 'unverified' };
+    const full = await addRun(row, { outcome: 'blocked', claims: [a, b] });
+    await addRun(row, { outcome: 'clear', claims: [{ ...a, verdict: 'verified', judgment_status: 'settled', evidence: { excerpt: '重新确认的支持原文' } }],
+      createdAt: new Date(full.createdAt.getTime() + 1000), triggeredBy: 'evidence_challenge',
+      details: { review_mode: 'evidence_challenge', targetClaim: a, requestedFromRunId: full.id } });
+    const response = await publish(row.id, await version(row.id));
+    expect(response.status).toBe(200);
+    const reader = await (await GET(new Request(`http://localhost/api/researches/${row.id}`) as never, { params: Promise.resolve({ id: row.id }) })).json();
+    expect(reader.reviewVerification).toBe('unverified');
+    expect(reader.reviewDisclosure).toEqual([expect.objectContaining({ claimId: 'b' })]);
   });
 });

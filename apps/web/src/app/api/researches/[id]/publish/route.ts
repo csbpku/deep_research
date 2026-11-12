@@ -20,11 +20,10 @@ import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { queuePersonalKnowledgeIndex } from '../../../../../lib/personal-knowledge-index';
 import { resolveCurrentReviewState } from '../../../../../lib/research-review-state';
 import {
-  getReviewPublicationGate,
   getReviewPublishDisposition,
-  reviewCoverageStatus,
 } from '../../../../../lib/research-review-decisions';
 import { evaluateResearchSufficiency } from '../../../../../lib/research-sufficiency';
+import { resolveResearchReviewInventory } from '../../../../../lib/research-review-inventory';
 import { researchPublicationVersion } from '../../../../../lib/research-publication-version';
 import { projectResearchReviewForReader } from '../../../../../lib/research-review-reader';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
@@ -72,6 +71,8 @@ const publicationSelect = {
       outcome: true,
       attempt: true,
       createdAt: true,
+      details: true,
+      triggeredBy: true,
       summary: true,
       claims: true,
       decisions: {
@@ -106,15 +107,12 @@ function publicationReview(existing: PublicationResearch) {
     sourcePolicy: existing.sourceAiJob?.sourcePolicy
       ?? (parsedBrief.success ? parsedBrief.data.sourcePolicy : null),
   });
-  const publicationGate = reviewState.run
-    ? getReviewPublicationGate({
-        executionStatus: reviewState.run.executionStatus,
-        outcome: reviewState.run.outcome,
-        coverageStatus: reviewCoverageStatus(reviewState.run.summary),
-        researchSufficiencyStatus: researchSufficiency.status,
-        claims: reviewState.run.claims,
-        decisions: reviewState.run.decisions,
-      })
+  const aggregate = resolveResearchReviewInventory({
+    reviewRuns: existing.reviewRuns, revisionHash: reviewState.revisionHash,
+    researchSufficiencyStatus: researchSufficiency.status,
+  });
+  const publicationGate = aggregate.gate
+    ? aggregate.gate
     : reviewState.isLegacyFallback && reviewState.status === 'passed'
       ? {
           status: 'clear' as const,
@@ -130,10 +128,7 @@ function publicationReview(existing: PublicationResearch) {
           hardBlockCount: 0,
         }
       : null;
-  const disposition = getReviewPublishDisposition(publicationGate, {
-    claims: reviewState.run?.claims,
-    decisions: reviewState.run?.decisions,
-  });
+  const disposition = getReviewPublishDisposition(publicationGate);
   const reader = projectResearchReviewForReader({
     status: 'published', creationMethod: existing.creationMethod,
     currentReview: reviewState, reviewRuns: existing.reviewRuns,
@@ -141,7 +136,13 @@ function publicationReview(existing: PublicationResearch) {
   });
   return {
     reviewState, publicationGate, researchSufficiency,
-    disposition: { ...disposition, hardBlocked: disposition.hardBlocked || reader.reviewVerification === 'conflicted' },
+    disposition: {
+      ...disposition, hardBlocked: disposition.hardBlocked || reader.reviewVerification === 'conflicted',
+      disclosure: reader.reviewDisclosureSummary ? {
+        ...reader.reviewDisclosureSummary,
+        items: reader.reviewDisclosure.map((item) => ({ ...item, risk: item.risk ?? null })),
+      } : disposition.disclosure,
+    },
     version: researchPublicationVersion(existing, researchSufficiency.status),
   };
 }

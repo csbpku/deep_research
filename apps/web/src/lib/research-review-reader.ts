@@ -1,14 +1,8 @@
 import {
-  asReviewClaims,
-  claimEvidenceStatus,
-  claimIsFactual,
-  getReviewDisclosureItems,
-  getReviewPublicationGate,
-  reviewClaimId,
-  reviewCoverageStatus,
-  type ReviewClaimEvidenceStatus,
-  type ReviewPublicationGate,
+  claimEvidenceStatus, claimIsFactual, getReviewDisclosureItems, reviewClaimId,
+  type ReviewClaimEvidenceStatus, type ReviewPublicationGate,
 } from './research-review-decisions';
+import { hasCompletedFullReviewInventory, researchReviewScope, resolveResearchReviewInventory } from './research-review-inventory';
 import type { CurrentReviewState, ReviewRunState } from './research-review-state';
 
 export type ResearchReviewVerification = 'verified' | 'disclosed' | 'conflicted' | 'unverified' | null;
@@ -29,9 +23,11 @@ export interface ResearchReviewReaderSummary {
   conflictCount: number;
   highRiskOpenCount: number;
   hardBlockCount?: number;
+  hasBlockingConflict?: boolean;
   disclosedCount: number;
   machineIncomplete: boolean;
   reviewStatus?: string;
+  reviewScope?: 'full' | 'claim' | null;
   retainedPreviousRisks?: boolean;
 }
 export interface ResearchReviewReaderProjection {
@@ -40,12 +36,7 @@ export interface ResearchReviewReaderProjection {
   reviewDisclosureSummary: ResearchReviewReaderSummary | null;
 }
 
-export function hasCompletedReviewInventory(run: ReviewRunState | undefined): boolean {
-  return Boolean(run && run.executionStatus === 'completed'
-    && run.outcome !== 'unavailable' && run.outcome !== 'stale'
-    && reviewCoverageStatus(run.summary) !== 'insufficient'
-    && !(asReviewClaims(run.claims).length === 0 && (run.outcome === 'attention' || run.outcome === 'insufficient')));
-}
+export const hasCompletedReviewInventory = hasCompletedFullReviewInventory;
 
 /** Reader risks are facts about the revision, not permission to publish it.
  * An unfinished retry cannot erase an earlier finding on the same text.
@@ -60,54 +51,20 @@ export function projectResearchReviewForReader(input: {
 }): ResearchReviewReaderProjection {
   const empty = { reviewVerification: null, reviewDisclosure: [], reviewDisclosureSummary: null };
   if (input.status === 'draft' || input.creationMethod !== 'ai_research') return empty;
-  const runs = (input.reviewRuns ?? [])
-    .filter((run) => run.revisionHash === input.currentReview.revisionHash)
-    .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
-  const latest = runs[0];
-  const machineIncomplete = !hasCompletedReviewInventory(latest);
-  const relevant: ReviewRunState[] = [];
-  for (const run of runs) {
-    relevant.push(run);
-    if (hasCompletedReviewInventory(run)) break;
-  }
-  const items = new Map<string, ResearchReviewReaderItem>();
-  for (const run of relevant) {
-    const accepted = new Map(getReviewDisclosureItems(run).map((item) => [item.claimId, item]));
-    for (const claim of asReviewClaims(run.claims)) {
-      const claimId = reviewClaimId(claim);
-      if (!claimId || !claimIsFactual(claim)) continue;
-      const evidenceStatus = claimEvidenceStatus(claim);
-      if (evidenceStatus === 'supported') continue;
-      const exception = accepted.get(claimId);
-      const item: ResearchReviewReaderItem = {
-        claimId, claim: claim.claim?.trim() || '未命名声明', risk: claim.risk ?? null,
-        evidenceStatus, label: evidenceStatus === 'contradicted' ? '来源存在冲突' : '未经核验',
-        ...exception,
-      };
-      // Claim IDs are local to a run. Merge by wording and preserve the
-      // strongest known warning, including the author's acceptance reason.
-      const previous = items.get(item.claim);
-      if (!previous || (item.evidenceStatus === 'contradicted' && (
-        previous.evidenceStatus !== 'contradicted'
-        || (item.risk?.toLowerCase() === 'high' && previous.risk?.toLowerCase() !== 'high')
-      ))) {
-        items.set(item.claim, item);
-      } else if (!previous.reason && item.reason) {
-        items.set(item.claim, {
-          ...previous, reason: item.reason,
-          ...(previous.evidenceStatus === 'unverified' && item.action
-            ? { action: item.action, label: item.label } : {}),
-        });
-      }
-    }
-  }
-  const reviewDisclosure = [...items.values()];
-  const gate = latest ? getReviewPublicationGate({
-    executionStatus: latest.executionStatus, outcome: latest.outcome,
-    coverageStatus: reviewCoverageStatus(latest.summary),
+  const { runs, latest, inventory, gate, machineIncomplete } = resolveResearchReviewInventory({
+    reviewRuns: input.reviewRuns, revisionHash: input.currentReview.revisionHash,
     researchSufficiencyStatus: input.researchSufficiencyStatus,
-    claims: latest.claims, decisions: latest.decisions,
-  }) : null;
+  });
+  const reviewDisclosure: ResearchReviewReaderItem[] = inventory.flatMap(({ claim, decision }) => {
+    const claimId = reviewClaimId(claim);
+    if (!claimId || !claimIsFactual(claim) || claimEvidenceStatus(claim) === 'supported') return [];
+    const exception = getReviewDisclosureItems({ claims: [claim], decisions: decision ? [decision] : [] }).at(0);
+    const evidenceStatus = claimEvidenceStatus(claim);
+    return [{
+      claimId, claim: claim.claim?.trim() || '未命名声明', risk: claim.risk ?? null,
+      evidenceStatus, label: evidenceStatus === 'contradicted' ? '来源存在冲突' : '未经核验', ...exception,
+    }];
+  });
   if (!machineIncomplete && latest?.outcome === 'clear' && gate?.status === 'clear') {
     return { ...empty, reviewVerification: 'verified' };
   }
@@ -124,10 +81,12 @@ export function projectResearchReviewForReader(input: {
       openCount: reviewDisclosure.length - disclosedCount,
       unsupportedCount: reviewDisclosure.length - conflictCount,
       conflictCount, hardBlockCount,
+      hasBlockingConflict: gate?.status === 'blocked',
       highRiskOpenCount: reviewDisclosure.filter((item) => item.risk?.toLowerCase() === 'high').length,
       disclosedCount, machineIncomplete,
       reviewStatus: input.currentReview.status,
-      retainedPreviousRisks: machineIncomplete && relevant.length > 1 && reviewDisclosure.length > 0,
+      reviewScope: latest ? researchReviewScope(latest) : null,
+      retainedPreviousRisks: machineIncomplete && runs.length > 1 && reviewDisclosure.length > 0,
     },
   };
 }
@@ -135,10 +94,11 @@ export function projectResearchReviewForReader(input: {
 /** Shared by the page and downloadable artifact so neither loses a caveat. */
 export function researchReviewDisclosureMessages(summary: ResearchReviewReaderSummary): string[] {
   const messages: string[] = [];
-  if ((summary.hardBlockCount ?? 0) > 0 || summary.reviewStatus === 'blocked') {
+  if ((summary.hardBlockCount ?? 0) > 0 || summary.hasBlockingConflict || summary.reviewStatus === 'blocked') {
     messages.push('核验发现高风险来源冲突，相关结论需要修订。');
   }
-  if (summary.machineIncomplete) messages.push('最新自动核验尚未完成或未完整覆盖报告。');
+  if (summary.reviewScope === 'claim') messages.push('最新一轮只核验了指定声明，不能视为全文核验。');
+  else if (summary.machineIncomplete) messages.push('最新自动核验尚未完成或未完整覆盖报告。');
   if (summary.retainedPreviousRisks) messages.push('已保留此前同版本的风险警示；未完成的重新核验不会消除这些风险。');
   if (summary.openCount > 0) {
     messages.push(`当前仍有 ${summary.openCount} 条声明未完成核验${summary.conflictCount > 0 ? `，其中 ${summary.conflictCount} 条存在来源冲突` : ''}。`);

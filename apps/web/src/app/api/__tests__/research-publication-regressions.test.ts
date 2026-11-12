@@ -59,10 +59,10 @@ function setupPublish(row: Record<string, unknown>, fresh = row) {
   });
   mocks.update.mockResolvedValue({ ...fresh, status: 'published', aiAssisted: true });
 }
-async function publish(version: string | undefined) {
+async function publish(version: string | undefined, acknowledgeDisclosure = true) {
   return POST(new Request(`http://localhost/api/researches/${id}/publish`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ acknowledgeDisclosure: true, publicationVersion: version }),
+    body: JSON.stringify({ acknowledgeDisclosure, publicationVersion: version }),
   }) as never, params);
 }
 beforeEach(() => {
@@ -71,6 +71,136 @@ beforeEach(() => {
     research: { findUnique: mocks.txFindUnique, updateMany: mocks.updateMany, update: mocks.update },
     researchAudit: { create: mocks.audit }, productEvent: { create: mocks.event },
   }));
+});
+
+const supportedB = { ...b, verdict: 'verified', judgment_status: 'settled', evidence: { excerpt: '保存的直接支持原文' } };
+function scopeFixture(status: string, oldClaim = { ...a, risk: 'high', verdict: 'contradicted' }) {
+  return { ...base, status, reviewStatus: 'passed', reviewRuns: [
+    run({ id: 'challenge', createdAt: new Date(now.getTime() + 1000), outcome: 'clear', claims: [supportedB], decisions: [],
+      triggeredBy: 'evidence_challenge', details: { reviewMode: 'evidence_challenge', targetClaim: supportedB, requestedFromRunId: 'full-review' } }),
+    run({ id: 'full-review', outcome: 'blocked', claims: [oldClaim, supportedB], decisions: [] }),
+  ] };
+}
+describe('single-claim verification scope', () => {
+  it('does not let a completed one-claim review clear unrelated full-inventory contradictions', async () => {
+    const payload = await detail(scopeFixture('published'));
+    expect(payload.reviewVerification).toBe('conflicted');
+    expect(payload.reviewDisclosure).toEqual([expect.objectContaining({ claimId: 'a', evidenceStatus: 'contradicted' })]);
+    expect(payload.publicationHardBlocked).toBe(true);
+  });
+  it('does not let a completed one-claim review unlock publication of another high-risk contradiction', async () => {
+    const row = scopeFixture('draft');
+    const payload = await detail(row);
+    setupPublish(row);
+    expect((await publish(payload.publicationVersion)).status).toBe(400);
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('still requires acknowledgement for medium-risk gaps outside the one reviewed claim', async () => {
+    const row = scopeFixture('draft', a);
+    const payload = await detail(row);
+    setupPublish(row);
+    const response = await publish(payload.publicationVersion, false);
+    expect(response.status).toBe(400);
+    expect((await response.json()).details.disclosure.items).toEqual([expect.objectContaining({ claimId: 'a' })]);
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('replaces only a correctly identified target claim after a settled supporting re-verification', async () => {
+    const target = { ...a, risk: 'high', verdict: 'contradicted' };
+    const corrected = { ...target, verdict: 'verified', judgment_status: 'settled', evidence: { excerpt: '已确认支持这个相同声明的新证据' } };
+    const payload = await detail({ ...base, reviewRuns: [
+      run({ id: 'challenge', createdAt: new Date(now.getTime() + 1000), outcome: 'clear', claims: [corrected], decisions: [],
+        triggeredBy: 'evidence_challenge', details: { review_mode: 'evidence_challenge', targetClaim: target, requestedFromRunId: 'full-review' } }),
+      run({ id: 'full-review', outcome: 'blocked', claims: [target, b], decisions: [] }),
+    ] });
+    expect(payload.reviewDisclosure.map((item: { claimId: string }) => item.claimId)).toEqual(['b']);
+    expect(payload.publicationHardBlocked).toBe(false);
+    expect(payload.reviewVerification).not.toBe('verified');
+  });
+  it('cannot mint whole-report verified status without any full-report inventory', async () => {
+    const row = scopeFixture('published');
+    const payload = await detail({ ...row, reviewRuns: [row.reviewRuns[0]] });
+    expect(payload.reviewVerification).toBe('unverified');
+    expect(payload.reviewDisclosureSummary.machineIncomplete).toBe(true);
+  });
+  it('binds publication confirmation to all still-contributing full-inventory findings', async () => {
+    const row = scopeFixture('draft', a);
+    const payload = await detail(row);
+    const changed = { ...row, reviewRuns: [row.reviewRuns[0], { ...row.reviewRuns[1], claims: [{ ...a, claim: '先前全文清单的新风险项' }, supportedB] }] };
+    setupPublish(changed);
+    expect((await publish(payload.publicationVersion)).status).toBe(409);
+  });
+  it('treats a legacy evidence_challenge trigger as partial even without a reviewMode marker', async () => {
+    const row = scopeFixture('published');
+    expect((await detail({ ...row, reviewRuns: [
+      { ...row.reviewRuns[0], details: { targetClaim: supportedB, requestedFromRunId: 'full-review' } }, row.reviewRuns[1],
+    ] })).publicationHardBlocked).toBe(true);
+  });
+  it.each(['wrong_lineage', 'different_target'])('does not withdraw a known fact through %s', async (error) => {
+    const target = { ...a, risk: 'high', verdict: 'contradicted' };
+    const payload = await detail({ ...base, reviewRuns: [
+      run({ id: 'challenge', createdAt: new Date(now.getTime() + 1000), outcome: 'clear',
+        claims: [{ ...target, verdict: 'verified', evidence: { excerpt: '支持原文' } }], decisions: [],
+        triggeredBy: 'evidence_challenge', details: { reviewMode: 'evidence_challenge',
+          targetClaim: error === 'different_target' ? supportedB : target,
+          requestedFromRunId: error === 'wrong_lineage' ? 'unrelated-run' : 'full-review' } }),
+      run({ id: 'full-review', outcome: 'blocked', claims: [target, supportedB], decisions: [] }),
+    ] });
+    expect(payload.publicationHardBlocked).toBe(true);
+    expect(payload.reviewDisclosure[0].claimId).toBe('a');
+  });
+  it('allows a real full claim_verification inventory to replace the earlier report assessment', async () => {
+    const row = scopeFixture('published');
+    const payload = await detail({ ...row, reviewRuns: [
+      run({ id: 'full-reverification', createdAt: new Date(now.getTime() + 2000), outcome: 'clear',
+        claims: [supportedB], decisions: [], triggeredBy: 'claim_verification', details: { review_mode: 'claim_verification' } }),
+      ...row.reviewRuns,
+    ] });
+    expect(payload.reviewVerification).toBe('verified');
+    expect(payload.reviewDisclosure).toEqual([]);
+    expect(payload.publicationHardBlocked).toBe(false);
+  });
+  it('retains new contradictory findings from a malformed local run that has no target metadata', async () => {
+    const payload = await detail({ ...base, reviewRuns: [
+      run({ triggeredBy: 'evidence_challenge', details: {}, outcome: 'blocked',
+        claims: [{ ...a, risk: 'high', verdict: 'contradicted' }], decisions: [] }),
+    ] });
+    expect(payload.reviewVerification).toBe('conflicted');
+    expect(payload.publicationHardBlocked).toBe(true);
+    expect(payload.reviewDisclosure[0]).toMatchObject({ claimId: 'a', evidenceStatus: 'contradicted' });
+  });
+  it('does not erase an unexplained blocked outcome with a later clear one-claim result', async () => {
+    const row = scopeFixture('published');
+    const payload = await detail({ ...row, reviewRuns: [row.reviewRuns[0],
+      { ...row.reviewRuns[1], claims: [supportedB] },
+    ] });
+    expect(payload.reviewVerification).toBe('conflicted');
+    expect(buildResearchMarkdown(payload)).toContain('高风险来源冲突');
+    expect(payload.publicationHardBlocked).toBe(true);
+  });
+  it.each(['self', 'future', 'unfinished_source'])('does not treat %s lineage as evidence to withdraw a known conflict', async (lineage) => {
+    const target = { ...a, risk: 'high', verdict: 'contradicted' };
+    const supported = { ...target, verdict: 'verified', evidence: { excerpt: '伪造来源链的支持摘录' } };
+    const source = run({ id: 'claimed-source', executionStatus: 'reviewing', outcome: null, claims: [supported], decisions: [],
+      createdAt: new Date(now.getTime() + (lineage === 'future' ? 2000 : 500)),
+      ...(lineage === 'future' ? { executionStatus: 'completed', outcome: 'clear', triggeredBy: 'evidence_challenge',
+        details: { reviewMode: 'evidence_challenge', targetClaim: target, requestedFromRunId: 'claimed-source' } } : {}),
+    });
+    const partial = run({ id: 'challenge', createdAt: new Date(now.getTime() + 1000), outcome: 'clear', claims: [supported], decisions: [],
+      triggeredBy: 'evidence_challenge', details: { review_mode: 'evidence_challenge', targetClaim: target,
+        requestedFromRunId: lineage === 'self' ? 'challenge' : source.id } });
+    const payload = await detail({ ...base, reviewRuns: [partial, ...(lineage === 'self' ? [] : [source]),
+      run({ id: 'full-review', outcome: 'blocked', claims: [target], decisions: [] }),
+    ] });
+    expect(payload.publicationHardBlocked).toBe(true);
+    expect(payload.reviewDisclosure[0]).toMatchObject({ claimId: 'a', evidenceStatus: 'contradicted' });
+  });
+  it('preserves the canonical last ledger decision when decision timestamps are equal', async () => {
+    const payload = await detail({ ...base, reviewRuns: [run({ decisions: [decision,
+      { ...decision, id: 'newer-event', action: 'request_verification' },
+    ] })] });
+    expect(payload.reviewDisclosureSummary.disclosedCount).toBe(0);
+    expect(payload.reviewDisclosure[0].action).toBeUndefined();
+  });
 });
 
 describe('reader risks survive publication and re-verification', () => {
