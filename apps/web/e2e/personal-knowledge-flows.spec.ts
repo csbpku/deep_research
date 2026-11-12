@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import type { Page } from '@playwright/test';
-import { test, expect, loginWithCredentials, waitForHydration } from './fixtures';
+import { test, expect, loginWithCredentials, openAdvancedSettings, waitForHydration } from './fixtures';
 
 const prisma = new PrismaClient();
 
@@ -261,6 +261,7 @@ test.describe('Research follow-up and personal knowledge', () => {
       ]));
       const suggestions = page.getByRole('region', { name: '相关历史判断与资料' });
       await expect(suggestions).not.toBeVisible();
+      await openAdvancedSettings(page);
       await expect(page.getByText('历史资料建议（可选） · 已选 0 条', { exact: true })).toBeVisible();
       await page.getByText('历史资料建议（可选） · 已选 0 条', { exact: true }).click();
       await expect(suggestions).toBeVisible();
