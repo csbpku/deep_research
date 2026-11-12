@@ -94,10 +94,11 @@ export function computeRadarJudgmentScoreFromGroups(
  * lock：随 commit/rollback 自动释放，不需要额外清理，也不会锁表。
  */
 export async function lockJudgmentAggregate(
-  tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
+  tx: Pick<Prisma.TransactionClient, '$executeRaw'>,
   summaryId: string,
 ): Promise<void> {
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${summaryId}))`;
+  // The lock function returns PostgreSQL void, which $queryRaw cannot decode.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${summaryId}))`;
 }
 
 /**

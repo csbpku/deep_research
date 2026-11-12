@@ -412,6 +412,7 @@ describe('shapeCandidate', () => {
           zread: { status: 'complete' },
           githubUpdates: { items: [{ title: 'legacy activity' }] },
         },
+        contentReviewStatus: 'approved',
       },
     });
 

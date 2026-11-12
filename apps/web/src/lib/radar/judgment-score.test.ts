@@ -81,11 +81,11 @@ describe('radar judgment scoring', () => {
   });
 
   it('serializes recomputes with a transaction-scoped advisory lock', async () => {
-    const queryRaw = vi.fn().mockResolvedValue([]);
-    await lockJudgmentAggregate({ $queryRaw: queryRaw }, 'summary-1');
-    expect(queryRaw).toHaveBeenCalledTimes(1);
-    expect(queryRaw.mock.calls[0][0].join('?')).toContain('pg_advisory_xact_lock');
-    expect(queryRaw.mock.calls[0][1]).toBe('summary-1');
+    const executeRaw = vi.fn().mockResolvedValue(1);
+    await lockJudgmentAggregate({ $executeRaw: executeRaw }, 'summary-1');
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    expect(executeRaw.mock.calls[0][0].join('?')).toContain('pg_advisory_xact_lock');
+    expect(executeRaw.mock.calls[0][1]).toBe('summary-1');
   });
 
   it('recomputes and writes the aggregate inside the caller transaction', async () => {

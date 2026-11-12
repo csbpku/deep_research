@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   shareSubmissionFindUnique: vi.fn(),
   shareSubmissionUpdate: vi.fn(),
   summaryQueryRaw: vi.fn(),
+  executeRaw: vi.fn(),
   summaryGroupBy: vi.fn(),
   radarFeedbackCreate: vi.fn(),
   radarFeedbackCreateMany: vi.fn(),
@@ -93,6 +94,7 @@ vi.mock('../../../lib/db.js', () => ({
     researchSource: { create: mocks.researchSourceCreate },
     $transaction: mocks.transaction,
     $queryRaw: mocks.summaryQueryRaw,
+    $executeRaw: mocks.executeRaw,
   },
 }));
 
@@ -137,6 +139,7 @@ beforeEach(() => {
   mocks.requireAdmin.mockResolvedValue(ADMIN);
   mocks.transaction.mockImplementation((cb) => cb({
     $queryRaw: mocks.summaryQueryRaw,
+    $executeRaw: mocks.executeRaw,
     summary: { create: mocks.summaryCreate, update: mocks.summaryUpdate, updateMany: mocks.summaryUpdateMany, findUnique: vi.fn().mockResolvedValue(null), findMany: mocks.summaryFindMany, count: mocks.summaryCount },
     shareSubmission: { update: mocks.shareSubmissionUpdate, updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     radarFeedback: {
@@ -288,6 +291,39 @@ describe('GET /api/admin/radar/runs', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('GET /api/radar', () => {
+  it.each([
+    { contentReviewStatus: null, renderReviewStatus: null },
+    { contentReviewStatus: 'needs_manual_review', renderReviewStatus: 'approved' },
+  ])('redacts unreviewed cached text on every public surface: %j', async (review) => {
+    const summary = {
+      id: SUM_ID, title: 'Readable summary', body: 'PRIVATE-CACHED-TEXT'.repeat(100),
+      url: 'https://example.com/article', tags: [], status: 'candidate', source: 'daily',
+      summaryDate: new Date('2026-11-11'), publishedAt: null, createdAt: new Date(),
+      interpretation: 'Public editorial interpretation', scoreReason: null, scoreVersion: null,
+      relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      distilledTier: 'deep_read', distilledScore: validRadarScore,
+      enrichmentStatus: 'ready', readerQualityStatus: 'ready', ...review,
+      selectionReason: null, sortOrder: null, syncRunId: 'r', syncRun: null, shareSource: null,
+      originalMarkdown: 'PRIVATE-CACHED-TEXT', highlights: { summary: 'PRIVATE-CACHED-TEXT' },
+    };
+    mocks.getCurrentUser.mockResolvedValue(null);
+    mocks.summaryFindMany.mockResolvedValue([summary]);
+    mocks.summaryFindUnique.mockResolvedValue(summary);
+    mocks.summaryCount.mockResolvedValue(1);
+    const listBody = await (await radarList(new Request('http://localhost/api/radar?quality=deep_read') as never)).json();
+    expect(listBody.items[0]).toMatchObject({ body: null, excerpt: summary.interpretation });
+    expect(JSON.stringify(listBody)).not.toContain('PRIVATE-CACHED-TEXT');
+    for (const surface of ['', '?surface=summary', '?surface=content']) {
+      const response = await radarDetail(new Request(`http://localhost/api/radar/${SUM_ID}${surface}`) as never, {
+        params: Promise.resolve({ id: SUM_ID }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.body).toBeNull();
+      expect(JSON.stringify(body)).not.toContain('PRIVATE-CACHED-TEXT');
+    }
+  });
+
   it('uses the summary ID as a deterministic final tie-breaker', async () => {
     mocks.summaryFindMany.mockResolvedValue([]);
     mocks.summaryCount.mockResolvedValue(0);

@@ -32,6 +32,7 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RADAR_JUDGMENT_FEEDBACK_TYPES, SUMMARY_STATUS } from '@deep-research/shared/states';
 import { RADAR_PUBLIC_SCORE_SQL } from '../../../lib/radar/score-validity';
 import { RADAR_LIST_ORDER_BY } from '../../../lib/radar/judgment-score';
+import { RADAR_PUBLIC_REVIEW_WHERE } from '../../../lib/radar/visibility';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
@@ -169,31 +170,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           },
           {
             distilledTier: { in: ['collection', 'deep_read'] },
-            enrichmentStatus: 'ready',
-            readerQualityStatus: 'ready',
-            contentReviewStatus: 'approved',
-          },
-          // Rows whose automatic pipeline is complete but that were never
-          // manually reviewed used to disappear from Radar. Their cached body
-          // is redacted at the detail route, so the card behaves like an
-          // external-reading item instead of being invisible.
-          {
-            distilledTier: { in: ['collection', 'deep_read'] },
-            enrichmentStatus: 'ready',
-            readerQualityStatus: 'ready',
-            contentReviewStatus: null,
-          },
-          // Content review can fail for presentation-only reasons (an image
-          // URL, a broken link) while the rendered page itself is approved.
-          // Those rows are useful as summaries; the detail route still
-          // redacts their cached body because contentReviewStatus is not
-          // approved.
-          {
-            distilledTier: { in: ['collection', 'deep_read'] },
-            enrichmentStatus: 'ready',
-            readerQualityStatus: 'ready',
-            contentReviewStatus: 'needs_manual_review',
-            renderReviewStatus: 'approved',
+            ...RADAR_PUBLIC_REVIEW_WHERE,
           },
         ],
       },

@@ -1,6 +1,8 @@
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
-import { canSeedChatFromSummary, radarVisibilitySelect } from '@/lib/radar/visibility';
+import {
+  canSeedChatFromSummary, isRadarSource, isRadarSummaryVisible, radarVisibilitySelect,
+} from '@/lib/radar/visibility';
 
 export interface BookmarkViewer {
   id: string;
@@ -12,6 +14,9 @@ type SummaryTarget = Parameters<typeof canSeedChatFromSummary>[0] & { sharedByUs
 /** 摘要对该 viewer 是否可见：与详情页同规则；自己分享的（含待审核）也可见。 */
 export function isSummaryVisibleTo(summary: SummaryTarget, viewer: BookmarkViewer): boolean {
   if (summary.sharedByUserId && summary.sharedByUserId === viewer.id && summary.status !== 'archived') return true;
+  if (isRadarSource(summary)) {
+    return summary.status !== 'archived' && isRadarSummaryVisible(summary, viewer.role === 'admin');
+  }
   return canSeedChatFromSummary(summary, viewer.role === 'admin');
 }
 
