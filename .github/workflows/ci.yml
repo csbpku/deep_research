@@ -250,7 +250,9 @@ jobs:
 
       - name: Playwright E2E
         run: pnpm --filter @deep-research/web test:e2e
-        timeout-minutes: 10
+        # The suite grew past its old 10-minute budget once the preflight
+        # request and the decision-memo default landed; keep a small margin.
+        timeout-minutes: 14
         env:
           E2E_BASE_URL: http://localhost:3000
 
