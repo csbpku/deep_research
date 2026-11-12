@@ -35,7 +35,7 @@ import {
 import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
 import { RadarPreviewPanel } from '@/components/radar/RadarPreviewPanel';
 import { ShareUrlDialog } from '@/components/radar/ShareUrlDialog';
-import type { ExternalReadingDetail } from '@/components/radar/RadarExternalReadingLanding';
+import type { ExternalReadingDetail } from '@/components/radar/radar-reading-detail';
 import { FilterBar } from '@/components/domain/FilterBar';
 import { Pagination } from '@/components/domain/Pagination';
 import { AppButton as Button } from '@/components/material/AppButton';
