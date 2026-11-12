@@ -218,11 +218,17 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
 
-  const missingSummaryFields = [
-    !existing.background?.trim() ? '背景' : null,
-    !existing.conclusion?.trim() ? '结论' : null,
-    !existing.risks?.trim() ? '风险或待验证项' : null,
-  ].filter((field): field is string => Boolean(field));
+  // Knowledge cards are a pointer plus a short judgment, not a research
+  // report: background/risk sections are optional, so their own gate only
+  // requires a non-empty body.
+  const isKnowledgeCard = existing.type === 'knowledge';
+  const missingSummaryFields = isKnowledgeCard
+    ? (!existing.body.trim() ? ['正文'] : [])
+    : [
+      !existing.background?.trim() ? '背景' : null,
+      !existing.conclusion?.trim() ? '结论' : null,
+      !existing.risks?.trim() ? '风险或待验证项' : null,
+    ].filter((field): field is string => Boolean(field));
   if (missingSummaryFields.length > 0) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,

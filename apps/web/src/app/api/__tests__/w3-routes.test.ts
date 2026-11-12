@@ -227,6 +227,55 @@ describe('research provenance input', () => {
     expect((await response.json()).status).toBe('published');
   });
 
+  it('publishes a knowledge card without research-report summary sections', async () => {
+    const id = '44444444-4444-4444-8444-444444444444';
+    const authorId = '11111111-1111-1111-1111-111111111111';
+    const now = new Date();
+    mocks.researchFindUnique.mockResolvedValue({
+      id,
+      type: 'knowledge',
+      authorId,
+      status: 'draft',
+      title: 'A useful excerpt',
+      body: 'Source excerpt and my note.',
+      background: null,
+      conclusion: null,
+      risks: null,
+      tags: ['playwright'],
+      creationMethod: 'manual',
+      knowledgeIndexText: null,
+      reviewStatus: null,
+      reviewRuns: [],
+      sourceAiJob: null,
+    });
+    mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
+      id,
+      type: 'knowledge',
+      status: 'published',
+      title: 'A useful excerpt',
+      body: 'Source excerpt and my note.',
+      background: null,
+      conclusion: null,
+      risks: null,
+      tags: ['playwright'],
+      authorId,
+      creationMethod: 'manual',
+      aiAssisted: data.aiAssisted,
+      publishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      author: { id: authorId, name: 'User', email: 'u@test' },
+    }));
+
+    const response = await publishPost(
+      new Request(`http://localhost/api/researches/${id}/publish`, { method: 'POST' }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).status).toBe('published');
+  });
+
   it('queues private index cleanup when a knowledge draft is published', async () => {
     const id = '33333333-3333-4333-8333-333333333333';
     const authorId = '11111111-1111-1111-1111-111111111111';

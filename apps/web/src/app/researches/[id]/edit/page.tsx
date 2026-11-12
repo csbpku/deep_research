@@ -808,12 +808,19 @@ export default function EditorPage() {
     await forkMutation.mutateAsync();
   }, [forkMutation]);
 
-  const summaryComplete = background.trim().length > 0 && conclusion.trim().length > 0 && risks.trim().length > 0;
-  const missingSummaryFields = [
-    !background.trim() ? '背景' : null,
-    !conclusion.trim() ? '结论' : null,
-    !risks.trim() ? '风险或待验证项' : null,
-  ].filter((field): field is string => Boolean(field));
+  const isKnowledgeCard = existing?.type === 'knowledge';
+  // A knowledge card is source + note, so it publishes without the research
+  // report's background/risk sections; only the body is required.
+  const summaryComplete = isKnowledgeCard
+    ? body.trim().length > 0
+    : background.trim().length > 0 && conclusion.trim().length > 0 && risks.trim().length > 0;
+  const missingSummaryFields = isKnowledgeCard
+    ? (!body.trim() ? ['正文'] : [])
+    : [
+      !background.trim() ? '背景' : null,
+      !conclusion.trim() ? '结论' : null,
+      !risks.trim() ? '风险或待验证项' : null,
+    ].filter((field): field is string => Boolean(field));
   const reviewRequired = existing?.creationMethod === 'ai_research';
   // The API marks the run that covers the exact current snapshot. Historical
   // runs remain useful in the audit trail, but must never drive the publish
@@ -947,7 +954,7 @@ export default function EditorPage() {
             </Button>
           )}
           {existing && existing.status === 'draft' && (
-            <Button type="button" size="sm" onClick={() => { setDisclosureAcked(false); setPublishConfirmOpen(true); }} disabled={publishDisabled} title={!summaryComplete ? '发布前必须填写背景、结论和风险或待验证项' : '发布调研'}>
+            <Button type="button" size="sm" onClick={() => { setDisclosureAcked(false); setPublishConfirmOpen(true); }} disabled={publishDisabled} title={!summaryComplete ? '发布前必须填写正文' : '发布调研'}>
               <Send />
               {publishMutation.isPending ? '发布中…' : '发布调研'}
             </Button>
