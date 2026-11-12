@@ -300,6 +300,15 @@ describe('GET /api/radar', () => {
     ]);
   });
 
+  it('keeps presentation-only review failures in the public quality gate', async () => {
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+    await radarList(new Request('http://localhost/api/radar?per_page=100') as never);
+    const where = JSON.stringify(mocks.summaryFindMany.mock.calls[0][0].where);
+    expect(where).toContain('"contentReviewStatus":"needs_manual_review"');
+    expect(where).toContain('"renderReviewStatus":"approved"');
+  });
+
   it('filters invalid scores before pagination and counting in one snapshot', async () => {
     mocks.summaryQueryRaw.mockResolvedValueOnce([{ id: SUM_ID }]);
     mocks.summaryFindMany.mockResolvedValue([]);
@@ -775,6 +784,35 @@ describe('GET /api/radar/[id]', () => {
     expect(body.originalMarkdown).toBeNull();
     expect(body.originalMeta).toBeNull();
     expect(body.repoSummary).toBeNull();
+  });
+
+  it('surfaces presentation-only review failures without exposing cached body', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Needs content review', body: 'private body', url: 'u', tags: [],
+      status: 'candidate', summaryDate: new Date('2026-07-21'),
+      publishedAt: null, createdAt: new Date(),
+      interpretation: 'cover', scoreReason: null, scoreVersion: null,
+      relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      distilledTier: 'deep_read', distilledScore: validRadarScore,
+      enrichmentStatus: 'ready', readerQualityStatus: 'ready',
+      contentReviewStatus: 'needs_manual_review', renderReviewStatus: 'approved',
+      selectionReason: null, sortOrder: null, syncRunId: 'r',
+      source: 'daily', sharedBy: null,
+      syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'RSS' } },
+      shareSource: null,
+    });
+    mocks.radarFeedbackGroupBy.mockResolvedValue([]);
+    mocks.radarFeedbackFindMany.mockResolvedValue([]);
+
+    const response = await radarDetail(
+      new Request('http://localhost/api/radar/x') as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.body).toBeNull();
+    expect(body.excerpt).toBe('cover');
   });
 
   it('allows anonymous radar detail reads without user feedback state', async () => {

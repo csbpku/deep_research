@@ -234,7 +234,10 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     !(
       summary.enrichmentStatus === 'ready' &&
       summary.readerQualityStatus === 'ready' &&
-      (summary.contentReviewStatus === 'approved' || summary.contentReviewStatus === null)
+      (summary.contentReviewStatus === 'approved' ||
+        summary.contentReviewStatus === null ||
+        (summary.contentReviewStatus === 'needs_manual_review' &&
+          summary.renderReviewStatus === 'approved'))
     )
   ) {
     return toApiErrorResponse({
@@ -255,6 +258,10 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     ? {
         ...shaped,
         body: null,
+        // The excerpt is normally the first 1,200 characters of the cached
+        // body. For an unreviewed row that would leak the very text we are
+        // redacting, so fall back to the editorial interpretation.
+        ...(unreviewedCachedBody ? { excerpt: summary.interpretation ?? '' } : {}),
         // Keep the content kind for the detail header.  Redacting the
         // enrichment payload must not turn an arXiv paper into a generic
         // webpage label.

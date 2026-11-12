@@ -183,6 +183,18 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             readerQualityStatus: 'ready',
             contentReviewStatus: null,
           },
+          // Content review can fail for presentation-only reasons (an image
+          // URL, a broken link) while the rendered page itself is approved.
+          // Those rows are useful as summaries; the detail route still
+          // redacts their cached body because contentReviewStatus is not
+          // approved.
+          {
+            distilledTier: { in: ['collection', 'deep_read'] },
+            enrichmentStatus: 'ready',
+            readerQualityStatus: 'ready',
+            contentReviewStatus: 'needs_manual_review',
+            renderReviewStatus: 'approved',
+          },
         ],
       },
     ],
