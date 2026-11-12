@@ -259,15 +259,15 @@
 
 ### P0（2 周内，影响大 / 成本低）
 
-| # | 动作 | 具体改法 | 验收 | 状态（2026-11-11） |
+| # | 动作 | 具体改法 | 验收 | 状态（2026-11-12） |
 |---|---|---|---|---|
-| 1 | 修雷达可见性 | 回填 `external_reading` 标签；或把"审核未完成"从公开门槛降级为"标注未审核"；至少让精读不再比速读更难看见 | 精读可见率 > 70% | ⚠️ 部分：新增"自动流水线 ready 但未人工复核"分支，可见精读 59 → 285 条（约 67%）；剩余 139 条 `needs_manual_review` 仍隐藏 |
+| 1 | 修雷达可见性 | 回填 `external_reading` 标签；或把"审核未完成"从公开门槛降级为"标注未审核"；至少让精读不再比速读更难看见 | 精读可见率 > 70% | ✅ 两个未人工复核分支（`contentReviewStatus IS NULL`、`needs_manual_review + renderReviewStatus=approved`），可见精读 59 → 353 条（约 83%）；`excerpt` 同步改用解读，避免脱敏后泄露正文 |
 | 2 | 改默认视图 | 默认「全部时间 + 精读/速读」；空态给出"放宽等级/来源/时间"三个一键动作 | 首屏非空率 > 90% | ✅ 默认精读+速读、全部时间；空态「放宽到全部时间与可读内容」一键重置 |
 | 3 | 时间语义 | 卡片主位改"发布 X 天前"，入库时间降为 tooltip | 用户能判断新旧 | ✅ `publishedAt` 主位，tooltip 同时给发布/入库 |
-| 4 | 判断落点 | 卡片/详情加「已读 / 不感兴趣 / 稍后 / 值得试点」四态 + 可选一句话；进入 "我判断过的" 视图；反馈写入排序权重 | 判断率（判断/打开）> 20% | ✅ 四态（`read/later/pilot/inaccurate`）已上线，`?judged=1` 按当前用户过滤；排序权重回写未做 |
-| 5 | 合并三套概览 | 列表预览与详情 landing 统一为一个组件；主 CTA 唯一（打开原文），Reader 为次级 | 入口数 3 → 1 | ❌ |
+| 4 | 判断落点 | 卡片/详情加「已读 / 不感兴趣 / 稍后 / 值得试点」四态 + 可选一句话；进入 "我判断过的" 视图；反馈写入排序权重 | 判断率（判断/打开）> 20% | ✅ 四态 + `?judged=1`；`judgmentScore` 在反馈事务内重算（pilot +2/later +1/read -1/inaccurate -2，±20），作为同质量分内的次序 |
+| 5 | 合并三套概览 | 列表预览与详情 landing 统一为一个组件；主 CTA 唯一（打开原文），Reader 为次级 | 入口数 3 → 1 | ✅ `RadarReadingOverview` 同时服务列表预览与详情；每面一个主 CTA + 一个 Reader 次级入口 |
 | 6 | 议题可展开 | `candidateIds` 直接渲染为链接列表；加"转为调研"按钮 | 议题展开率可测 | ✅ 前 6 条 + `/ai-research?seed=` |
-| 7 | 调研确认页收口 | 默认折叠为摘要条：一句话 + 真实耗时 + 来源数 + 修改；一键开跑 | 确认→启动率 +20% | ⚠️ 部分：CTA 已吸底，滚动时始终可见；仍未折叠成摘要条 |
+| 7 | 调研确认页收口 | 默认折叠为摘要条：一句话 + 真实耗时 + 来源数 + 修改；一键开跑 | 确认→启动率 +20% | ✅ 问题标题 + 产出选择 + 配置摘要首屏可见；研究方式/重点/投入/资料收进「高级设置」；对话记录折叠；手机端「开始研究」固定底部（1440 下 CTA 从 2,023px 降到 636px） |
 | 8 | 结果页重排 | 顺序改为 结论 → 全文 → 证据 → 审查；合并两个 details | 结果页停留/读完率 | ✅ 结论→背景→风险→正文→来源→讨论；披露/历史/元数据合并为页尾唯一 `details` |
 | 9 | 导出 | 研究稿导出 Markdown（复制/下载）；后续补 PDF | 导出率 | ✅ 详情页「导出 Markdown」；真实下载 35,415 字 |
 | 10 | 卡片门禁 | 知识卡片独立门禁（不要求背景/风险）；结果页常驻"存为知识" | 卡片创建→发布率 | ✅ 知识卡片只要求正文，背景/结论/风险可选；API 与编辑页门禁一致 |
@@ -517,7 +517,7 @@
 
 **默认视图（P0-2）**：`RadarScreen.tsx` 的 `DEFAULT_QUALITY` 改为 `['deep_read','skim']`，日期默认与 URL 回退都改为 `all`，重置筛选也回 `all`；空态主按钮改为「放宽到全部时间与可读内容」，一键复位质量/来源/时间。浏览器实测首屏显示「精读、速读」「全部时间」「共 1,663 条」，不再空态。
 
-**确认页 CTA 吸底（P0-7 部分）**：`AiResearchBrief.tsx` 的 footer 改为 `position: sticky; bottom: 0`，滚动时「开始研究」始终可见。仍未折叠成摘要条。
+**确认页收口（P0-7）**：`AiResearchBrief.tsx` 改为「问题标题 + 交付选择 + 启动配置摘要 + 折叠的高级设置」；研究方式/重点回答/对比对象/投入/资料来源全部收进 `details[data-testid=ai-research-advanced]`，对话记录折叠为一行。桌面 footer 保持 sticky，手机（<600px）改为 fixed 底栏并给表单留出底部空间，避免 CTA 被长表单推到两屏之外。
 
 **研究稿导出（P0-9）**：新增 `apps/web/src/components/research/ExportResearchMarkdownButton.tsx` 与 `apps/web/src/lib/export-research-markdown.ts`；已发布详情页提供「导出 Markdown」，按 标题 → 发布/标签 → 背景 → 结论 → 风险 → 正文 组装。真实下载 d28515a0 得到 35,415 字 `.md`。
 
@@ -529,15 +529,15 @@
 
 ### 12.2 验证
 
-- `pnpm --dir apps/web test`：1,433 passed / 2 skipped；`tsc`、`pnpm --dir apps/web build` 通过；`e2e/mui-radar.spec.ts` 26 例、`e2e/mui-domain.spec.ts` 2 例通过。
+- `pnpm --dir apps/web test`：1,459 passed / 2 skipped；`tsc`、`pnpm --dir apps/web build` 通过；`e2e/mui-radar.spec.ts` 26 例、`e2e/mui-domain.spec.ts` 2 例通过。
 - Python：`tests/test_preflight.py` 9 例、`tests/test_server_endpoints.py` 32 例等 47 passed；ruff、mypy 通过。
 - 浏览器：`/radar` 默认非空；未审核精读详情 `surface=content` 返回 `body:null`；已发布详情导出文件内容与页面一致。
 
-### 12.3 仍未做（按建议顺序）
+### 12.3 P0 收口状态
 
-1. **P0-7 完整版**：把确认页折叠成「一句话 + 预计耗时 + 来源数 + 修改」，而不只是 CTA 吸底。
-2. **P0-5 合并三套概览**。
-3. **P0-4 的排序回写**：四态已能记录，但尚未改变雷达排序权重。
+P0 14 项已全部完成：雷达可见性、默认视图、时间语义、四态判断与排序回写、概览合并、议题展开、确认页收口、结果页重排、导出、卡片门禁、摘要预填、引用与对话清理、审核恢复、启动预检。
+
+下一步转入 P1（周报/推送、自建 watchlist、团队协作与决策记录），不再把 P0 作为发布阻塞项。
 
 ### 12.5 结果页对话去重（2026-11-12）
 
@@ -571,3 +571,5 @@
 **P0-5 合并三套概览。** 新增 `apps/web/src/components/radar/RadarReadingOverview.tsx`，列表右侧预览（`RadarPreviewPanel`）与站外阅读详情（`RadarExternalReadingLanding`）共用同一份标题/来源/发布时间/阅读等级/「为什么值得看」/关键点/标签/判断与收藏。每个 surface 只有一个主 CTA「打开原文」（仓库为「打开 GitHub」），Reader 是 outlined 次级入口且只出现一次；此前详情页没有收藏、预览没有判断带，现在两边一致。详情页删掉了底部重复的 `#source-reading` Reader 区块和 sticky header 里的重复操作，只保留返回栏与正文容器；讨论仍在列表卡片/CommentSection，能力未删。新增 4 个组件测试断言「每面一个主 CTA、一个 Reader 入口、字段一致」；全量 web 单测 1,443 passed，`e2e/mui-radar.spec.ts` 26 例通过。
 
 **P0-1 补足到验收线。** 在上面的 `needs_manual_review + renderReviewStatus=approved` 分支上线后，本机公开精读 285 → 353 条（约 83%）。同时修复了一个脱敏漏洞：未审核行的 `excerpt` 原本取自正文前 1,200 字，即使 `body` 为 null 仍会泄露缓存正文；现在改用 `interpretation`，并新增路由测试覆盖。
+
+**P0-7 确认页收口。** 确认页从「一整页表单」收成三段：问题标题、交付什么（5 个选项 + 配置摘要）、开始研究。研究方式、重点回答、对比对象、投入、资料来源与历史资料全部进入默认折叠的「高级设置」；对话记录也折叠为一行「对话记录 · N 条」。桌面端 footer 仍 sticky，手机端（<600px）改为 fixed 底栏并给表单预留底部空间。浏览器实测（1440×1000，同一问题）：CTA 距页顶从 2,023px 降到 636px，整页落在首屏；390×844 下 CTA 固定在 792–828px，首屏可点，无横向溢出；高级设置默认关闭，展开后「重点回答」可见。Playwright 新增 `openAdvancedSettings` helper，受影响的 7 个 spec 先展开再操作；键盘用例改为「先走产出选项，再 Enter 展开高级设置」。
