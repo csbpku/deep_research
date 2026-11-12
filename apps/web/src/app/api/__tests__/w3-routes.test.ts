@@ -44,6 +44,7 @@ import { POST as researchPost } from '../researches/route';
 import { researchListOrderBy, researchListWhereLegacy } from '../../../lib/research-list-where';
 import { DELETE as researchDelete } from '../researches/[id]/route';
 import { POST as publishPost } from '../researches/[id]/publish/route';
+import { researchPublicationVersion } from '../../../lib/research-publication-version';
 import { CreateResearchInput } from '../../../lib/schemas';
 
 function request(content: string, filename: string, mimeType: string): Request {
@@ -58,7 +59,7 @@ beforeEach(() => {
   mocks.writeFile.mockResolvedValue(undefined);
   mocks.unlink.mockResolvedValue(undefined);
   mocks.transaction.mockImplementation((callback) => callback({
-    research: { create: mocks.researchCreate, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany, delete: mocks.researchDelete },
+    research: { findUnique: mocks.researchFindUnique, create: mocks.researchCreate, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany, delete: mocks.researchDelete },
     aiResearchJob: { delete: mocks.aiJobDelete },
     researchAudit: { create: mocks.auditCreate },
     productEvent: { create: mocks.eventCreate },
@@ -219,7 +220,7 @@ describe('research provenance input', () => {
       new Request('http://localhost/api/researches/id/publish', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ acknowledgeDisclosure: true }),
+        body: JSON.stringify({ acknowledgeDisclosure: true, publicationVersion: researchPublicationVersion(await mocks.researchFindUnique(), 'not_assessed') }),
       }) as never,
       { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
     );

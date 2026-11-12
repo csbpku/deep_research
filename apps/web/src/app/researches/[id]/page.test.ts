@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
   detail: null as Record<string, unknown> | null,
+  exportedResearch: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
@@ -21,6 +22,12 @@ vi.mock('@/lib/auth/client', () => ({
 }));
 vi.mock('@/components/CommentSection', () => ({
   CommentSection: () => h('div', { 'data-testid': 'comments' }),
+}));
+vi.mock('@/components/research/ExportResearchMarkdownButton', () => ({
+  ExportResearchMarkdownButton: ({ research }: { research: unknown }) => {
+    mocks.exportedResearch(research);
+    return h('button', null, '导出 Markdown');
+  },
 }));
 
 // 该页使用 JSX preserve + 经典 transform 渲染（Next 用 SWC，vitest 用 esbuild），
@@ -67,6 +74,7 @@ function headingIndex(html: string, title: string) {
 }
 
 beforeEach(() => {
+  mocks.exportedResearch.mockClear();
   mocks.query.mockReset();
   mocks.query.mockImplementation((options: { queryKey: unknown[] }) => {
     if (options.queryKey[0] === 'current-user') {
@@ -83,6 +91,21 @@ beforeEach(() => {
 });
 
 describe('research result page reading order (P0-8)', () => {
+  it('shows high-risk re-verification findings and passes the same disclosure to the download', () => {
+    const disclosure = [{ claimId: 'danger', claim: '需要修订的结论', label: '来源存在冲突', evidenceStatus: 'contradicted', reason: '此前作者接受的理由' }];
+    const summary = { coverageStatus: 'complete', researchSufficiencyStatus: 'sufficient', openCount: 1,
+      unsupportedCount: 0, conflictCount: 1, highRiskOpenCount: 1, hardBlockCount: 1,
+      disclosedCount: 0, machineIncomplete: true, reviewStatus: 'review_unavailable', retainedPreviousRisks: true };
+    mocks.detail = research({ reviewVerification: 'conflicted', reviewDisclosure: disclosure, reviewDisclosureSummary: summary });
+    const html = render(h(ResearchDetailPage));
+    expect(html).toContain('核验存在冲突');
+    expect(html).toContain('核验发现高风险来源冲突');
+    expect(html).toContain('最新自动核验尚未完成');
+    expect(html).toContain('此前作者接受的理由');
+    expect(mocks.exportedResearch).toHaveBeenCalledWith(expect.objectContaining({
+      reviewVerification: 'conflicted', reviewDisclosure: disclosure, reviewDisclosureSummary: summary,
+    }));
+  });
   it('reads 结论 → 正文 → 证据 → 审查 and keeps disclosure/audit in one collapsed panel', () => {
     mocks.detail = research({
       researchSources: [
@@ -115,7 +138,7 @@ describe('research result page reading order (P0-8)', () => {
     const html = render(h(ResearchDetailPage));
 
     const order = [
-      '发布时披露',
+      '核验与披露',
       '研究摘要',
       '结论',
       '背景',

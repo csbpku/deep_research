@@ -14,6 +14,7 @@
 //
 // 布局：max-w-measure（760px）—— 中文长文的舒适量度。
 
+import { researchReviewDisclosureMessages, type ResearchReviewReaderItem, type ResearchReviewReaderSummary, type ResearchReviewVerification } from '@/lib/research-review-reader';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -110,25 +111,9 @@ interface ResearchDetail {
   canManageStatus: boolean;
   researchSources: ResearchSourceItem[];
   researchTopics?: Array<{ topic: { id: string; slug: string; name: string } }>;
-  reviewDisclosure?: Array<{
-    claimId: string;
-    claim: string;
-    action?: 'accept_uncertainty';
-    label: string;
-    reason?: string | null;
-    evidenceStatus: 'supported' | 'unverified' | 'contradicted';
-  }>;
-  reviewVerification?: 'verified' | 'disclosed' | null;
-  reviewDisclosureSummary?: {
-    coverageStatus: 'complete' | 'insufficient' | 'not_applicable' | null;
-    researchSufficiencyStatus: 'sufficient' | 'insufficient' | 'not_assessed' | null;
-    openCount: number;
-    unsupportedCount: number;
-    conflictCount: number;
-    highRiskOpenCount: number;
-    disclosedCount: number;
-    machineIncomplete: boolean;
-  } | null;
+  reviewDisclosure?: ResearchReviewReaderItem[];
+  reviewVerification?: ResearchReviewVerification;
+  reviewDisclosureSummary?: ResearchReviewReaderSummary | null;
   sourceComment: SourceCommentItem | null;
   audits?: AuditEntry[];
   commentCount?: number;
@@ -340,11 +325,8 @@ export default function ResearchDetailPage() {
             <StatusBadge kind="researchType" value={isDecisionMemo ? 'decision_memo' : isLongResearch ? 'research' : 'knowledge'} />
             <StatusBadge kind="method" value={data.creationMethod} />
             {isDraft && <StatusBadge kind="research" value="draft" />}
-            {!isDraft && data.reviewVerification === 'verified'
-              ? <StatusBadge kind="verification" value="verified" icon={<CheckCircle2 size={14} />} />
-              : null}
-            {!isDraft && data.reviewVerification === 'disclosed'
-              ? <StatusBadge kind="verification" value="disclosed" icon={<AlertTriangle size={14} />} />
+            {!isDraft && data.reviewVerification
+              ? <StatusBadge kind="verification" value={data.reviewVerification} icon={data.reviewVerification === 'verified' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />} />
               : null}
             {data.featuredAt && <StatusBadge kind="featured" value="true" icon={<Star />} />}
           </div>
@@ -375,6 +357,9 @@ export default function ResearchDetailPage() {
                   body: data.body,
                   tags: data.tags,
                   publishedAt: data.publishedAt,
+                  reviewDisclosure: data.reviewDisclosure,
+                  reviewDisclosureSummary: data.reviewDisclosureSummary,
+                  reviewVerification: data.reviewVerification,
                 }}
               />
             ) : null}
@@ -450,7 +435,7 @@ export default function ResearchDetailPage() {
       {/* 发布披露：仅保留一条可见警示；完整清单与审查信息统一收进页尾折叠区。 */}
       {!isDraft && hasDisclosure && (
         <SectionCard
-          title="发布时披露"
+          title="核验与披露"
           tone="warning"
           icon={AlertTriangle}
           className={styles.disclosureBanner}
@@ -458,22 +443,7 @@ export default function ResearchDetailPage() {
           <p className={styles.disclosureIntro}>
             {data.reviewDisclosureSummary ? (
               <>
-                {data.reviewDisclosureSummary.machineIncomplete
-                  ? '本轮自动核验只覆盖了报告的一部分，机器清单未完整产出。'
-                  : null}
-                {data.reviewDisclosureSummary.openCount > 0
-                  ? `发布时仍有 ${data.reviewDisclosureSummary.openCount} 条声明未完成核验`
-                    + (data.reviewDisclosureSummary.conflictCount > 0
-                      ? `，其中 ${data.reviewDisclosureSummary.conflictCount} 条存在来源冲突`
-                      : '')
-                    + '。'
-                  : null}
-                {data.reviewDisclosureSummary.researchSufficiencyStatus === 'insufficient'
-                  ? '研究资料尚未覆盖原问题的全部关键部分。'
-                  : null}
-                {data.reviewDisclosureSummary.disclosedCount > 0
-                  ? `作者已明确接受 ${data.reviewDisclosureSummary.disclosedCount} 条不确定性。`
-                  : null}
+                {researchReviewDisclosureMessages(data.reviewDisclosureSummary).join(' ')}
                 {' '}阅读时请结合原文证据和风险说明判断。
               </>
             ) : (
@@ -643,7 +613,7 @@ export default function ResearchDetailPage() {
             <div className={styles.reviewAuditBlock}>
               <h3 className={styles.reviewAuditHeading}>披露声明（{disclosureItems.length}）</h3>
               <p className={styles.disclosureIntro}>
-                以下结论在发布时尚未完全核验，阅读时请结合原文证据与风险说明判断。
+                以下结论尚未完全核验或已发现来源冲突，阅读时请结合原文证据与风险说明判断。
               </p>
               <ul className={styles.disclosureList}>
                 {disclosureItems.map((item) => (

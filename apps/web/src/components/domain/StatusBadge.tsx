@@ -87,6 +87,8 @@ const ISSUE_TONES: Record<string, Tone> = {
 const VERIFICATION_TONES: Record<string, Tone> = {
   verified: { palette: 'success', label: '已核验' },
   disclosed: { palette: 'warning', outlined: true, label: '带披露发布' },
+  conflicted: { palette: 'danger', label: '核验存在冲突' },
+  unverified: { palette: 'warning', outlined: true, label: '尚未完成核验' },
 };
 
 const SEARCH_TYPE_TONES: Record<string, Tone> = {

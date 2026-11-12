@@ -1,5 +1,7 @@
 'use client';
 
+import { researchReviewDisclosureMessages, type ResearchReviewReaderItem, type ResearchReviewReaderSummary } from '@/lib/research-review-reader';
+
 // 调研库编辑器页面 —— 新建 + 编辑。
 //
 // 路由：
@@ -94,6 +96,10 @@ interface ResearchDetail {
   publishedAt: string | null;
   createdAt: string;
   reviewStatus: string | null;
+  publicationVersion: string;
+  publicationHardBlocked?: boolean;
+  publicationDisclosure?: ResearchReviewReaderItem[];
+  publicationDisclosureSummary?: ResearchReviewReaderSummary | null;
   reviewAttempts: number;
   reviewSummary: {
     corrected_count?: number;
@@ -730,11 +736,11 @@ export default function EditorPage() {
 
   // 发布
   const publishMutation = useMutation({
-    mutationFn: async (acknowledgeDisclosure: boolean) => {
+    mutationFn: async ({ acknowledgeDisclosure, publicationVersion }: { acknowledgeDisclosure: boolean; publicationVersion?: string }) => {
       const res = await fetch(`/api/researches/${existing?.id}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ acknowledgeDisclosure }),
+        body: JSON.stringify({ acknowledgeDisclosure, publicationVersion }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -799,9 +805,16 @@ export default function EditorPage() {
     setError('');
     if (isDirty) {
       await saveMutation.mutateAsync({ mode: 'manual' });
+      if (existing.creationMethod === 'ai_research') {
+        setDisclosureAcked(false);
+        setError('已保存修改，请根据当前版本的核验与披露重新确认发布。');
+        return;
+      }
     }
-    await publishMutation.mutateAsync(acknowledgeDisclosure);
+    await publishMutation.mutateAsync({ acknowledgeDisclosure, publicationVersion: existing.publicationVersion });
   }, [existing, isDirty, publishMutation, saveMutation]);
+
+  useEffect(() => { setDisclosureAcked(false); }, [existing?.publicationVersion]);
 
   const handleFork = useCallback(async () => {
     setError('');
@@ -837,7 +850,7 @@ export default function EditorPage() {
     : latestReviewRun
       ? latestReviewRun.executionStatus === 'completed' && latestReviewRun.outcome === 'clear'
       : existing?.reviewStatus === 'passed';
-  const publishHardBlocked = publicationGate?.status === 'blocked';
+  const publishHardBlocked = existing?.publicationHardBlocked === true || publicationGate?.status === 'blocked';
   const gateClean = publicationGate?.status === 'clear'
     || publicationGate?.status === 'publish_with_disclosure'
     || (!publicationGate && Boolean(reviewPassed));
@@ -846,7 +859,9 @@ export default function EditorPage() {
   // the author ticks the same disclosure the reader will see.
   const requiresDisclosureAck = reviewRequired && !gateClean && !publishHardBlocked;
   const currentReviewIsCurrent = existing?.currentReview?.isCurrentRevision === true;
-  const reviewInstruction = !currentReviewIsCurrent
+  const reviewInstruction = publishHardBlocked
+    ? '同版本仍有高风险来源冲突；必须修订相关结论，或完成新一轮核验后再发布。'
+    : !currentReviewIsCurrent
     ? '当前稿还没有最新的资料检查结果。保存后可以更新检查。'
     : existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing'
       ? '资料正在后台整理；完成后会告诉你哪些内容需要处理。'
@@ -883,7 +898,9 @@ export default function EditorPage() {
       }
     : reviewRequired && !reviewPublishable
       ? {
-          label: currentReviewIsCurrent && (existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing')
+          label: publishHardBlocked
+            ? '需要处理'
+            : currentReviewIsCurrent && (existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing')
             ? '可先带披露发布'
             : publicationGate?.status === 'blocked'
               ? '需要处理'
@@ -1567,13 +1584,24 @@ export default function EditorPage() {
             <Box sx={{ mt: 2, p: 1.5, border: 1, borderColor: 'var(--dr-color-warning)', bgcolor: 'var(--dr-color-warning-container)' }}>
               <Typography variant="metadata" component="p" sx={{ fontWeight: 600 }}>发布时披露</Typography>
               <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>
-                {publicationGate
+                {existing?.publicationDisclosureSummary
+                  ? researchReviewDisclosureMessages(existing.publicationDisclosureSummary).join(' ')
+                  : publicationGate
                   ? `${publicationGate.openCount} 条声明未完成核验`
                     + (publicationGate.conflictCount > 0 ? `，${publicationGate.conflictCount} 条存在来源冲突` : '')
                     + (publicationGate.coverageIncomplete ? '；本轮机器核验覆盖不完整' : '')
                     + '。'
                   : '本轮自动核验尚未完成。'}
               </Typography>
+              {existing?.publicationDisclosure?.length ? (
+                <Box component="ul" sx={{ mt: 1, pl: 2, maxHeight: 240, overflow: 'auto' }}>
+                  {existing.publicationDisclosure.map((item) => (
+                    <Typography key={`${item.claimId}:${item.claim}`} component="li" variant="metadata" sx={{ mb: 0.5 }}>
+                      {item.claim} — {item.label}{item.reason ? `；作者理由：${item.reason}` : ''}
+                    </Typography>
+                  ))}
+                </Box>
+              ) : null}
               <FormControlLabel
                 sx={{ mt: 1, alignItems: 'flex-start' }}
                 control={<Checkbox checked={disclosureAcked} onChange={(event) => setDisclosureAcked(event.target.checked)} />}

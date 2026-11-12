@@ -9,6 +9,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../../../../lib/db';
 import { apiHandler } from '../../../../../lib/api-handler';
 import { requireUser } from '../../../../../lib/auth/session';
@@ -24,6 +25,8 @@ import {
   reviewCoverageStatus,
 } from '../../../../../lib/research-review-decisions';
 import { evaluateResearchSufficiency } from '../../../../../lib/research-sufficiency';
+import { researchPublicationVersion } from '../../../../../lib/research-publication-version';
+import { projectResearchReviewForReader } from '../../../../../lib/research-review-reader';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 
 const IdParam = z.object({ id: z.string().uuid() });
@@ -31,122 +34,65 @@ const PublishBody = z.object({
   // A team publish with residual uncertainty is allowed only when the author
   // explicitly acknowledges it. The flag is an action, not a hidden default.
   acknowledgeDisclosure: z.boolean().optional(),
+  publicationVersion: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
-export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
-  const requestId = withRequestId(req.headers);
-  const u = await requireUser(req);
-  if (u instanceof NextResponse) return u;
-
-  const body = PublishBody.safeParse(await req.json().catch(() => ({})));
-  const acknowledgeDisclosure = body.success ? body.data.acknowledgeDisclosure === true : false;
-
-  const parsed = IdParam.safeParse(await ctx.params);
-  if (!parsed.success) {
-    return toApiErrorResponse({
-      code: ERROR_CODES.VALIDATION_FAILED,
-      message: 'id 必须为 UUID',
-      requestId,
-      details: parsed.error.flatten(),
-    });
-  }
-
-  const existing = await prisma.research.findUnique({
-    where: { id: parsed.data.id },
+const publicationSelect = {
+  id: true,
+  type: true,
+  authorId: true,
+  knowledgeIndexText: true,
+  status: true,
+  title: true,
+  body: true,
+  background: true,
+  conclusion: true,
+  risks: true,
+  tags: true,
+  creationMethod: true,
+  reviewStatus: true,
+  updatedAt: true,
+  sourceAiJob: {
+    select: {
+      brief: true,
+      sourcePolicy: true,
+      aiResearchSources: {
+        orderBy: { createdAt: 'asc' },
+        select: { canonicalKey: true, title: true, snippet: true },
+      },
+    },
+  },
+  reviewRuns: {
+    orderBy: { createdAt: 'desc' },
+    // Keep exact-revision history: retries cannot erase known conflicts.
     select: {
       id: true,
-      type: true,
-      authorId: true,
-      knowledgeIndexText: true,
-      status: true,
-      title: true,
-      body: true,
-      background: true,
-      conclusion: true,
-      risks: true,
-      tags: true,
-      creationMethod: true,
-      reviewStatus: true,
-      sourceAiJob: {
-        select: {
-          brief: true,
-          sourcePolicy: true,
-          aiResearchSources: {
-            orderBy: { createdAt: 'asc' },
-            select: { canonicalKey: true, title: true, snippet: true },
-          },
-        },
-      },
-      reviewRuns: {
-        orderBy: { createdAt: 'desc' },
-        // Keep enough history to find an exact revision even when a user
-        // edits, reverts, and reviews the same draft several times. The
-        // resolver below never treats a mismatched run as current.
-        take: 50,
+      revisionHash: true,
+      executionStatus: true,
+      outcome: true,
+      attempt: true,
+      createdAt: true,
+      summary: true,
+      claims: true,
+      decisions: {
+        orderBy: { createdAt: 'asc' },
         select: {
           id: true,
+          claimId: true,
           revisionHash: true,
-          executionStatus: true,
-          outcome: true,
-          attempt: true,
-          summary: true,
-          claims: true,
-          decisions: {
-            orderBy: { createdAt: 'asc' },
-            select: {
-              id: true,
-              claimId: true,
-              revisionHash: true,
-              action: true,
-              reason: true,
-              metadata: true,
-              actorId: true,
-              createdAt: true,
-            },
-          },
+          action: true,
+          reason: true,
+          metadata: true,
+          actorId: true,
+          createdAt: true,
         },
       },
     },
-  });
+  },
+} as const;
+type PublicationResearch = Prisma.ResearchGetPayload<{ select: typeof publicationSelect }>;
 
-  if (!existing) {
-    return toApiErrorResponse({
-      code: ERROR_CODES.DRAFT_NOT_FOUND,
-      message: '调研库不存在',
-      requestId,
-    });
-  }
-
-  // owner / admin 可发布；发布动作统一经过摘要与事实审核门禁。
-  if (existing.authorId !== u.id && u.role !== 'admin') {
-    return toApiErrorResponse({
-      code: ERROR_CODES.PERMISSION_DENIED,
-      message: '没有权限发布这份调研',
-      requestId,
-    });
-  }
-
-  if (existing.status === RESEARCH_STATUS.PUBLISHED) {
-    return toApiErrorResponse({
-      code: ERROR_CODES.DRAFT_ALREADY_PUBLISHED,
-      message: '已发布，不能重复发布',
-      requestId,
-    });
-  }
-
-  if (existing.status !== RESEARCH_STATUS.DRAFT) {
-    return toApiErrorResponse({
-      code: ERROR_CODES.DRAFT_ALREADY_PUBLISHED,
-      message: '只能发布草稿状态的内容',
-      requestId,
-    });
-  }
-
-  // AI-generated research is a public knowledge asset, not just a private
-  // model response. A verdict is valid only for the exact current snapshot.
-  // The resolver intentionally ignores legacy mirrors once the new relation
-  // has been loaded, so a historical passed/blocked result cannot leak across
-  // an edit or a revert.
+function publicationReview(existing: PublicationResearch) {
   const reviewState = resolveCurrentReviewState(
     existing,
     existing.reviewRuns,
@@ -188,6 +134,92 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     claims: reviewState.run?.claims,
     decisions: reviewState.run?.decisions,
   });
+  const reader = projectResearchReviewForReader({
+    status: 'published', creationMethod: existing.creationMethod,
+    currentReview: reviewState, reviewRuns: existing.reviewRuns,
+    researchSufficiencyStatus: researchSufficiency.status,
+  });
+  return {
+    reviewState, publicationGate, researchSufficiency,
+    disposition: { ...disposition, hardBlocked: disposition.hardBlocked || reader.reviewVerification === 'conflicted' },
+    version: researchPublicationVersion(existing, researchSufficiency.status),
+  };
+}
+
+export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
+  const requestId = withRequestId(req.headers);
+  const u = await requireUser(req);
+  if (u instanceof NextResponse) return u;
+
+  const body = PublishBody.safeParse(await req.json().catch(() => ({})));
+  if (!body.success) {
+    return toApiErrorResponse({ code: ERROR_CODES.VALIDATION_FAILED, message: '发布参数无效', requestId, details: body.error.flatten() });
+  }
+  const acknowledgeDisclosure = body.data.acknowledgeDisclosure === true;
+
+  const parsed = IdParam.safeParse(await ctx.params);
+  if (!parsed.success) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'id 必须为 UUID',
+      requestId,
+      details: parsed.error.flatten(),
+    });
+  }
+
+  const existing = await prisma.research.findUnique({
+    where: { id: parsed.data.id },
+    select: publicationSelect,
+  });
+
+  if (!existing) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '调研库不存在',
+      requestId,
+    });
+  }
+
+  // owner / admin 可发布；发布动作统一经过摘要与事实审核门禁。
+  if (existing.authorId !== u.id && u.role !== 'admin') {
+    return toApiErrorResponse({
+      code: ERROR_CODES.PERMISSION_DENIED,
+      message: '没有权限发布这份调研',
+      requestId,
+    });
+  }
+
+  if (existing.status === RESEARCH_STATUS.PUBLISHED) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_ALREADY_PUBLISHED,
+      message: '已发布，不能重复发布',
+      requestId,
+    });
+  }
+
+  if (existing.status !== RESEARCH_STATUS.DRAFT) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_ALREADY_PUBLISHED,
+      message: '只能发布草稿状态的内容',
+      requestId,
+    });
+  }
+
+  // AI-generated research is a public knowledge asset, not just a private
+  // model response. A verdict is valid only for the exact current snapshot.
+  // The resolver intentionally ignores legacy mirrors once the new relation
+  // has been loaded, so a historical passed/blocked result cannot leak across
+  // an edit or a revert.
+  const { reviewState, publicationGate, disposition, version } = publicationReview(existing);
+  if (existing.creationMethod === 'ai_research' && (
+    (acknowledgeDisclosure && !body.data.publicationVersion)
+    || (body.data.publicationVersion && body.data.publicationVersion !== version)
+  )) {
+    return NextResponse.json({
+      code: ERROR_CODES.AI_REVIEW_CONFLICT,
+      message: '发布确认对应的研究或审核版本已变化；请刷新并重新确认披露。', requestId,
+    }, { status: 409 });
+  }
   if (disposition.hardBlocked || reviewState.status === 'blocked') {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
@@ -253,151 +285,25 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   try {
     result = await prisma.$transaction(async (tx) => {
       const publishedAt = new Date();
-      if (aiAssisted) {
-        // Re-evaluate the exact gate inside the publication transaction. The
-        // first read is only for a friendly response; a decision or edit may
-        // have raced with the button click.
-        const txResearch = tx.research as typeof tx.research & {
-          findUnique?: (args: unknown) => Promise<{
-            id: string;
-            title: string;
-            body: string;
-            background: string | null;
-            conclusion: string | null;
-            risks: string | null;
-            tags: string[];
-            reviewStatus: string | null;
-            sourceAiJob: {
-              brief: unknown;
-              sourcePolicy: string;
-              aiResearchSources: Array<{
-                canonicalKey: string;
-                title: string | null;
-                snippet: string | null;
-              }>;
-            } | null;
-            reviewRuns: Array<{
-              id: string;
-              revisionHash: string;
-              executionStatus: string;
-              outcome: string | null;
-              attempt: number;
-              summary: unknown;
-              claims: unknown;
-              decisions: Array<{
-                id: string;
-                claimId: string;
-                revisionHash: string;
-                action: string;
-                reason: string | null;
-                metadata: unknown;
-                actorId: string;
-                createdAt: Date;
-              }>;
-            }>;
-          } | null>;
-        };
-        if (txResearch.findUnique) {
-          const fresh = await txResearch.findUnique({
-            where: { id: parsed.data.id },
-            select: {
-              id: true,
-              title: true,
-              body: true,
-              background: true,
-              conclusion: true,
-              risks: true,
-              tags: true,
-              reviewStatus: true,
-              sourceAiJob: {
-                select: {
-                  brief: true,
-                  sourcePolicy: true,
-                  aiResearchSources: {
-                    orderBy: { createdAt: 'asc' },
-                    select: { canonicalKey: true, title: true, snippet: true },
-                  },
-                },
-              },
-              reviewRuns: {
-                orderBy: { createdAt: 'desc' },
-                take: 50,
-                select: {
-                  id: true,
-                  revisionHash: true,
-                  executionStatus: true,
-                  outcome: true,
-                  attempt: true,
-                  summary: true,
-                  claims: true,
-                  decisions: {
-                    orderBy: { createdAt: 'asc' },
-                    select: {
-                      id: true,
-                      claimId: true,
-                      revisionHash: true,
-                      action: true,
-                      reason: true,
-                      metadata: true,
-                      actorId: true,
-                      createdAt: true,
-                    },
-                  },
-                },
-              },
-            },
-          });
-          if (!fresh) throw new Error('RESEARCH_PUBLISH_CONFLICT');
-          const freshState = resolveCurrentReviewState(fresh, fresh.reviewRuns, fresh.reviewStatus);
-          const freshBrief = ResearchBriefSchema.safeParse(fresh.sourceAiJob?.brief);
-          const freshResearchSufficiency = evaluateResearchSufficiency({
-            brief: freshBrief.success ? freshBrief.data : null,
-            sources: fresh.sourceAiJob?.aiResearchSources ?? [],
-            reportContent: fresh.body,
-            sourcePolicy: fresh.sourceAiJob?.sourcePolicy
-              ?? (freshBrief.success ? freshBrief.data.sourcePolicy : null),
-          });
-          const freshGate = freshState.run
-            ? getReviewPublicationGate({
-                executionStatus: freshState.run.executionStatus,
-                outcome: freshState.run.outcome,
-                coverageStatus: reviewCoverageStatus(freshState.run.summary),
-                researchSufficiencyStatus: freshResearchSufficiency.status,
-                claims: freshState.run.claims,
-                decisions: freshState.run.decisions,
-              })
-            : freshState.isLegacyFallback && freshState.status === 'passed'
-              ? {
-                  status: 'clear' as const,
-                  coverageStatus: 'complete' as const,
-                  coverageIncomplete: false,
-                  researchSufficiencyStatus: freshResearchSufficiency.status,
-                  openCount: 0,
-                  highRiskOpenCount: 0,
-                  conflictCount: 0,
-                  acceptedCount: 0,
-                  unsupportedCount: 0,
-                  disclosedCount: 0,
-                  hardBlockCount: 0,
-                }
-              : null;
-          const freshDisposition = getReviewPublishDisposition(freshGate, {
-            claims: freshState.run?.claims,
-            decisions: freshState.run?.decisions,
-          });
-          if (freshDisposition.hardBlocked) {
-            throw new Error('RESEARCH_PUBLISH_REVIEW_GATE');
-          }
-          if ((freshDisposition.requiresAcknowledgement || !freshGate) && !acknowledgeDisclosure) {
-            throw new Error('RESEARCH_PUBLISH_DISCLOSURE_REQUIRED');
-          }
-        }
+      const fresh = await tx.research.findUnique({ where: { id: parsed.data.id }, select: publicationSelect });
+      if (!fresh || fresh.status !== RESEARCH_STATUS.DRAFT) throw new Error('RESEARCH_PUBLISH_CONFLICT');
+      const freshReview = publicationReview(fresh);
+      if (freshReview.version !== version) throw new Error('RESEARCH_PUBLISH_CONFLICT');
+      if (aiAssisted && freshReview.disposition.hardBlocked) throw new Error('RESEARCH_PUBLISH_REVIEW_GATE');
+      if (aiAssisted && (freshReview.disposition.requiresAcknowledgement || !freshReview.publicationGate) && !acknowledgeDisclosure) {
+        throw new Error('RESEARCH_PUBLISH_DISCLOSURE_REQUIRED');
       }
       const claimed = await tx.research.updateMany({
         where: {
           id: parsed.data.id,
           status: RESEARCH_STATUS.DRAFT,
-          ...(aiAssisted ? { reviewStatus: { in: ['passed', 'needs_action', 'needs_revision'] } } : {}),
+          // Exact snapshot CAS accepts acknowledged null/unavailable states,
+          // while preserving the original row-race boundary.
+          updatedAt: existing.updatedAt,
+          reviewStatus: existing.reviewStatus,
+          title: existing.title, body: existing.body,
+          background: existing.background, conclusion: existing.conclusion, risks: existing.risks,
+          tags: { equals: existing.tags },
         },
         data: {
           // A compare-and-set update also takes the row lock that protects
@@ -503,8 +409,11 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
 
       return published;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+      return NextResponse.json({ code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '研究或审核状态正在更新，请刷新后重新确认发布。', requestId }, { status: 409 });
+    }
     if (error instanceof Error && error.message === 'RESEARCH_PUBLISH_DISCLOSURE_REQUIRED') {
       return NextResponse.json(
         { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '审核状态已更新；请重新确认本次带披露发布。', requestId },

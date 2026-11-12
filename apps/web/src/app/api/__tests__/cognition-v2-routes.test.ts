@@ -609,7 +609,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
   beforeEach(() => {
     mocks.transaction.mockImplementation((callback) =>
       callback({
-        research: { update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
+        research: { findUnique: mocks.researchFindUnique, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
         researchAudit: { create: mocks.researchAuditCreate },
         productEvent: { create: mocks.productEventCreate },
         // 注意：不传 researchTopic — 模拟现有 w3 测试里的 tx 形状
@@ -622,7 +622,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
     const { POST } = await import('../researches/[id]/publish/route');
 
     const now1 = new Date('2026-08-19T12:00:00Z');
-    mocks.researchFindUnique.mockResolvedValueOnce({
+    mocks.researchFindUnique.mockResolvedValue({
       id: '55555555-5555-4555-8555-555555555555',
       authorId: USER.id,
       status: 'draft',
@@ -671,7 +671,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
     // 重新 mock: 现在 transaction 提供 researchTopic 与 aiResearchJob.findFirst
     mocks.transaction.mockImplementationOnce((callback) =>
       callback({
-        research: { update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
+        research: { findUnique: mocks.researchFindUnique, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
         researchAudit: { create: mocks.researchAuditCreate },
         productEvent: { create: mocks.productEventCreate },
         researchTopic: { upsert: mocks.researchTopicUpsert },
@@ -681,7 +681,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
       }),
     );
     const now2 = new Date('2026-08-19T12:01:00Z');
-    mocks.researchFindUnique.mockResolvedValueOnce({
+    mocks.researchFindUnique.mockResolvedValue({
       id: '66666666-6666-4666-8666-666666666666',
       authorId: USER.id,
       status: 'draft',
