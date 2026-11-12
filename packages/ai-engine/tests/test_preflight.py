@@ -69,12 +69,20 @@ def _check(body: dict[str, object], name: str) -> dict[str, object]:
     return found
 
 
+class _ConfiguredAdapter:
+    name = "gpt_researcher"
+
+    async def health(self) -> AdapterHealth:
+        return AdapterHealth(ok=True, adapter_name=self.name)
+
+
 @pytest.mark.asyncio
 async def test_preflight_blocks_when_model_key_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RESEARCH_LLM", "minimax:MiniMax-M3.1-Flash")
     monkeypatch.setenv("UTILITY_LLM", "minimax:MiniMax-M3.1-Flash")
+    monkeypatch.setattr(server_app, "_adapter_singleton", lambda: _ConfiguredAdapter())
 
     response = await _get_preflight()
 
@@ -84,6 +92,24 @@ async def test_preflight_blocks_when_model_key_is_missing(
     research = _check(body, "research_llm")
     assert research["ok"] is False
     assert "MINIMAX_API_KEY" in str(research["message"])
+
+
+@pytest.mark.asyncio
+async def test_preflight_does_not_require_model_keys_for_fake_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.adapters.fake import FakeAdapter
+
+    monkeypatch.setenv("RESEARCH_LLM", "minimax:MiniMax-M3.1-Flash")
+    monkeypatch.setenv("UTILITY_LLM", "minimax:MiniMax-M3.1-Flash")
+    monkeypatch.setattr(server_app, "_adapter_singleton", lambda: FakeAdapter())
+
+    body = (await _get_preflight()).json()
+
+    assert body["ok"] is True
+    assert _check(body, "adapter")["ok"] is True
+    assert _check(body, "research_llm")["ok"] is True
+    assert "fake" in str(_check(body, "research_llm")["message"]).lower()
 
 
 @pytest.mark.asyncio
@@ -111,6 +137,7 @@ async def test_preflight_reports_invalid_slot_spec(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("RESEARCH_LLM", "not-a-valid-spec")
     monkeypatch.setenv("UTILITY_LLM", "minimax:MiniMax-M3.1-Flash")
     monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
+    monkeypatch.setattr(server_app, "_adapter_singleton", lambda: _ConfiguredAdapter())
 
     response = await _get_preflight()
 

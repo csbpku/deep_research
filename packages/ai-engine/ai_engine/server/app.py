@@ -3475,10 +3475,29 @@ async def _run_preflight() -> dict[str, Any]:
                 )
             )
 
-    research_check, research_route = _check_llm_slot("research")
-    checks.append(research_check)
-    utility_check, _ = _check_llm_slot("utility")
-    checks.append(utility_check)
+    if isinstance(adapter, FakeAdapter):
+        # The fake adapter answers from a fixture and never calls a model, so
+        # missing provider keys are expected in CI/E2E rather than a fault.
+        checks.append(
+            _preflight_check(
+                "research_llm",
+                True,
+                "测试适配器（fake）使用内置响应，不需要模型凭据。",
+            )
+        )
+        checks.append(
+            _preflight_check(
+                "utility_llm",
+                True,
+                "测试适配器（fake）使用内置响应，不需要模型凭据。",
+            )
+        )
+        research_check, research_route = checks[-2], None
+    else:
+        research_check, research_route = _check_llm_slot("research")
+        checks.append(research_check)
+        utility_check, _ = _check_llm_slot("utility")
+        checks.append(utility_check)
     checks.append(_check_search_config())
 
     probe_ready = (
