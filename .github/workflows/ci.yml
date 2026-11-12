@@ -178,6 +178,25 @@ jobs:
         # Known harmless noise is allow-listed in scripts/check-schema-drift.sh.
         run: scripts/check-schema-drift.sh
 
+      - name: Create isolated PostgreSQL regression databases
+        # Clone the migrated schema before seed data or app connections exist.
+        # Each suite requires its own explicit localhost database allow-list.
+        run: |
+          docker exec '${{ job.services.postgres.id }}' createdb -U postgres -T deep_research_test deep_research_radar_feedback_test
+          docker exec '${{ job.services.postgres.id }}' createdb -U postgres -T deep_research_test pr56_publication_test
+
+      - name: Radar feedback PostgreSQL regressions
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/deep_research_radar_feedback_test
+          RADAR_FEEDBACK_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/deep_research_radar_feedback_test
+        run: pnpm --filter @deep-research/web exec vitest run src/app/api/__tests__/radar-feedback.integration.test.ts --reporter=verbose
+
+      - name: Research publication PostgreSQL regressions
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/pr56_publication_test
+          TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/pr56_publication_test
+        run: pnpm --filter @deep-research/web exec vitest run src/app/api/__tests__/research-publication.integration.test.ts --reporter=verbose
+
       - name: Seed minimal test data
         run: pnpm --filter @deep-research/web db:seed:e2e
         continue-on-error: true  # 大多数测试兼容空库；只在跨模块 list/detail 联动时需要
