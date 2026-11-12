@@ -3851,6 +3851,14 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             # The author can edit them in the editor; publishing still takes an
             # explicit click, so this removes retyping without bypassing review.
             summary_fields = derive_research_summary(body)
+            # Persist empty suggestions as NULL, and hash exactly what the row
+            # will contain.  The web hash maps NULL to null; hashing the raw
+            # empty string here would make a freshly created draft look stale
+            # whenever the report has no risks/limitations section.
+            summary_values = {
+                field: summary_fields[field] or None
+                for field in ("background", "conclusion", "risks")
+            }
             # The review is scoped to the whole snapshot, including the
             # summary fields we just derived. Hashing only title/body here
             # would make every pre-filled draft look stale immediately.
@@ -3858,9 +3866,7 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                 {
                     "title": snapshot.topic[:300],
                     "body": body,
-                    "background": summary_fields["background"],
-                    "conclusion": summary_fields["conclusion"],
-                    "risks": summary_fields["risks"],
+                    **summary_values,
                     "tags": [],
                 }
             )
@@ -3903,9 +3909,9 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                             snapshot.topic[:300],
                             body,
                             snapshot.requester_id,
-                            summary_fields["background"] or None,
-                            summary_fields["conclusion"] or None,
-                            summary_fields["risks"] or None,
+                            summary_values["background"],
+                            summary_values["conclusion"],
+                            summary_values["risks"],
                             review_status,
                             review_attempts,
                             json.dumps(review_summary, ensure_ascii=False) if review_summary is not None else None,

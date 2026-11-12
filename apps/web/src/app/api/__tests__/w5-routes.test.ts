@@ -305,13 +305,18 @@ describe('GET /api/radar', () => {
       enrichmentStatus: 'ready', readerQualityStatus: 'ready', ...review,
       selectionReason: null, sortOrder: null, syncRunId: 'r', syncRun: null, shareSource: null,
       originalMarkdown: 'PRIVATE-CACHED-TEXT', highlights: { summary: 'PRIVATE-CACHED-TEXT' },
+      contentReviewDetails: {
+        rounds: [{ findings: [{ code: 'duplicate_block', evidence: 'PRIVATE-CACHED-TEXT' }] }],
+      },
     };
     mocks.getCurrentUser.mockResolvedValue(null);
     mocks.summaryFindMany.mockResolvedValue([summary]);
     mocks.summaryFindUnique.mockResolvedValue(summary);
     mocks.summaryCount.mockResolvedValue(1);
     const listBody = await (await radarList(new Request('http://localhost/api/radar?quality=deep_read') as never)).json();
-    expect(listBody.items[0]).toMatchObject({ body: null, excerpt: summary.interpretation });
+    expect(listBody.items[0]).toMatchObject({
+      body: null, excerpt: summary.interpretation, contentReviewDetails: null,
+    });
     expect(JSON.stringify(listBody)).not.toContain('PRIVATE-CACHED-TEXT');
     for (const surface of ['', '?surface=summary', '?surface=content']) {
       const response = await radarDetail(new Request(`http://localhost/api/radar/${SUM_ID}${surface}`) as never, {
@@ -1065,6 +1070,21 @@ describe('GET /api/radar/[id]', () => {
 // /api/radar-feedback
 // ──────────────────────────────────────────────────────────────────────
 
+const visibleFeedbackSummary = {
+  id: SUM_ID,
+  source: 'daily',
+  syncRunId: 'r',
+  status: 'candidate',
+  shareSource: null,
+  distilledScore: validRadarScore,
+  distilledTier: 'deep_read',
+  tags: [],
+  enrichmentStatus: 'ready',
+  readerQualityStatus: 'ready',
+  contentReviewStatus: 'approved',
+  renderReviewStatus: 'approved',
+};
+
 describe('POST /api/radar-feedback', () => {
   it('returns 400 on bad body', async () => {
     const req = new Request('http://localhost/api/radar-feedback', {
@@ -1087,10 +1107,23 @@ describe('POST /api/radar-feedback', () => {
     expect(r.status).toBe(404);
   });
 
-  it('returns 200 + created=true when feedback inserted', async () => {
+  it('returns 404 for a radar candidate the viewer cannot see', async () => {
     mocks.summaryFindUnique.mockResolvedValue({
-      id: SUM_ID, source: 'daily', syncRunId: 'r',
+      ...visibleFeedbackSummary,
+      contentReviewStatus: 'reviewing',
+      renderReviewStatus: null,
     });
+    const req = new Request('http://localhost/api/radar-feedback', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ summaryId: SUM_ID, feedbackType: 'pilot' }),
+    });
+    const r = await feedbackPost(req as never);
+    expect(r.status).toBe(404);
+    expect(mocks.radarFeedbackCreateMany).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 + created=true when feedback inserted', async () => {
+    mocks.summaryFindUnique.mockResolvedValue(visibleFeedbackSummary);
     const req = new Request('http://localhost/api/radar-feedback', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ summaryId: SUM_ID, feedbackType: 'useful' }),
@@ -1107,9 +1140,7 @@ describe('POST /api/radar-feedback', () => {
   });
 
   it('treats a duplicate row as idempotent (created=false)', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({
-      id: SUM_ID, source: 'daily', syncRunId: 'r',
-    });
+    mocks.summaryFindUnique.mockResolvedValue(visibleFeedbackSummary);
     mocks.radarFeedbackCreateMany.mockResolvedValue({ count: 0 });
     const req = new Request('http://localhost/api/radar-feedback', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1128,9 +1159,7 @@ describe('POST /api/radar-feedback', () => {
   ] as const)(
     'accepts the judgment feedback type %s and recomputes the aggregate',
     async (feedbackType, expectedScore) => {
-      mocks.summaryFindUnique.mockResolvedValue({
-        id: SUM_ID, source: 'daily', syncRunId: 'r',
-      });
+      mocks.summaryFindUnique.mockResolvedValue(visibleFeedbackSummary);
       mocks.radarFeedbackCreateMany.mockResolvedValue({ count: 1 });
       mocks.radarFeedbackGroupBy.mockResolvedValue([
         { feedbackType, _count: { feedbackType: 1 } },
@@ -1157,7 +1186,7 @@ describe('POST /api/radar-feedback', () => {
   );
 
   it('keeps non-judgment feedback out of the aggregate', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({ id: SUM_ID, source: 'daily', syncRunId: 'r' });
+    mocks.summaryFindUnique.mockResolvedValue(visibleFeedbackSummary);
     mocks.radarFeedbackGroupBy.mockResolvedValue([
       { feedbackType: 'useful', _count: { feedbackType: 1 } },
     ]);
@@ -1175,7 +1204,7 @@ describe('POST /api/radar-feedback', () => {
   });
 
   it('mirrors favorite feedback into user bookmarks atomically', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({ id: SUM_ID, source: 'daily', syncRunId: 'r' });
+    mocks.summaryFindUnique.mockResolvedValue(visibleFeedbackSummary);
     mocks.radarFeedbackGroupBy.mockResolvedValue([
       { feedbackType: 'favorite', _count: { feedbackType: 1 } },
     ]);
@@ -1261,7 +1290,7 @@ describe('DELETE /api/radar-feedback', () => {
   });
 
   it('recomputes from the remaining rows when a user changes read to pilot', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({ id: SUM_ID, source: 'daily', syncRunId: 'r' });
+    mocks.summaryFindUnique.mockResolvedValue(visibleFeedbackSummary);
     // DELETE read leaves no judgments; POST pilot then creates the only one.
     // Each request aggregates twice (counts + score), so switch the snapshot
     // between the two requests rather than queueing one value per call.

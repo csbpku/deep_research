@@ -226,7 +226,9 @@ export function shapeCandidate(input: {
     readerQualityStatus: externalReading ? null : s.readerQualityStatus ?? null,
     readerQualityDetails: externalReading ? null : s.readerQualityDetails ?? null,
     contentReviewStatus: externalReading ? null : s.contentReviewStatus ?? null,
-    contentReviewDetails: externalReading ? null : s.contentReviewDetails ?? null,
+    // Review findings carry raw body slices as evidence; hide them whenever
+    // the cached source itself is hidden from this reader.
+    contentReviewDetails: externalReading || redactCachedContent ? null : s.contentReviewDetails ?? null,
     contentReviewRound: externalReading ? 0 : s.contentReviewRound ?? 0,
     renderReviewStatus: externalReading ? null : s.renderReviewStatus ?? null,
     renderReviewRound: externalReading ? 0 : s.renderReviewRound ?? 0,

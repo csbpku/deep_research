@@ -30,6 +30,7 @@ import {
   lockJudgmentAggregate,
   recomputeSummaryJudgmentScore,
 } from '../../../lib/radar/judgment-score';
+import { isRadarSummaryVisible, radarVisibilitySelect } from '../../../lib/radar/visibility';
 import type { Prisma } from '@prisma/client';
 
 /** 在事务内重新聚合 8 类反馈计数（含刚写入/删除的那一条）。 */
@@ -60,12 +61,20 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const body = await parseBody(req, CreateRadarFeedbackInput);
   if (body instanceof NextResponse) return body;
 
-  // 校验 summary 存在且来自雷达（source='daily' 且 syncRunId 非空）
+  // 校验 summary 存在、来自雷达，且对当前用户可见。没有这层 gate，
+  // 成员可以对隐藏/未发布的 UUID 写判断并影响全局排序，也能把 404/200
+  // 当作“这行是否存在”的探针。
   const summary = await prisma.summary.findUnique({
     where: { id: body.summaryId },
-    select: { id: true, source: true, syncRunId: true },
+    select: { ...radarVisibilitySelect, status: true },
   });
-  if (!summary || summary.source !== 'daily' || summary.syncRunId === null) {
+  if (
+    !summary
+    || summary.source !== 'daily'
+    || summary.syncRunId === null
+    || summary.status === 'archived'
+    || !isRadarSummaryVisible(summary, u.role === 'admin')
+  ) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '雷达候选不存在',

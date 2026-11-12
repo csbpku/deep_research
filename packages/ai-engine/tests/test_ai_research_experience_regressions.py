@@ -91,15 +91,20 @@ async def test_draft_review_uses_full_revision_hash_not_body_origin_hash() -> No
     from ai_engine.research_summary import derive_research_summary
 
     summary = derive_research_summary(body)
-    assert review[3] == research_revision_hash(
-        {
-            "title": snapshot.topic,
-            "body": body,
-            "background": summary["background"],
-            "conclusion": summary["conclusion"],
-            "risks": summary["risks"],
-            "tags": [],
-        }
+    # Empty suggestions are stored as NULL and hashed as null; the web side
+    # does the same.  Hashing "" here recreates the stale-review bug.
+    assert summary["risks"] == ""
+    expected_snapshot = {
+        "title": snapshot.topic,
+        "body": body,
+        "background": summary["background"] or None,
+        "conclusion": summary["conclusion"] or None,
+        "risks": None,
+        "tags": [],
+    }
+    assert review[3] == research_revision_hash(expected_snapshot)
+    assert review[3] != research_revision_hash(
+        {**expected_snapshot, "risks": ""}
     )
     assert review[3] != research_revision_hash({"title": "edited title", "body": body})
 
