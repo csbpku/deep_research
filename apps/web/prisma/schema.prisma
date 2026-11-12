@@ -335,6 +335,10 @@ model Summary {
   syncRunId          String?  @db.Uuid // radar_sync_runs.id
   sortOrder          Int? // Admin 排列的序号（每日 1-4）
   selectionReason    String?  @db.VarChar(500) // 入选每日摘要理由
+  // P0-4: 四个轻量判断（已读/稍后/试点/不感兴趣）的群体聚合分，用来在同
+  // distilledTotal 的条目之间再排序。由 /api/radar-feedback 在写反馈的同一
+  // 事务内重算；没有判断记录的历史行保持 0（不参与再平衡）。
+  judgmentScore      Int      @default(0)
 
   // Phase 0 deep-dive 字段：sync 时抓取的原始内容，供后续 chat 读原文/结构化视图使用
   originalMarkdown  String?   @db.Text // ≤64KB markdown

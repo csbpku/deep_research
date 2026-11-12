@@ -31,6 +31,7 @@ import {
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RADAR_JUDGMENT_FEEDBACK_TYPES, SUMMARY_STATUS } from '@deep-research/shared/states';
 import { RADAR_PUBLIC_SCORE_SQL } from '../../../lib/radar/score-validity';
+import { RADAR_LIST_ORDER_BY } from '../../../lib/radar/judgment-score';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
@@ -279,15 +280,9 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     ],
   };
 
-  // TODO(P0-4): 判断落点只用于筛选，不参与排序权重。基于已读/稍后/试点/
-  // 不感兴趣的排序再平衡是独立改动，需要先定义信号强度与评估口径。
-  const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
-    { distilledTotal: { sort: 'desc', nulls: 'last' } },
-    { createdAt: 'desc' },
-    // A unique tie-breaker keeps bounded selection and pagination stable when
-    // a sync inserts several equally scored rows at the same timestamp.
-    { id: 'asc' },
-  ];
+  // P0-4: 判断分只在同 distilledTotal 的条目之间再平衡，质量分仍是第一
+  // 排序键；createdAt/id 继续兜底，保证分页稳定（id 是最后一个 tie-breaker）。
+  const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [...RADAR_LIST_ORDER_BY];
 
   // The score-validity query only needs to inspect rows that can survive the
   // list's top-level status, quality, and date filters. In particular, the
