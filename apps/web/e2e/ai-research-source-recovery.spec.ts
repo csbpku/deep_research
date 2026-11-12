@@ -96,6 +96,7 @@ test('legacy draft keeps references and blocks partial deselection until old sel
   }, [userId, conversationId])).toBe(true);
   await page.reload();
   await expect(start).toBeDisabled();
+  await openAdvancedSettings(page);
   await expect(page.getByRole('alert').filter({ hasText: '旧草稿没有保存资料与来源的对应关系' })).toBeVisible();
   await details.click();
   await page.getByRole('checkbox', { name: `使用资料：旧草稿已选资料 (${bookmarkId})` }).click();

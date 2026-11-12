@@ -121,7 +121,14 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     const chat = page.getByRole('region', { name: 'AI 调研对话', exact: true });
     await expect(chat).not.toContainText('没能确定具体的调研对象');
     await expect(chat).not.toContainText('这份调研将支持什么决策');
+    const expandThread = async () => {
+      const details = page.locator('[data-testid="ai-research-thread"]');
+      if (!(await details.evaluate((el) => (el as HTMLDetailsElement).open))) {
+        await details.locator('summary').first().click();
+      }
+    };
     const assertOrder = async () => {
+      await expandThread();
       const text = await chat.innerText();
       expect(text.indexOf('告诉我你想弄清楚的问题')).toBeLessThan(text.indexOf(question));
       expect(text.indexOf(question)).toBeLessThan(text.indexOf('我会围绕'));
