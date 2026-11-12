@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { loginWithCredentials } from './fixtures';
 
 const conversationId = 'f0500000-0000-4000-8000-000000000001';
 const question = '比较 Playwright 和 Cypress 的工程取舍';
@@ -79,6 +80,9 @@ for (const width of [320, 390, 768, 1024, 1440]) {
 
 
 test('edited output, effort, sources and focus survive refresh and late planning', async ({ page }) => {
+  // This case reloads the page, so it needs a real session cookie for SSR;
+  // the mocked /api/auth/session response only covers client fetches.
+  await loginWithCredentials(page.context().request, { email: 'member@e2e.local', role: 'member' });
   await mockWorkspace(page);
   await page.goto('/ai-research');
   await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
