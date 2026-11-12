@@ -209,7 +209,7 @@ test('Reader knowledge is semantically reused through Web and AI Engine, then re
       if (new URL(response.url()).pathname === '/api/ai-research/context') contextResponse.current = response;
     });
     await contextSummary.click();
-    await expect(details).toHaveAttribute('open', '');
+    await expect(details).toHaveJSProperty('open', true);
     await expect.poll(() => contextResponse.current).not.toBeNull();
     expect(contextResponse.current?.status()).toBe(200);
 

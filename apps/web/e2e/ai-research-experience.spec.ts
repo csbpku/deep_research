@@ -209,7 +209,7 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await expect(advanced).toHaveAccessibleName(/高级设置/);
   await page.keyboard.press('Enter');
   const advancedDetails = page.locator('[data-testid="ai-research-advanced"]');
-  await expect(advancedDetails).toHaveAttribute('open', '');
+  await expect(advancedDetails).toHaveJSProperty('open', true);
   await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
   const objective = page.getByRole('combobox', { name: '研究方式' });
   await tabTo(objective);
