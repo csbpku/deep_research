@@ -1,9 +1,10 @@
 // BFF handler: GET /api/ai-research/preflight — 启动前预检代理。
 //
 // 确认页在启用「开始研究」前调用；AI engine 负责检查模型槽位、凭据、
-// 检索配置，并做一次有界的模型连通性探测。BFF 只做鉴权与透传，
-// 引擎不可达时也返回 200 + ok:false，让页面显示可操作的原因而不是
-// 一个没有上下文的 5xx。
+// 检索配置，并做一次有界的模型连通性探测。BFF 只做鉴权与透传。
+// 引擎不可达时返回 200 + 非阻断的 warning：BFF 无法区分“配置错”与
+// “引擎刚重启”，此时锁死开始按钮会让用户无从操作；真正的配置错误由
+// 引擎返回 ok:false，仍然阻断。
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -27,10 +28,10 @@ interface EnginePreflightResponse {
   checkedAt: string;
 }
 
-function failedPreflight(message: string): NextResponse {
+function unavailablePreflight(message: string): NextResponse {
   return NextResponse.json({
-    ok: false,
-    checks: [{ name: 'ai_engine', ok: false, message }],
+    ok: true,
+    checks: [{ name: 'ai_engine', ok: true, level: 'warning', message }],
     checkedAt: new Date().toISOString(),
   });
 }
@@ -55,7 +56,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   });
 
   if (!fetched.ok) {
-    return failedPreflight(
+    return unavailablePreflight(
       fetched.code === 'AI_ENGINE_UNAVAILABLE'
         ? 'AI 调研服务暂时不可用，请确认 AI engine 已启动后重试。'
         : `启动前检查失败：${fetched.message}`,

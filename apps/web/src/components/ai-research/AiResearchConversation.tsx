@@ -449,8 +449,18 @@ export function AiResearchConversation({
         setPreflightChecks(checks);
         if (data.ok === true) {
           setPreflightStatus(checks.some((check) => check.level === 'warning') ? 'warning' : 'ok');
-        } else {
+        } else if (data.ok === false && checks.length > 0) {
+          // Only a structured failure from the engine is a reason to block.
+          // A malformed or mocked response cannot prove the config is bad.
           setPreflightStatus('blocked');
+        } else {
+          setPreflightStatus('warning');
+          setPreflightChecks([{
+            name: 'preflight_unknown',
+            ok: true,
+            level: 'warning',
+            message: '未能确认模型与搜索配置；仍可开始，失败时会显示具体原因。',
+          }]);
         }
       })
       .catch(() => {
@@ -1236,6 +1246,9 @@ export function AiResearchConversation({
                   {preflightStatus === 'blocked' || preflightStatus === 'warning' ? (
                     <Alert
                       severity={preflightStatus === 'blocked' ? 'error' : 'warning'}
+                      // A warning is informational; keep role="alert" for the
+                      // blocking state so page-level alerts stay unambiguous.
+                      role={preflightStatus === 'blocked' ? 'alert' : 'status'}
                       sx={{ mb: 1.5, alignItems: 'flex-start' }}
                       action={(
                         <Button

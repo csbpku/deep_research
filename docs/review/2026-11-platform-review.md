@@ -525,7 +525,7 @@
 
 **结果页重排（P0-8）**：`apps/web/src/app/researches/[id]/page.tsx` 顺序改为 结论 → 背景 → 风险 → 正文 → 来源与证据 → 团队讨论；披露明细、修改历史、元数据收进页尾唯一 `details#review-audit`。新增 `page.test.ts` 2 例；真实详情页 h2 顺序与唯一 `details` 已核对。
 
-**启动预检（P0-14）**：引擎新增 `GET /health/preflight`（内部 token、60s 缓存、`force=true`），检查 adapter、`RESEARCH_LLM` / `UTILITY_LLM` 槽位与凭据、Tavily 配置，并对研究路线做 8 token / 4s 有界探测；错误信息脱敏。Web BFF `apps/web/src/app/api/ai-research/preflight/route.ts` 做 6s 代理；对话页在方案就绪后检查，失败禁用「开始研究」并列出缺失项，warning 不阻断，提供「重新检查」。健康环境实测 `ok:true`、5 项全过，页面不出现阻断 Alert，开始按钮可用。
+**启动预检（P0-14）**：引擎新增 `GET /health/preflight`（内部 token、60s 缓存、`force=true`），检查 adapter、`RESEARCH_LLM` / `UTILITY_LLM` 槽位与凭据、Tavily 配置，并对研究路线做 8 token / 4s 有界探测；错误信息脱敏。Web BFF `apps/web/src/app/api/ai-research/preflight/route.ts` 做 6s 代理；对话页在方案就绪后检查。只有引擎返回结构化 `ok:false` 才禁用「开始研究」并列出缺失项；引擎不可达、BFF 超时或响应不完整都降级为 `status` 级提示（不占用 `role=alert`），仍可开始并「重新检查」。健康环境实测 `ok:true`、5 项全过，页面不出现阻断 Alert，开始按钮可用。
 
 ### 12.2 验证
 

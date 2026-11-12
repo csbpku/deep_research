@@ -70,7 +70,7 @@ describe('GET /api/ai-research/preflight', () => {
     }));
   });
 
-  it('returns ok:false with a clear message when the engine is unreachable', async () => {
+  it('returns a non-blocking warning when the engine is unreachable', async () => {
     mocks.fetchAiEngine.mockResolvedValue({
       ok: false,
       code: 'AI_ENGINE_UNAVAILABLE',
@@ -82,10 +82,11 @@ describe('GET /api/ai-research/preflight', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.ok).toBe(false);
+    expect(body.ok).toBe(true);
     expect(body.checks).toEqual([{
       name: 'ai_engine',
-      ok: false,
+      ok: true,
+      level: 'warning',
       message: 'AI 调研服务暂时不可用，请确认 AI engine 已启动后重试。',
     }]);
   });
