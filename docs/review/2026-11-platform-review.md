@@ -513,7 +513,7 @@
 
 ### 12.1 本轮补上的七项
 
-**雷达可见性（P0-1）**：`apps/web/src/app/api/radar/route.ts` 的 `publicQualityGate` 增加分支——`distilledTier in (collection, deep_read)`、`enrichmentStatus=ready`、`readerQualityStatus=ready`、`contentReviewStatus IS NULL`（自动流水线跑完但从未人工复核）。详情路由对未审核行做正文脱敏：`surface=content` 返回 `body: null`、`originalMarkdown: null`，卡片仍指向原文。本机公开精读从 59 条增至 285 条（约 67%）；剩余 139 条 `needs_manual_review` 仍隐藏，作为质量兜底。
+**雷达可见性（P0-1）**：`apps/web/src/app/api/radar/route.ts` 的 `publicQualityGate` 增加两类分支——`distilledTier in (collection, deep_read)`、`enrichmentStatus=ready`、`readerQualityStatus=ready`，且 `contentReviewStatus IS NULL`（自动流水线跑完但从未人工复核）或 `contentReviewStatus='needs_manual_review' AND renderReviewStatus='approved'`（只有展示层小问题、渲染已通过）。详情路由对未审核行做正文脱敏：`body/originalMarkdown` 置空，`excerpt` 改用编辑解读而不是正文前 1,200 字，避免脱敏后仍泄露缓存正文。本机公开精读从 59 条增至 353 条（约 83%），超过验收线 70%；剩余 72 条渲染本身仍需人工复核，作为质量兜底。
 
 **默认视图（P0-2）**：`RadarScreen.tsx` 的 `DEFAULT_QUALITY` 改为 `['deep_read','skim']`，日期默认与 URL 回退都改为 `all`，重置筛选也回 `all`；空态主按钮改为「放宽到全部时间与可读内容」，一键复位质量/来源/时间。浏览器实测首屏显示「精读、速读」「全部时间」「共 1,663 条」，不再空态。
 
@@ -563,3 +563,11 @@
 2. Playwright job 的 AI engine 使用 fake adapter 且不带 provider key，预检仍要求 `MINIMAX_API_KEY`，真实数据库的 AI 调研用例同样卡在禁用的开始按钮。改为 fake adapter 直接判定模型槽位可用。
 
 另外套件本身已超过旧的 10 分钟 step 预算，调到 14 分钟。修复后 CI run `43141750438` 七个 job 全绿；本地用 64 位 E2E token + `deep_research_e2e` 库复现 `ai-research-flows.spec.ts:202` 通过。
+
+### 12.7 雷达收口：判断回写排序 + 统一阅读概览（2026-11-12）
+
+**P0-4 判断回写排序。** `summaries` 新增 `judgmentScore Int @default(0)`（迁移 `20261112000001_radar_judgment_score`），由 `/api/radar-feedback` 在写入/撤回判断的同一事务内重算：`pilot +2`、`later +1`、`read -1`、`inaccurate -2`，并按 ±20 封顶。排序契约变为 `distilledTotal desc NULLS LAST → judgmentScore desc → createdAt desc → id asc`：质量分仍是第一优先级，判断只在同分条目之间再平衡，分页与可见集合不变。`favorite/useful/used/suggest_research` 不计入，避免收藏与判断双重加权。并发写用 `pg_advisory_xact_lock(hashtext(summaryId))` 串行化，避免丢失更新；迁移同时回填已有判断。真实 PG 验证：在同一 `distilledTotal=78.5` 的两条内容上给较旧的一条加 `pilot`，它排到了较新的前面；改 `later` 后仍在前，分值为 1。回滚测试未留数据。
+
+**P0-5 合并三套概览。** 新增 `apps/web/src/components/radar/RadarReadingOverview.tsx`，列表右侧预览（`RadarPreviewPanel`）与站外阅读详情（`RadarExternalReadingLanding`）共用同一份标题/来源/发布时间/阅读等级/「为什么值得看」/关键点/标签/判断与收藏。每个 surface 只有一个主 CTA「打开原文」（仓库为「打开 GitHub」），Reader 是 outlined 次级入口且只出现一次；此前详情页没有收藏、预览没有判断带，现在两边一致。详情页删掉了底部重复的 `#source-reading` Reader 区块和 sticky header 里的重复操作，只保留返回栏与正文容器；讨论仍在列表卡片/CommentSection，能力未删。新增 4 个组件测试断言「每面一个主 CTA、一个 Reader 入口、字段一致」；全量 web 单测 1,443 passed，`e2e/mui-radar.spec.ts` 26 例通过。
+
+**P0-1 补足到验收线。** 在上面的 `needs_manual_review + renderReviewStatus=approved` 分支上线后，本机公开精读 285 → 353 条（约 83%）。同时修复了一个脱敏漏洞：未审核行的 `excerpt` 原本取自正文前 1,200 字，即使 `body` 为 null 仍会泄露缓存正文；现在改用 `interpretation`，并新增路由测试覆盖。
