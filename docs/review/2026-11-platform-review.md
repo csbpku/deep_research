@@ -521,7 +521,7 @@
 
 **研究稿导出（P0-9）**：新增 `apps/web/src/components/research/ExportResearchMarkdownButton.tsx` 与 `apps/web/src/lib/export-research-markdown.ts`；已发布详情页提供「导出 Markdown」，按 标题 → 发布/标签 → 背景 → 结论 → 风险 → 正文 组装。真实下载 d28515a0 得到 35,415 字 `.md`。
 
-**四态判断（P0-4）**：`RadarFeedbackType` 增加 `read/later/pilot`，迁移 `20261111000002_radar_feedback_judgments`；卡片与详情显示「已读 / 稍后 / 值得试点 / 不感兴趣」，沿用现有 POST/DELETE `/api/radar-feedback` 切换。`?judged=1` 在 `publicQualityGate` 上按当前用户反馈过滤，空态给「查看全部雷达」。浏览器实测四按钮可点，判断后「我判断过的」显示「共 1 条」。排序权重回写仍是后续项。
+**四态判断（P0-4）**：`RadarFeedbackType` 增加 `read/later/pilot`，迁移 `20261111000002_radar_feedback_judgments`；卡片与详情显示「已读 / 稍后 / 值得试点 / 不感兴趣」，沿用现有 POST/DELETE `/api/radar-feedback` 切换。`?judged=1` 在 `publicQualityGate` 上按当前用户反馈过滤，空态给「查看全部雷达」。浏览器实测四按钮可点，判断后「我判断过的」显示「共 1 条」。反馈同时写入 `judgmentScore`（见 12.7），雷达排序已按判断回写。
 
 **结果页重排（P0-8）**：`apps/web/src/app/researches/[id]/page.tsx` 顺序改为 结论 → 背景 → 风险 → 正文 → 来源与证据 → 团队讨论；披露明细、修改历史、元数据收进页尾唯一 `details#review-audit`。新增 `page.test.ts` 2 例；真实详情页 h2 顺序与唯一 `details` 已核对。
 
@@ -532,6 +532,7 @@
 - `pnpm --dir apps/web test`：1,459 passed / 2 skipped；`tsc`、`pnpm --dir apps/web build` 通过；`e2e/mui-radar.spec.ts` 26 例、`e2e/mui-domain.spec.ts` 2 例通过。
 - Python：`tests/test_preflight.py` 9 例、`tests/test_server_endpoints.py` 32 例等 47 passed；ruff、mypy 通过。
 - 浏览器：`/radar` 默认非空；未审核精读详情 `surface=content` 返回 `body:null`；已发布详情导出文件内容与页面一致。
+- 最终 CI：run `43169922086`（HEAD `c709109`）七个 job 全绿；Playwright 覆盖确认页两档视口、雷达、结果页与知识卡片。
 
 ### 12.3 P0 收口状态
 
@@ -573,3 +574,9 @@ P0 14 项已全部完成：雷达可见性、默认视图、时间语义、四�
 **P0-1 补足到验收线。** 在上面的 `needs_manual_review + renderReviewStatus=approved` 分支上线后，本机公开精读 285 → 353 条（约 83%）。同时修复了一个脱敏漏洞：未审核行的 `excerpt` 原本取自正文前 1,200 字，即使 `body` 为 null 仍会泄露缓存正文；现在改用 `interpretation`，并新增路由测试覆盖。
 
 **P0-7 确认页收口。** 确认页从「一整页表单」收成三段：问题标题、交付什么（5 个选项 + 配置摘要）、开始研究。研究方式、重点回答、对比对象、投入、资料来源与历史资料全部进入默认折叠的「高级设置」；对话记录也折叠为一行「对话记录 · N 条」。桌面端 footer 仍 sticky，手机端（<600px）改为 fixed 底栏并给表单预留底部空间。浏览器实测（1440×1000，同一问题）：CTA 距页顶从 2,023px 降到 636px，整页落在首屏；390×844 下 CTA 固定在 792–828px，首屏可点，无横向溢出；高级设置默认关闭，展开后「重点回答」可见。Playwright 新增 `openAdvancedSettings` helper，受影响的 7 个 spec 先展开再操作；键盘用例改为「先走产出选项，再 Enter 展开高级设置」。
+
+### 12.8 P0 收尾（2026-11-12）
+
+P0 14 项全部完成，最终 CI run `43169922086` 七个 job 全绿。PR #56 已更新标题与描述，分支 `codex/product-funnel-fixes` 55 个提交、125 个文件；**未合并、未部署**。
+
+临时脚手架已清理：6 个 P0 worktree 与已合并的 `codex/p0-*` 分支已删除；`.cache/`、`.impeccable/`、`.review-shots/` 与 `/tmp` 下的截图、CI 日志、JWT 脚本已删除。保留 `docs/review/2026-11-platform-review.md`、`docs/review/shots/`（正文引用的验收截图）和 `review-reader/`（Reader 0.2.37 的评审报告与截图），它们是评审证据，不属于临时缓存。
