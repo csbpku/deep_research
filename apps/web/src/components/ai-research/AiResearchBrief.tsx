@@ -133,6 +133,10 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
   const trimmed = question.trim();
   const isShort = trimmed.length < 2;
   const [state, setState] = useState<FetchState>({ status: 'idle' });
+  // The loading and ready layouts use different DOM trees. Keep the user's
+  // disclosure choice above both so a completed plan cannot close it.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const toggleAdvanced = () => setAdvancedOpen((open) => !open);
   const initialIds = initialBrief?.suggestedContextIds ?? [];
   const initialLegacy = initialBrief?.legacyContextSelection ?? (!initialBrief?.selectedContextItems && initialIds.length
     ? { ids: initialIds, refs: initialBrief?.brief?.contextRefs ?? [] } : null);
@@ -323,6 +327,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
     return (
       <PlanningFallback
         loading
+        advancedOpen={advancedOpen}
+        onAdvancedToggle={toggleAdvanced}
         question={trimmed}
         startAction={startAction}
         outputControls={outputControls}
@@ -336,6 +342,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
   if (state.status === 'error') {
     return (
       <PlanningFallback
+        advancedOpen={advancedOpen}
+        onAdvancedToggle={toggleAdvanced}
         question={trimmed}
         error={state.error ?? '规划请求失败'}
         authRequired={state.authRequired}
@@ -522,8 +530,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
       <Box component="section" aria-label="研究方案" sx={{ display: 'grid', minWidth: 0, gap: 2, px: { xs: 2, sm: 3 }, py: 2 }}>
         {outputControls}
 
-        <Box component="details" data-testid="ai-research-advanced" sx={{ borderTop: 1, borderColor: 'divider' }}>
-          <Box component="summary" aria-label="高级设置" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, py: 1.5, fontWeight: 600, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}>
+        <Box component="details" open={advancedOpen} data-testid="ai-research-advanced" sx={{ borderTop: 1, borderColor: 'divider' }}>
+          <Box component="summary" aria-label="高级设置" onClick={(event) => { event.preventDefault(); toggleAdvanced(); }} sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, py: 1.5, fontWeight: 600, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}>
             <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Settings2 size={16} aria-hidden />高级设置</Box>
             <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>研究方式、投入、资料与检索偏好</Typography>
           </Box>
@@ -806,6 +814,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
 
 function PlanningFallback({
   question,
+  advancedOpen,
+  onAdvancedToggle,
   loading = false,
   error,
   authRequired = false,
@@ -815,6 +825,8 @@ function PlanningFallback({
   children,
 }: {
   question: string;
+  advancedOpen: boolean;
+  onAdvancedToggle: () => void;
   loading?: boolean;
   error?: string;
   authRequired?: boolean;
@@ -864,8 +876,8 @@ function PlanningFallback({
         <Box component="section" aria-label="资料与产出" sx={{ display: 'grid', gap: 2, px: { xs: 2, sm: 3 }, py: 2 }}>
           {outputControls}
           {advancedControls || children ? (
-            <Box component="details" data-testid="ai-research-advanced" sx={{ borderTop: 1, borderColor: 'divider' }}>
-              <Box component="summary" aria-label="高级设置" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, py: 1.5, fontWeight: 600, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}>
+            <Box component="details" open={advancedOpen} data-testid="ai-research-advanced" sx={{ borderTop: 1, borderColor: 'divider' }}>
+              <Box component="summary" aria-label="高级设置" onClick={(event) => { event.preventDefault(); onAdvancedToggle(); }} sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, py: 1.5, fontWeight: 600, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}>
                 <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Settings2 size={16} aria-hidden />高级设置</Box>
                 <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>研究方式、投入、资料与检索偏好</Typography>
               </Box>

@@ -67,6 +67,26 @@ for (const mode of ['light', 'dark'] as const) {
   });
 }
 
+test('advanced settings stay open when the pending plan finishes', async ({ page }) => {
+  await mockWorkspace(page);
+  let releasePlan!: () => void;
+  const pendingPlan = new Promise<void>(resolve => { releasePlan = resolve; });
+  await page.route('**/api/ai-research/plan', async route => {
+    await pendingPlan;
+    await route.fallback();
+  });
+  await page.goto('/ai-research');
+  await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
+  await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
+  await openAdvancedSettings(page);
+  await page.getByRole('radio', { name: /^仅使用已选资料/ }).check();
+  releasePlan();
+  await expect(page.getByRole('textbox', { name: '重点回答' })).toHaveValue('适用边界与工程代价');
+  await expect(page.locator('[data-testid="ai-research-advanced"]')).toHaveJSProperty('open', true);
+  await expect(page.getByRole('radio', { name: /^仅使用已选资料/ })).toBeVisible();
+  await expect(page.getByRole('radio', { name: /^仅使用已选资料/ })).toBeChecked();
+});
+
 for (const width of [320, 390, 768, 1024, 1440]) {
   test(`all initial messages and examples remain inside the card at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
