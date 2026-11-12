@@ -9,6 +9,7 @@ pipeline responsible for evidence, not for page layout.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Sequence
 
 from ai_engine.llm.client import generate_text
@@ -68,9 +69,27 @@ def build_decision_memo_prompt(topic: str, report: str, sources: Sequence[dict[s
 
 
 def is_valid_decision_memo(text: str) -> bool:
-    """Require the two sections readers rely on before accepting the rewrite."""
+    """Require the complete, nonempty memo contract before replacing a report."""
     normalized = text.strip()
-    return bool(normalized) and "## 建议" in normalized and "## 关键声明" in normalized
+    headings = list(re.finditer(r"(?m)^(#{1,6})\s+(.+?)\s*$", normalized))
+    expected = (
+        ("#", "决策备忘"),
+        ("##", "问题"),
+        ("##", "建议"),
+        ("##", "关键声明"),
+        ("##", "风险与未确认"),
+        ("##", "下一步验证"),
+    )
+    if [(match.group(1), match.group(2)) for match in headings] != list(expected):
+        return False
+    if normalized[:headings[0].start()].strip():
+        return False
+    for index, heading in enumerate(headings[1:], start=1):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(normalized)
+        content = normalized[heading.end():end]
+        if not re.sub(r"[\s>*_`\-\d.\[\]]", "", content):
+            return False
+    return True
 
 
 async def condense_to_decision_memo(
@@ -103,7 +122,7 @@ async def condense_to_decision_memo(
             )
             continue
         text = (result.text or "").strip()
-        if is_valid_decision_memo(text):
+        if not getattr(result, "truncated", False) and is_valid_decision_memo(text):
             return text
         logger.warning(
             "ai-engine.decision_memo.invalid",

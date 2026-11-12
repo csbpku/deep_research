@@ -27,7 +27,10 @@ def _source(*, captured: bool = True) -> AdapterSource:
 
 
 @pytest.mark.asyncio
-async def test_inventory_failure_awaits_siblings_before_budget_settlement(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize('cancel_review', [False, True])
+async def test_inventory_failure_awaits_siblings_before_budget_settlement(
+    monkeypatch: pytest.MonkeyPatch, cancel_review: bool,
+):
     events: list[str] = []
     started = asyncio.Event()
     stopped = asyncio.Event()
@@ -45,6 +48,8 @@ async def test_inventory_failure_awaits_siblings_before_budget_settlement(monkey
         provider_tasks.append(asyncio.current_task())
         if 'chunk1' in kwargs['user_prompt']:
             await started.wait()
+            if cancel_review:
+                await asyncio.Event().wait()
             raise RuntimeError('provider failed')
         started.set()
         try:
@@ -59,13 +64,22 @@ async def test_inventory_failure_awaits_siblings_before_budget_settlement(monkey
     monkeypatch.setattr(reviewer, 'generate_text', generate)
     monkeypatch.setattr(token_budget, 'reserve_llm_tokens', reserve)
     monkeypatch.setattr(token_budget, 'release_llm_tokens', release)
-    result = await reviewer.DefaultResearchReviewer().review('plain report', (_source(),), 'topic')
+    review_task = asyncio.create_task(
+        reviewer.DefaultResearchReviewer().review('plain report', (_source(),), 'topic'),
+    )
+    if cancel_review:
+        await started.wait()
+        review_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await review_task
+    else:
+        result = await review_task
+        assert result.status == 'review_unavailable'
     # Keep the failing baseline run from leaking its intentionally blocked request.
     for task in provider_tasks:
         if not task.done():
             task.cancel()
     await asyncio.gather(*provider_tasks, return_exceptions=True)
-    assert result.status == 'review_unavailable'
     assert events == ['provider_stopped', 'release']
 
 
@@ -143,7 +157,10 @@ SHORT_MEMO = '''# 决策备忘
 FULL_REPORT = '## 结论\n\n' + '完整报告保留研究结论、证据与适用限制。' * 30 + ' [S1]。'
 
 
-async def _run_memo_job(monkeypatch: pytest.MonkeyPatch, model_text: str, *, truncated: bool = False):
+async def _run_memo_job(
+    monkeypatch: pytest.MonkeyPatch, model_text: str, *, truncated: bool = False,
+    stub_generate: bool = True,
+):
     module = importlib.import_module('ai_engine.adapters.gpt_researcher')
     memo_module = importlib.import_module('ai_engine.decision_memo')
     prompts: list[str] = []
@@ -170,7 +187,8 @@ async def _run_memo_job(monkeypatch: pytest.MonkeyPatch, model_text: str, *, tru
     monkeypatch.setattr(module, '_write_report_with_bounded_client', write)
     monkeypatch.setattr(module, '_hydrate_source_snippets', hydrate)
     monkeypatch.setattr(module, 'record_llm_usage', usage)
-    monkeypatch.setattr(memo_module, 'generate_text', generate)
+    if stub_generate:
+        monkeypatch.setattr(memo_module, 'generate_text', generate)
     adapter = GptResearcherAdapter(llm_spec='openai:test', brief_llm='openai:test')
     job = _Job(ResearchRequest(
         job_id='memo-regression', request_id='memo-regression', topic='tool decision', context=None,
@@ -178,6 +196,43 @@ async def _run_memo_job(monkeypatch: pytest.MonkeyPatch, model_text: str, *, tru
     ))
     await adapter._run(job)
     return job, prompts
+
+
+@pytest.mark.asyncio
+async def test_adapter_memo_with_real_llm_client_and_mock_http_provider(monkeypatch: pytest.MonkeyPatch):
+    from openai import AsyncOpenAI
+    from ai_engine.llm import client as llm_client
+
+    requests: list[dict] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == 'provider.example'
+        payload = json.loads(request.content)
+        requests.append(payload)
+        assert payload['model'] == 'test'
+        return httpx.Response(200, json={
+            'id': 'mock-memo', 'object': 'chat.completion', 'created': 0, 'model': 'test',
+            'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': SHORT_MEMO},
+                         'finish_reason': 'stop'}],
+            'usage': {'prompt_tokens': 100, 'completion_tokens': 90, 'total_tokens': 190},
+        })
+
+    monkeypatch.setenv('REPORT_FALLBACK_LLM', 'openai:test')
+    monkeypatch.setenv('FALLBACK_LLM', 'openai:test')
+    monkeypatch.setenv('LLM_USAGE_AUDIT_ENABLED', 'false')
+    monkeypatch.setenv('LLM_TOKEN_BUDGET_USER_LIMIT', '0')
+    monkeypatch.setenv('LLM_TOKEN_BUDGET_PLATFORM_DAILY_LIMIT', '0')
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    async with AsyncOpenAI(api_key='test-key', base_url='https://provider.example/v1',
+                           http_client=http_client, max_retries=0) as sdk_client:
+        monkeypatch.setattr(llm_client, '_cached_client', lambda *args, **kwargs: sdk_client)
+        job, _ = await _run_memo_job(monkeypatch, '', stub_generate=False)
+
+    assert len(requests) == 1
+    assert job.status == 'succeeded', job.error_message
+    assert job.review_phase == 'queued'
+    assert '[S1]' not in job.body
+    assert len(reviewer._citation_ledger(job.body, tuple(job.sources))) == 1
 
 
 @pytest.mark.asyncio

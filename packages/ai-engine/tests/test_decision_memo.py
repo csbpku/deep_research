@@ -19,7 +19,12 @@ def test_memo_prompt_without_sources_is_explicit() -> None:
     assert "本轮没有可引用来源" in prompt
 
 
-def test_memo_validation_requires_both_sections() -> None:
-    assert is_valid_decision_memo("# 决策备忘\n\n## 建议\n\n## 关键声明\n")
+def test_memo_validation_requires_complete_nonempty_sections() -> None:
+    assert is_valid_decision_memo(
+        "# 决策备忘\n\n## 问题\n选择工具。\n\n## 建议\n暂不能定案。\n\n"
+        "## 关键声明\n成本未确认。\n\n## 风险与未确认\n缺少实测。\n\n"
+        "## 下一步验证\n运行团队测试套件。\n"
+    )
+    assert not is_valid_decision_memo("# 决策备忘\n\n## 建议\n\n## 关键声明\n")
     assert not is_valid_decision_memo("## 建议\n")
     assert not is_valid_decision_memo("")

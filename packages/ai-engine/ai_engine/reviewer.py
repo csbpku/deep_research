@@ -31,7 +31,7 @@ from ai_engine.fact_resolvers import (
     resolve_npm_package,
     resolve_pypi_package,
 )
-from ai_engine.llm.client import generate_text
+from ai_engine.llm.client import generate_text, is_quota_error, is_quota_exhausted_error
 from ai_engine.llm.token_budget import (
     TokenBudgetExceeded,
     TokenBudgetUnavailable,
@@ -1681,6 +1681,7 @@ async def _run_adjudication_batch(
     report_type: str,
     source_text: str,
     llm_spec: str | None,
+    semaphore: asyncio.Semaphore,
     attempts: int = 2,
 ) -> tuple[ReviewResult | None, BaseException | None]:
     """Run one independent batch with bounded retries; never raise to the caller."""
@@ -1695,16 +1696,17 @@ async def _run_adjudication_batch(
                 "只判断当前批次中的声明与来源摘录的关系。"
                 f"这是第 {attempt} 次尝试；不得返回当前批次以外的 claim_id。"
             )
-            generated = await generate_text(
-                user_prompt=adjudication_prompt,
-                system_prompt=_CLAIM_ADJUDICATION_SYSTEM,
-                llm_spec=llm_spec,
-                tier="light",
-                max_tokens=5000,
-                timeout=_fact_review_batch_timeout_seconds(),
-                disable_thinking=True,
-                operation="research.fact_review.adjudication",
-            )
+            async with semaphore:
+                generated = await generate_text(
+                    user_prompt=adjudication_prompt,
+                    system_prompt=_CLAIM_ADJUDICATION_SYSTEM,
+                    llm_spec=llm_spec,
+                    tier="light",
+                    max_tokens=5000,
+                    timeout=_fact_review_batch_timeout_seconds(),
+                    disable_thinking=True,
+                    operation="research.fact_review.adjudication",
+                )
             parsed = _parse_adjudication_payload(
                 _extract_json_object(generated.text),
                 batch,
@@ -1714,6 +1716,8 @@ async def _run_adjudication_batch(
             last_error = ValueError("adjudication payload missing")
         except Exception as exc:  # provider, timeout, or malformed JSON
             last_error = exc
+            if _adjudication_request_rejected(exc):
+                return None, exc
         _review_logger.warning(
             "adjudication batch failed batch=%s/%s attempt=%s error=%s",
             batch_index,
@@ -1722,6 +1726,20 @@ async def _run_adjudication_batch(
             _review_error_code(last_error or RuntimeError("batch failed")),
         )
     return None, last_error
+
+
+def _adjudication_request_rejected(error: BaseException | None) -> bool:
+    """Smaller batches cannot repair credentials, exhausted budgets or throttling."""
+    if error is None:
+        return False
+    if isinstance(error, (TokenBudgetExceeded, TokenBudgetUnavailable)):
+        return True
+    if is_quota_error(error) or is_quota_exhausted_error(error):
+        return True
+    status = getattr(error, "status_code", None)
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+    return status in {401, 403, 404, 429}
 
 
 async def _adjudicate_batch_with_split(
@@ -1733,6 +1751,7 @@ async def _adjudicate_batch_with_split(
     report_type: str,
     source_text: str,
     llm_spec: str | None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[ReviewResult | None, BaseException | None]:
     """Retry a failed batch, then keep splitting it before giving up.
 
@@ -1741,6 +1760,8 @@ async def _adjudicate_batch_with_split(
     claims) recovers that coverage without changing review semantics for the
     successful parts.
     """
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(_fact_review_concurrency())
     result, error = await _run_adjudication_batch(
         batch=batch,
         batch_index=batch_index,
@@ -1749,9 +1770,10 @@ async def _adjudicate_batch_with_split(
         report_type=report_type,
         source_text=source_text,
         llm_spec=llm_spec,
+        semaphore=semaphore,
         attempts=2,
     )
-    if result is not None or len(batch) < 2:
+    if result is not None or len(batch) < 2 or _adjudication_request_rejected(error):
         return result, error
 
     midpoint = len(batch) // 2
@@ -1771,6 +1793,7 @@ async def _adjudicate_batch_with_split(
             report_type=report_type,
             source_text=source_text,
             llm_spec=llm_spec,
+            semaphore=semaphore,
         )
         for part in parts
     ))
@@ -1842,6 +1865,7 @@ async def _adjudicate_fact_batches(
     last_error: BaseException | None = None
 
     concurrency = _fact_review_concurrency()
+    semaphore = asyncio.Semaphore(concurrency)
     for group_start in range(0, len(batches), concurrency):
         group = list(enumerate(
             batches[group_start:group_start + concurrency],
@@ -1871,6 +1895,7 @@ async def _adjudicate_fact_batches(
                 report_type=report_type,
                 source_text=source_text,
                 llm_spec=llm_spec,
+                semaphore=semaphore,
             )
             for batch_index, batch in group
         ))
@@ -2199,10 +2224,20 @@ class DefaultResearchReviewer:
                             )
                     return chunk.index, parsed_payload, truncated
 
-                inventory_results = await asyncio.gather(*(
-                    _inventory_one(chunk, prompt)
+                inventory_tasks = [
+                    asyncio.create_task(_inventory_one(chunk, prompt))
                     for chunk, prompt in zip(inventory_chunks, inventory_prompts)
-                ))
+                ]
+                try:
+                    inventory_results = await asyncio.gather(*inventory_tasks)
+                except BaseException:
+                    # A failed gather does not cancel siblings. Stop and await
+                    # every provider request before the enclosing reservation
+                    # can settle, including when the whole review is cancelled.
+                    for task in inventory_tasks:
+                        task.cancel()
+                    await asyncio.gather(*inventory_tasks, return_exceptions=True)
+                    raise
                 failed_inventory = [
                     (chunk, truncated)
                     for chunk, (_, payload, truncated) in zip(inventory_chunks, inventory_results)
