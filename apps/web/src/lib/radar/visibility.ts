@@ -82,6 +82,12 @@ export function requiresRadarSummaryOnlyReading(
   return radarTier(summary) !== 'skim' && summary.contentReviewStatus !== 'approved';
 }
 
+export function redactsRadarCachedContent(
+  summary: Pick<RadarVisibilityInput, 'distilledScore' | 'distilledTier' | 'contentReviewStatus' | 'tags'>,
+): boolean {
+  return Boolean(summary.tags?.includes('external_reading')) || requiresRadarSummaryOnlyReading(summary);
+}
+
 export function isRadarSummaryVisible(summary: RadarVisibilityInput, isAdmin: boolean): boolean {
   if (!isRadarSource(summary)) return false;
   if (isAdmin) return true;

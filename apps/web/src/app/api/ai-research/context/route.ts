@@ -14,6 +14,8 @@ import { requireUser } from '@/lib/auth/session';
 import { fetchAiEngine } from '@/lib/ai-bff/fetch-ai-engine';
 import { getWebEnv } from '@/lib/env';
 import { withRequestId } from '@/lib/log';
+import { isSummaryVisibleTo } from '@/lib/me/bookmarks';
+import { radarVisibilitySelect, redactsRadarCachedContent } from '@/lib/radar/visibility';
 import {
   extractPersonalContextKeywords,
   findPersonalContext,
@@ -109,7 +111,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     bookmarkedSummaryIds.length > 0
       ? prisma.summary.findMany({
           where: { id: { in: bookmarkedSummaryIds }, status: { in: ['candidate', 'pending_review', 'published'] } },
-          select: { id: true, title: true, body: true, interpretation: true, url: true },
+          select: {
+            ...radarVisibilitySelect, title: true, body: true, interpretation: true, url: true,
+            status: true, sharedByUserId: true,
+          },
         })
       : [],
     bookmarkedResearchIds.length > 0
@@ -160,8 +165,11 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       // before reading their content fields so a bookmark remains a real
       // source rather than a loosely typed label.
       const targetTitle = target.title;
+      const summaryTarget = isSummary ? target as (typeof bookmarkedSummaries)[number] : undefined;
+      if (summaryTarget && !isSummaryVisibleTo(summaryTarget, u)) return [];
+      const summaryOnly = summaryTarget ? redactsRadarCachedContent(summaryTarget) : false;
       const targetSnippet = isSummary
-        ? ((target as (typeof bookmarkedSummaries)[number]).interpretation ?? target.body) || ''
+        ? (summaryTarget?.interpretation ?? (summaryOnly ? '' : target.body)) || ''
         : ((target as (typeof bookmarkedResearches)[number]).background
           ?? (target as (typeof bookmarkedResearches)[number]).conclusion
           ?? target.body) || '';
@@ -173,7 +181,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         title: targetTitle,
         snippet: (bookmark.note?.trim() || targetSnippet).slice(0, 240),
         private: researchTarget ? researchTarget.status !== 'published' : false,
-        isExcerpt: researchTarget?.type === 'knowledge' && researchTarget.knowledgeIndexText === null,
+        isExcerpt: summaryOnly || (researchTarget?.type === 'knowledge' && researchTarget.knowledgeIndexText === null),
         status: researchTarget?.status,
         sourceRefs: [{
           type: isSummary ? 'summary' as const : 'research' as const,

@@ -12,7 +12,7 @@ import {
   type DistilledScore,
 } from '@deep-research/shared/schemas';
 import { cleanResearchLabel } from '@/lib/research-markdown-cleanup';
-import { requiresRadarSummaryOnlyReading } from './visibility';
+import { redactsRadarCachedContent } from './visibility';
 
 export type RadarFeedbackCount = {
   useful: number;
@@ -179,8 +179,7 @@ export function shapeCandidate(input: {
   // A public summary does not imply permission to expose its cached source.
   // Keep this policy at the shared serializer so list/detail/admin consumers
   // cannot leak the body through an excerpt or enrichment field.
-  const redactCachedContent = externalReading
-    || requiresRadarSummaryOnlyReading(s);
+  const redactCachedContent = redactsRadarCachedContent(s);
   const excerpt = excerptOf(redactCachedContent ? s.interpretation ?? '' : s.body, 1200);
   const distilledScore = parseDistilledScore(s.distilledScore);
   const highlights = parseHighlights(s.highlights);
