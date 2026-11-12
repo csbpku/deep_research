@@ -26,6 +26,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
 import Paper from '@mui/material/Paper';
 import TextField from '@mui/material/TextField';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 import { friendlyMessage } from '@/lib/errors/friendly';
@@ -132,6 +133,9 @@ interface FetchState {
 export function AiResearchBrief({ question, context, topicHint, initialBrief, outputControls, advancedControls, startAction, onBriefReady, onPlanningChange }: BriefProps) {
   const trimmed = question.trim();
   const isShort = trimmed.length < 2;
+  // On phones the form is taller than the scrollport, so the start action
+  // moves up next to the output summary instead of waiting at the bottom.
+  const compactAction = useMediaQuery('(max-width:599.95px)');
   const [state, setState] = useState<FetchState>({ status: 'idle' });
   const initialIds = initialBrief?.suggestedContextIds ?? [];
   const initialLegacy = initialBrief?.legacyContextSelection ?? (!initialBrief?.selectedContextItems && initialIds.length
@@ -496,8 +500,15 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
     ? `还可以补充：${missingFields.map((field) => translateMissing(field)).join('、')}；也可以直接开始。`
     : '研究方案已准备好，可以直接开始。';
 
+  const startFooter = (
+    <Box component="footer" sx={{ position: { xs: 'fixed', sm: 'sticky' }, left: { xs: 0, sm: 'auto' }, right: { xs: 0, sm: 'auto' }, bottom: 0, zIndex: 1200, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 1.5, px: { xs: 2, sm: 3 }, py: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider', boxShadow: { xs: '0 -8px 24px -12px rgba(0,0,0,0.35)', sm: '0 -8px 16px -16px rgba(0,0,0,0.45)' } }}>
+      <Typography variant="metadata" color="text.secondary">确认以上设置，启动后将锁定。</Typography>
+      {startAction}
+    </Box>
+  );
+
   return (
-    <Paper component="div" variant="outlined" sx={{ minWidth: 0, borderColor: 'divider', fontSize: 'var(--dr-type-label)' }}>
+    <Paper component="div" variant="outlined" sx={{ minWidth: 0, borderColor: 'divider', fontSize: 'var(--dr-type-label)', pb: compactAction ? 10 : 0 }}>
       <Box component="header" sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box sx={{ minWidth: 0 }}>
           <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'listTitle', fontWeight: 600, color: 'text.primary' }}>
@@ -514,6 +525,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
 
       <Box component="section" aria-label="研究方案" sx={{ display: 'grid', minWidth: 0, gap: 2, px: { xs: 2, sm: 3 }, py: 2 }}>
         {outputControls}
+        {compactAction ? startFooter : null}
 
         <Box component="details" data-testid="ai-research-advanced" sx={{ borderTop: 1, borderColor: 'divider' }}>
           <Box component="summary" aria-label="高级设置" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, py: 1.5, fontWeight: 600, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}>
@@ -792,10 +804,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
           建议补充：{missingFields.map((field) => translateMissing(field)).join('、')}
         </Typography>
       ) : null}
-      <Box component="footer" sx={{ position: 'sticky', bottom: 0, zIndex: 1, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 1.5, px: { xs: 2, sm: 3 }, py: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider', boxShadow: '0 -8px 16px -16px rgba(0,0,0,0.45)' }}>
-        <Typography variant="metadata" color="text.secondary">确认以上设置，启动后将锁定。</Typography>
-        {startAction}
-      </Box>
+      {compactAction ? null : startFooter}
     </Paper>
   );
 }
