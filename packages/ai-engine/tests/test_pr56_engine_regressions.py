@@ -231,7 +231,8 @@ async def test_adapter_memo_with_real_llm_client_and_mock_http_provider(monkeypa
     assert len(requests) == 1
     assert job.status == 'succeeded', job.error_message
     assert job.review_phase == 'queued'
-    assert '[S1]' not in job.body
+    assert '[S1](https://example.com/captured)' in job.body
+    assert '[Captured docs]' not in job.body
     assert len(reviewer._citation_ledger(job.body, tuple(job.sources))) == 1
 
 
@@ -244,14 +245,15 @@ async def test_real_adapter_keeps_short_complete_memo_readable(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_real_adapter_uses_captured_namespace_and_materializes_memo_citations(monkeypatch: pytest.MonkeyPatch):
+async def test_real_adapter_uses_captured_namespace_and_keeps_memo_citations_compact(monkeypatch: pytest.MonkeyPatch):
     memo = SHORT_MEMO.replace('没有充分证据支持长期成本差异，未确认。', '证据中的结论。' * 40)
     job, prompts = await _run_memo_job(monkeypatch, memo)
     assert job.status == 'succeeded', job.error_message
     assert '[S1] Captured docs' in prompts[0]
     assert 'Discovery only' not in prompts[0]
-    assert '[S1]' not in job.body
-    assert '[Captured docs](https://example.com/captured)' in job.body.split('## 参考文献')[0]
+    assert '[S1](https://example.com/captured)' in job.body
+    assert '[Captured docs]' not in job.body
+    assert '## 参考文献' not in job.body
     assert len(reviewer._citation_ledger(job.body, tuple(job.sources))) == 1
 
 

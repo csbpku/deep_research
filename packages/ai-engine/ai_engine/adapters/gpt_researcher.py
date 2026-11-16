@@ -3592,6 +3592,8 @@ def _format_evidence_packet(
 def _materialize_evidence_citations(
     report: str,
     sources: list[AdapterSource],
+    *,
+    compact: bool = False,
 ) -> str:
     """Turn writer-produced evidence ids into deterministic Markdown links."""
     captured = _captured_sources(sources)
@@ -3608,7 +3610,8 @@ def _materialize_evidence_citations(
         value = ref.get("value")
         title = " ".join((source.title or f"来源 S{index}").split())[:120]
         if isinstance(value, str) and _is_web_source_url(value):
-            return f"[{title}]({value})"
+            label = f"S{index}" if compact else title
+            return f"[{label}]({value})"
         return f"（{title}，来源 S{index}）"
 
     # Accept the compact form we ask the model to use and a full-width variant
@@ -4891,10 +4894,10 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     llm_spec=memo_spec,
                 )
                 if memo:
-                    # A memo keeps the compact [S#] markers instead of
-                    # expanding every citation into a full Markdown link:
-                    # the link titles alone can triple the page length and
-                    # defeat the one-page contract.
+                    # A memo keeps short [S#] labels so the evidence ledger
+                    # still resolves while full source titles do not triple
+                    # the page length.
+                    memo = _materialize_evidence_citations(memo, sources, compact=True)
                     memo = _clean_report_output(memo, sources)
                     memo_accepted = is_valid_decision_memo(memo)
                     if memo_accepted:
