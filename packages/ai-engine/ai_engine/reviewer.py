@@ -2149,9 +2149,14 @@ class DefaultResearchReviewer:
         source_text = _review_source_text(report, captured_sources)
         citation_ledger = _citation_ledger(report, captured_sources)
         inventory_body = _report_body_without_references(report)
+        # A slide deck is a sequence of short bullets. Splitting it at a
+        # character budget cuts assertions in half and makes the inventory
+        # report ``insufficient`` even when it read the whole deck. Keep the
+        # deck in one chunk unless it is genuinely enormous.
+        default_chunk_tokens = 6_000 if report_type == "slides" else 2_000
         inventory_chunks = split_text_by_token_budget(
             inventory_body,
-            max(1_000, int(os.environ.get("RESEARCH_REVIEW_CHUNK_TOKENS", "2000"))),
+            max(1_000, int(os.environ.get("RESEARCH_REVIEW_CHUNK_TOKENS", str(default_chunk_tokens)))),
         )
         inventory_prompts = [
             (
@@ -2159,7 +2164,14 @@ class DefaultResearchReviewer:
                 f"这是报告全文第 {chunk.index}/{len(inventory_chunks)} 块（字符 {chunk.start}-{chunk.end}）。"
                 "只抽取本块中的声明；块首尾被切断的半句保留原样、不要算作漏检，"
                 "只有本块中间完整段落确实无法抽取时才标记 coverage_status=insufficient。"
-                "请先完成声明清单，不要判断事实是否正确。\n报告正文：\n"
+                "请先完成声明清单，不要判断事实是否正确。\n"
+                + (
+                    "这是幻灯片提纲：每条要点本身就是完整判断，短句和列表项不算残缺，"
+                    "不要因为页面之间缺少过渡就标记 coverage_status=insufficient。\n"
+                    if report_type == "slides"
+                    else ""
+                )
+                + "报告正文：\n"
                 f"{chunk.text}"
             )
             for chunk in inventory_chunks
@@ -2338,6 +2350,16 @@ class DefaultResearchReviewer:
                 # with several concrete fact markers cannot be "complete"
                 # when the inventory contains fewer rows than that bound.
                 inventory_coverage = "insufficient"
+            if report_type == "slides" and inventory_coverage == "insufficient" and inventory:
+                # Slides are terse bullets, not prose. The prose-shaped
+                # coverage heuristic reads "five short pages" as an
+                # incomplete scan and blocks every deck. Keep the claims and
+                # let the publication gate disclose unverified ones instead.
+                _review_logger.info(
+                    "ai-engine.fact_review.slides_coverage_relaxed",
+                    extra={"claim_count": len(inventory)},
+                )
+                inventory_coverage = "complete"
             await emit_phase("adjudicating", {
                 "inventory_count": len(inventory),
                 "factual_claim_count": len(factual_inventory),

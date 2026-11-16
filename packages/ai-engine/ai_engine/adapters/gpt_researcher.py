@@ -4927,6 +4927,21 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                         "ai-engine.decision_memo.fallback_to_report",
                         extra={"request_id": job.request.request_id},
                     )
+            if (
+                job.request.report_type == "web_brief"
+                and job.request.report_length == "brief"
+            ):
+                from ai_engine.web_brief import condense_web_brief
+
+                condensed = await condense_web_brief(
+                    report=report,
+                    request_id=job.request.request_id,
+                    llm_spec=resolve_spec(
+                        "utility", explicit=os.environ.get("REPORT_FALLBACK_LLM")
+                    ),
+                )
+                if condensed is not None:
+                    report = condensed
             # A fallback writer can still return a bibliography-only response
             # (for example when its provider times out after emitting links).
             # Make the publication boundary deterministic: a successful
