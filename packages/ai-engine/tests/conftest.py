@@ -26,7 +26,7 @@ if _ENV_PATH.exists():
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key in {"DATABASE_URL", "TEST_DATABASE_URL"} and key not in os.environ:
             os.environ[key] = value
 
 # Sane default if .env doesn't ship DATABASE_URL (CI without local DB).
@@ -63,3 +63,62 @@ for p in (
 ):
     if p.exists():
         p.unlink()
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--run-live-llm", action="store_true", default=False,
+                     help="Allow explicitly marked paid integration tests (also requires opt-in and budget)")
+
+
+@pytest.fixture(autouse=True)
+def block_unrequested_model_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """SDK mocks still work; accidental real sockets cannot spend developer keys."""
+    import ipaddress
+    import socket
+
+    monkeypatch.setenv("LLM_RUNTIME_ENV", "test")
+    monkeypatch.setenv("LLM_USAGE_AUDIT_ENABLED", "false")
+    if request.node.get_closest_marker("live_llm") is not None:
+        if not request.config.getoption("--run-live-llm"):
+            pytest.skip("paid integration tests require --run-live-llm")
+        if os.environ.get("LLM_ALLOW_LIVE_CALLS") != "1":
+            pytest.skip("live_llm requires explicit LLM_ALLOW_LIVE_CALLS=1 and a dedicated credential")
+        # Runtime policy still requires a positive daily database budget.
+        monkeypatch.setenv("LLM_RUNTIME_ENV", "development")
+        return
+    from urllib.parse import urlsplit
+    model_proxy_ports = {8318, 15721}
+    for name in ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "MINIMAX_BASE_URL", "DEEPSEEK_BASE_URL"):
+        target = urlsplit(os.environ.get(name, ""))
+        if target.hostname in {"localhost", "127.0.0.1", "::1"} and target.port:
+            model_proxy_ports.add(target.port)
+    original = socket.socket.connect
+    original_ex = socket.socket.connect_ex
+
+    def permitted(address: object) -> bool:
+        if isinstance(address, str):  # Unix domain socket (local Postgres).
+            return True
+        if not isinstance(address, tuple) or not address:
+            return False
+        if len(address) > 1 and address[1] in model_proxy_ports:
+            return False
+        host = str(address[0])
+        if host == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    def connect(sock: socket.socket, address: object) -> None:
+        if not permitted(address):
+            raise RuntimeError("Test attempted external network; mock the provider or opt into live_llm")
+        original(sock, address)  # type: ignore[arg-type]
+
+    def connect_ex(sock: socket.socket, address: object) -> int:
+        if not permitted(address):
+            raise RuntimeError("Test attempted external network; mock the provider or opt into live_llm")
+        return original_ex(sock, address)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)

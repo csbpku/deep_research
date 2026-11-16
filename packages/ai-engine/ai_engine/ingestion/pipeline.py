@@ -97,6 +97,7 @@ async def _generate_brief(
         timeout_seconds=max(1, int(timeout_seconds)),
         context_max_chars=context_max_chars,
         context_is_source_excerpt=item.get("context_is_source_excerpt") is True,
+        context_is_evidence=item.get("context_is_evidence") is True,
         brief_kind=_brief_kind_from_item(item),
     )
     await adapter.submit(request)

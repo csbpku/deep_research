@@ -1967,6 +1967,11 @@ async def test_summary_brief_focus_is_typed_only_when_kind_is_known(
         return SimpleNamespace(text="这是基于来源正文生成的有效雷达摘要。" * 12, input_tokens=1, output_tokens=1)
 
     monkeypatch.setattr("ai_engine.llm.client.generate_text", fake_generate_text)
+
+    async def unavailable_source(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(is_accessible=False)
+
+    monkeypatch.setattr("ai_engine.fetcher.ai_source_urls._fetch_user_url", unavailable_source)
     request = ResearchRequest(
         job_id=f"radar-brief-kind-{brief_kind}",
         request_id=f"radar-brief-kind-{brief_kind}",

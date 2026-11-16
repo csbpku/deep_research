@@ -82,6 +82,8 @@ from ai_engine.llm.config import (
 )
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 from ai_engine.llm.input_text import model_readable_text
+from ai_engine.llm.work_budget import WorkBudgetExceeded
+from ai_engine.llm.runtime_policy import ensure_live_calls_allowed, LiveModelCallsDisabled
 from ai_engine.llm.token_budget import TokenBudgetExceeded, TokenBudgetUnavailable
 from ai_engine.text_chunking import count_text_tokens, split_text_by_token_budget
 from ai_engine.reviewer import (
@@ -4222,6 +4224,12 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             job.status = AI_JOB_STATUS["RUNNING"]  # type: ignore[assignment]
             job.attempts += 1
 
+        try:
+            ensure_live_calls_allowed()
+        except LiveModelCallsDisabled as exc:
+            await self._mark_failed(job, "AI_ENGINE_UNAVAILABLE", str(exc))
+            return
+
         if job.request.report_type == "summary_brief":
             await self._run_brief(job)
             return
@@ -5319,6 +5327,11 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                         "下方上下文仅为信息源提供的片段，不保证覆盖原文全文；"
                         "只能依据片段中的事实，不得声称已阅读全文或推断未出现的内容不存在。\n"
                     )
+                if job.request.context_is_evidence:
+                    summary_instructions += (
+                        "上下文是已提取的来源证据记录，请综合原文引文、结果和限制写导读；"
+                        "只依据这些记录，不要声称核验了未提供的细节。\n"
+                    )
                 chunks = split_text_by_token_budget(context, BRIEF_CHUNK_TOKEN_BUDGET)
                 if len(chunks) > 1:
                     notes = await self._map_brief_chunks(
@@ -5389,6 +5402,9 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 job.status = AI_JOB_STATUS["SUCCEEDED"]  # type: ignore[assignment]
                 job.completion_event.set()
         except Exception as exc:
+            if isinstance(exc, WorkBudgetExceeded):
+                await self._mark_failed(job, exc.error_code, str(exc))
+                return
             if isinstance(exc, TokenBudgetExceeded):
                 await self._mark_failed(job, "AI_QUOTA_EXCEEDED", str(exc))
                 return
@@ -5522,7 +5538,14 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     "quotes": quotes,
                 }
 
-            notes = list(await asyncio.gather(*(reduce_group(group) for group in groups)))
+            tasks = [asyncio.create_task(reduce_group(group)) for group in groups]
+            try:
+                notes = list(await asyncio.gather(*tasks))
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
         return notes
 
     async def _mark_failed(self, job: _Job, code: str, message: str) -> None:
