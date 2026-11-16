@@ -16,10 +16,9 @@ import {
   asReviewClaims,
   claimEvidenceStatus,
   claimIsFactual,
-  getReviewPublicationGate,
   reviewClaimId,
-  reviewCoverageStatus,
 } from '../../../../../../../lib/research-review-decisions';
+import { resolveResearchReviewInventory } from '../../../../../../../lib/research-review-inventory';
 import { resolveCurrentReviewState } from '../../../../../../../lib/research-review-state';
 import { evaluateResearchSufficiency } from '../../../../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
@@ -235,14 +234,24 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       reportContent: freshResearch.body,
       sourcePolicy: freshResearch.sourceAiJob?.sourcePolicy ?? (brief.success ? brief.data.sourcePolicy : null),
     });
-    const gate = getReviewPublicationGate({
-      executionStatus: freshRun.executionStatus,
-      outcome: freshRun.outcome,
-      coverageStatus: reviewCoverageStatus(freshRun.summary),
-      researchSufficiencyStatus: sufficiency.status,
-      claims: freshRun.claims,
-      decisions,
+    const revisionRuns = await tx.researchReviewRun.findMany({
+      where: { revisionHash },
+      select: {
+        id: true,
+        revisionHash: true,
+        executionStatus: true,
+        outcome: true,
+        attempt: true,
+        summary: true,
+        claims: true,
+        decisions: true,
+      },
     });
+    const gate = resolveResearchReviewInventory({
+      reviewRuns: revisionRuns,
+      revisionHash,
+      researchSufficiencyStatus: sufficiency.status,
+    }).gate;
     return { acceptedCount: records.length, alreadyAcceptedCount: claimIds.length - records.length, gate };
   }).catch((error: unknown) => {
     if (error instanceof Error && error.message === 'REVIEW_DECISION_STALE') return null;
@@ -259,6 +268,8 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   return NextResponse.json({
     acceptedCount: result.acceptedCount,
     alreadyAcceptedCount: result.alreadyAcceptedCount,
-    publicationGate: { status: result.gate.status, openCount: result.gate.openCount },
+    publicationGate: result.gate
+      ? { status: result.gate.status, openCount: result.gate.openCount }
+      : null,
   }, { status: 201 });
 });

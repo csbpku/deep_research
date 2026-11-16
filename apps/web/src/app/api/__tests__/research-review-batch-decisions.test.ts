@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   txRunFindUnique: vi.fn(),
   createMany: vi.fn(),
   findMany: vi.fn(),
+  runFindMany: vi.fn(),
   transaction: vi.fn(),
 }));
 
@@ -86,11 +87,18 @@ beforeEach(() => {
       { id: 'd2', claimId: 'claim-2', revisionHash: research.reviewRuns[0].revisionHash, action: 'accept_uncertainty', reason: '批量接受', metadata: {}, actorId: USER_ID, createdAt: new Date() },
     ].filter((row) => row.revisionHash === research.reviewRuns[0].revisionHash && where.researchReviewRunId === RUN_ID);
   });
+  mocks.runFindMany.mockImplementation(async () => [{
+    ...research.reviewRuns[0],
+    decisions: [
+      { id: 'd1', claimId: 'claim-1', revisionHash: research.reviewRuns[0].revisionHash, action: 'accept_uncertainty', reason: '批量接受', metadata: {}, actorId: USER_ID, createdAt: new Date() },
+      { id: 'd2', claimId: 'claim-2', revisionHash: research.reviewRuns[0].revisionHash, action: 'accept_uncertainty', reason: '批量接受', metadata: {}, actorId: USER_ID, createdAt: new Date() },
+    ],
+  }]);
   mocks.createMany.mockResolvedValue({ count: 2 });
   mocks.transaction.mockImplementation((callback: (tx: unknown) => Promise<unknown>) => callback({
     $executeRaw: vi.fn(),
     research: { findUnique: mocks.txResearchFindUnique },
-    researchReviewRun: { findUnique: mocks.txRunFindUnique },
+    researchReviewRun: { findUnique: mocks.txRunFindUnique, findMany: mocks.runFindMany },
     researchReviewDecision: { createMany: mocks.createMany, findMany: mocks.findMany },
   }));
 });
