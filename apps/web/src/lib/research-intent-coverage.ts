@@ -84,3 +84,16 @@ export function hasBlockingIntentCoverage(
 ): boolean {
   return Boolean(coverage && (coverage.counts.unknown + coverage.counts.conflict > 0));
 }
+
+/** Accept a coverage snapshot read back from JSON without trusting its shape. */
+export function coerceIntentCoverage(value: unknown): IntentCoverage | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (record.present !== true || !Array.isArray(record.rows) || !record.counts || typeof record.counts !== 'object') return null;
+  const counts = record.counts as Record<string, unknown>;
+  const valid = ['evidence', 'partial', 'unknown', 'conflict'].every(
+    status => typeof counts[status] === 'number',
+  );
+  if (!valid) return null;
+  return value as IntentCoverage;
+}

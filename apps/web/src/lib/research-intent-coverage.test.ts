@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasBlockingIntentCoverage, parseIntCoverage } from './research-intent-coverage';
+import { coerceIntentCoverage, hasBlockingIntentCoverage, parseIntCoverage } from './research-intent-coverage';
 
 const sample = `## 一句话回答
 
@@ -49,5 +49,12 @@ describe('parseIntentCoverage', () => {
     expect(hasBlockingIntentCoverage(partial)).toBe(false);
     expect(hasBlockingIntentCoverage(blocked)).toBe(true);
     expect(hasBlockingIntentCoverage(null)).toBe(false);
+  });
+
+  it('coerces a stored snapshot and rejects malformed JSON', () => {
+    const parsed = parseIntCoverage(sample)!;
+    expect(coerceIntentCoverage(parsed)?.counts.unknown).toBe(1);
+    expect(coerceIntentCoverage({ present: true, rows: [] })).toBeNull();
+    expect(coerceIntentCoverage('nope')).toBeNull();
   });
 });

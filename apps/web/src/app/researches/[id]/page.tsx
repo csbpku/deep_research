@@ -113,6 +113,7 @@ interface ResearchDetail {
   aiJobId?: string | null;
   researchObjective?: 'explore' | 'learn' | 'investigate' | 'decide' | null;
   intentCoverage?: IntentCoverage | null;
+  intentCoverageSnapshot?: boolean;
   currentReview?: { revisionHash: string; status: string } | null;
   reviewRuns?: Array<{ id: string; revisionHash: string; executionStatus: string; outcome?: string | null; summary?: unknown; claims?: unknown; decisions?: unknown }>;
   canManageStatus: boolean;
@@ -505,6 +506,11 @@ export default function ResearchDetailPage() {
           tone={data.intentCoverage.counts.unknown + data.intentCoverage.counts.conflict > 0 ? 'warning' : 'success'}
           icon={data.intentCoverage.counts.unknown + data.intentCoverage.counts.conflict > 0 ? AlertTriangle : CheckCircle2}
         >
+          {data.intentCoverageSnapshot ? (
+            <Typography variant="metadata" color="text.secondary" sx={{ mb: 1 }}>
+              发布时确认的覆盖状态。
+            </Typography>
+          ) : null}
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1.5 }}>
             {(['evidence', 'partial', 'unknown', 'conflict'] as IntentCoverageStatus[]).map(status => (
               <Typography key={status} component="span" variant="metadata" sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: 'action.hover' }}>

@@ -496,6 +496,7 @@ model Research {
   publishedReviewVersion        String?   @db.Char(64)
   publishedReviewRevisionHash   String?   @db.Char(64)
   publishedReviewDisclosure     Json?     @db.JsonB
+  publishedIntentCoverage       Json?     @db.JsonB
   publishedReviewAcknowledgedAt DateTime? @db.Timestamptz(3)
 
   // 热点 / 统计缓存（按需；Week 1 暂留，全部为空即可）

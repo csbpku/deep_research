@@ -31,7 +31,7 @@ import { resolveResearchSourceLink } from '../../../../lib/research-source-link'
 import { resolveCurrentReviewState } from '../../../../lib/research-review-state';
 import { resolveResearchReviewInventory } from '../../../../lib/research-review-inventory';
 import { hasCompletedReviewInventory, projectResearchReviewForReader } from '../../../../lib/research-review-reader';
-import { parseIntCoverage } from '../../../../lib/research-intent-coverage';
+import { coerceIntentCoverage, parseIntCoverage } from '../../../../lib/research-intent-coverage';
 import { researchPublicationVersion } from '../../../../lib/research-publication-version';
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
@@ -68,6 +68,7 @@ const researchSelect = {
   reviewDetails: true,
   publishedReviewVersion: true,
   publishedReviewDisclosure: true,
+  publishedIntentCoverage: true,
   publishedReviewAcknowledgedAt: true,
   sourceAiJob: {
     select: {
@@ -812,6 +813,7 @@ function shapeResearchDetail(r: {
   reviewDetails: unknown;
   publishedReviewVersion?: string | null;
   publishedReviewDisclosure?: unknown;
+  publishedIntentCoverage?: unknown;
   publishedReviewAcknowledgedAt?: Date | null;
   sourceAiJob?: {
     id: string;
@@ -914,7 +916,8 @@ function shapeResearchDetail(r: {
     publicationHardBlocked: publicationDisclosure.reviewVerification === 'conflicted' || currentReviewPublicationGate?.status === 'blocked',
     aiJobId: r.sourceAiJob?.id ?? null,
     researchObjective: parsedBrief.success ? parsedBrief.data.objective : null,
-    intentCoverage: parseIntCoverage(r.body),
+    intentCoverage: coerceIntentCoverage(r.publishedIntentCoverage) ?? parseIntCoverage(r.body),
+    intentCoverageSnapshot: Boolean(r.publishedIntentCoverage),
     publishedReviewAcknowledgedAt: r.publishedReviewAcknowledgedAt?.toISOString() ?? null,
     publishedReviewDisclosure: r.publishedReviewDisclosure,
     publicationAcknowledgementOutdated: r.status === 'published'

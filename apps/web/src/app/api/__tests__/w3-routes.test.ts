@@ -232,6 +232,37 @@ describe('research provenance input', () => {
     expect(published.publishedReviewDisclosure).toBeTruthy();
   });
 
+  it('snapshots intent coverage when publishing an AI draft', async () => {
+    const now = new Date();
+    const body = 'AI output\n\n## 覆盖检查\n\n| 必答问题 | 状态 | 依据 |\n|---|---|---|\n| 核心机制是什么？ | 有证据 | [S1] |\n\n## 自检\n'.replace(/\n/g, '\n');
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'AI draft', body, background: '研究背景', conclusion: '研究结论',
+      risks: '风险与待验证项', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [],
+    });
+    mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
+      id: '22222222-2222-2222-2222-222222222222', type: 'research', status: 'published',
+      title: 'AI draft', body, background: '研究背景', conclusion: '研究结论',
+      risks: '风险与待验证项', tags: [], authorId: '11111111-1111-1111-1111-111111111111',
+      creationMethod: 'ai_research', aiAssisted: data.aiAssisted, publishedAt: now,
+      createdAt: now, updatedAt: now,
+      author: { id: '11111111-1111-1111-1111-111111111111', name: 'User', email: 'u@test' },
+    }));
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ acknowledgeDisclosure: true, publicationVersion: researchPublicationVersion(await mocks.researchFindUnique(), 'not_assessed') }),
+      }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+    expect(response.status).toBe(200);
+    const published = mocks.researchUpdate.mock.calls[0][0].data;
+    expect(published.publishedIntentCoverage).toMatchObject({ present: true, counts: { evidence: 1, unknown: 0, conflict: 0 } });
+  });
+
   it('publishes a knowledge card without research-report summary sections', async () => {
     const id = '44444444-4444-4444-8444-444444444444';
     const authorId = '11111111-1111-1111-1111-111111111111';

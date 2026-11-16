@@ -352,6 +352,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           publishedReviewDisclosure: acknowledgeDisclosure && freshReview.disposition.disclosure
             ? (freshReview.disposition.disclosure as unknown as Prisma.InputJsonValue)
             : Prisma.JsonNull,
+          publishedIntentCoverage: parseIntCoverage(fresh.body)
+            ? (parseIntCoverage(fresh.body) as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
           publishedReviewAcknowledgedAt: publishedAt,
         },
         select: {
