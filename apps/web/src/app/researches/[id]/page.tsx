@@ -31,6 +31,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
 import { ExportResearchMarkdownButton } from '@/components/research/ExportResearchMarkdownButton';
+import { ReviewClaimsPanel, type ReviewClaimRun } from '@/components/ai-research/ReviewClaimsPanel';
 import { MetaItem, MetaRow } from '@/components/domain/MetaRow';
 import { SectionCard } from '@/components/domain/SectionCard';
 import { StatusBadge } from '@/components/domain/StatusBadge';
@@ -109,6 +110,8 @@ interface ResearchDetail {
   reviewStatus?: string | null;
   canEdit: boolean;
   aiJobId?: string | null;
+  currentReview?: { revisionHash: string; status: string } | null;
+  reviewRuns?: Array<{ id: string; revisionHash: string; executionStatus: string; outcome?: string | null; summary?: unknown; claims?: unknown; decisions?: unknown }>;
   canManageStatus: boolean;
   researchSources: ResearchSourceItem[];
   researchTopics?: Array<{ topic: { id: string; slug: string; name: string } }>;
@@ -301,6 +304,9 @@ export default function ResearchDetailPage() {
   const isArchived = data.status === 'archived';
 
   const disclosureItems = data.reviewDisclosure ?? [];
+  const currentReviewRun: ReviewClaimRun | null = data.reviewRuns?.find(
+    (run) => run.revisionHash === data.currentReview?.revisionHash,
+  ) as ReviewClaimRun | undefined ?? null;
   const hasDisclosure = Boolean(data.reviewDisclosureSummary) || disclosureItems.length > 0;
   const hasAudits = Boolean(data.audits && data.audits.length > 0);
 
@@ -458,6 +464,15 @@ export default function ResearchDetailPage() {
               发布后核验状态已更新；下方为当前披露，作者发布时确认的版本保留在审计记录中。
             </p>
           ) : null}
+          {data.canEdit && data.aiJobId && currentReviewRun ? (
+            <Box sx={{ mt: 2 }}>
+              <ReviewClaimsPanel
+                jobId={data.aiJobId}
+                draftResearchId={data.id}
+                reviewRun={currentReviewRun}
+              />
+            </Box>
+          ) : null}
           <p className={styles.disclosureJump}>
             {disclosureItems.length > 0 ? `共 ${disclosureItems.length} 条披露声明。` : null}
             {hasAudits ? `修改历史 ${data.audits?.length} 条。` : null}
@@ -472,14 +487,6 @@ export default function ResearchDetailPage() {
             >
               查看披露明细、修改历史与元数据
             </a>
-            {data.canEdit && data.creationMethod === 'ai_research' && data.aiJobId ? (
-              <>
-                {' · '}
-                <Link href={`/ai-research/${data.aiJobId}`} className={styles.disclosureLink}>
-                  处理待核验声明
-                </Link>
-              </>
-            ) : null}
           </p>
         </SectionCard>
       )}
