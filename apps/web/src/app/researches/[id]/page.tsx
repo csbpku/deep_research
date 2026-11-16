@@ -114,6 +114,8 @@ interface ResearchDetail {
   reviewDisclosure?: ResearchReviewReaderItem[];
   reviewVerification?: ResearchReviewVerification;
   reviewDisclosureSummary?: ResearchReviewReaderSummary | null;
+  publishedReviewAcknowledgedAt?: string | null;
+  publicationAcknowledgementOutdated?: boolean;
   sourceComment: SourceCommentItem | null;
   audits?: AuditEntry[];
   commentCount?: number;
@@ -450,9 +452,17 @@ export default function ResearchDetailPage() {
               '这份调研保留了尚未完全确定的结论，阅读时请结合原文证据和风险说明判断。'
             )}
           </p>
+          {data.publicationAcknowledgementOutdated ? (
+            <p className={styles.disclosureIntro} role="status">
+              发布后核验状态已更新；下方为当前披露，作者发布时确认的版本保留在审计记录中。
+            </p>
+          ) : null}
           <p className={styles.disclosureJump}>
             {disclosureItems.length > 0 ? `共 ${disclosureItems.length} 条披露声明。` : null}
             {hasAudits ? `修改历史 ${data.audits?.length} 条。` : null}
+            {data.publishedReviewAcknowledgedAt
+              ? `发布时已于 ${new Date(data.publishedReviewAcknowledgedAt).toLocaleString('zh-CN')} 确认披露。`
+              : null}
             {' '}
             <a
               href="#review-audit"

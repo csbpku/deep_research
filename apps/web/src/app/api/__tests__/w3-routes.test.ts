@@ -226,6 +226,10 @@ describe('research provenance input', () => {
     );
     expect(response.status).toBe(200);
     expect((await response.json()).status).toBe('published');
+    const published = mocks.researchUpdate.mock.calls[0][0].data;
+    expect(published.publishedReviewVersion).toMatch(/^[a-f0-9]{64}$/);
+    expect(published.publishedReviewAcknowledgedAt).toBeInstanceOf(Date);
+    expect(published.publishedReviewDisclosure).toBeTruthy();
   });
 
   it('publishes a knowledge card without research-report summary sections', async () => {

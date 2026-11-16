@@ -490,6 +490,12 @@ model Research {
   reviewClaims        Json           @default("[]")
   reviewedAt          DateTime?      @db.Timestamptz(3)
   reviewDetails       Json?          @db.JsonB
+  // The disclosure the author actually acknowledged at publication.  Reviewer
+  // state can change later; this snapshot keeps that confirmation auditable
+  // and lets readers see when the live disclosure has moved on.
+  publishedReviewVersion        String?   @db.Char(64)
+  publishedReviewDisclosure     Json?     @db.JsonB
+  publishedReviewAcknowledgedAt DateTime? @db.Timestamptz(3)
 
   // 热点 / 统计缓存（按需；Week 1 暂留，全部为空即可）
   viewCount    Int @default(0)

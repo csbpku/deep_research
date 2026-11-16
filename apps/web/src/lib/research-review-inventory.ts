@@ -26,10 +26,14 @@ export function researchReviewScopeMetadata(run: ReviewRunState) {
 }
 
 function completed(run: ReviewRunState | undefined): run is ReviewRunState {
+  // A full review that extracted zero claims is not evidence that the report
+  // is clean; it is a degraded run.  Treating it as a replacement boundary
+  // would silently truncate an older same-revision conflict ledger and mint
+  // "verified", so it stays a partial contribution instead.
   return Boolean(run && run.executionStatus === 'completed'
     && run.outcome !== 'unavailable' && run.outcome !== 'stale'
     && reviewCoverageStatus(run.summary) !== 'insufficient'
-    && !(asReviewClaims(run.claims).length === 0 && (run.outcome === 'attention' || run.outcome === 'insufficient')));
+    && asReviewClaims(run.claims).length > 0);
 }
 
 export function hasCompletedFullReviewInventory(run: ReviewRunState | undefined): boolean {

@@ -323,6 +323,13 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           status: RESEARCH_STATUS.PUBLISHED,
           publishedAt,
           aiAssisted,
+          // Keep the acknowledged disclosure immutable even if a later review
+          // changes what the reader would see today.
+          publishedReviewVersion: version,
+          publishedReviewDisclosure: acknowledgeDisclosure && freshReview.disposition.disclosure
+            ? (freshReview.disposition.disclosure as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+          publishedReviewAcknowledgedAt: publishedAt,
         },
         select: {
           id: true,

@@ -65,6 +65,9 @@ const researchSelect = {
   reviewRunToken: true,
   reviewedAt: true,
   reviewDetails: true,
+  publishedReviewVersion: true,
+  publishedReviewDisclosure: true,
+  publishedReviewAcknowledgedAt: true,
   sourceAiJob: {
     select: {
       brief: true,
@@ -805,6 +808,9 @@ function shapeResearchDetail(r: {
   reviewRunToken?: string | null;
   reviewedAt: Date | null;
   reviewDetails: unknown;
+  publishedReviewVersion?: string | null;
+  publishedReviewDisclosure?: unknown;
+  publishedReviewAcknowledgedAt?: Date | null;
   sourceAiJob?: {
     brief: unknown;
     sourcePolicy: string;
@@ -872,6 +878,9 @@ function shapeResearchDetail(r: {
         reviewRuns: readerReviewRuns, researchSufficiencyStatus: researchSufficiency.status,
       })
     : readerReview;
+  const publicationVersion = researchPublicationVersion(
+    { ...r, reviewRuns: readerReviewRuns }, researchSufficiency.status,
+  );
   return {
     id: r.id,
     type: r.type,
@@ -898,8 +907,13 @@ function shapeResearchDetail(r: {
     // accepted low/medium-risk exception. This is derived from the exact
     // current run, so it cannot survive an edit as if it still applied.
     ...readerReview,
-    publicationVersion: researchPublicationVersion({ ...r, reviewRuns: readerReviewRuns }, researchSufficiency.status),
+    publicationVersion,
     publicationHardBlocked: publicationDisclosure.reviewVerification === 'conflicted' || currentReviewPublicationGate?.status === 'blocked',
+    publishedReviewAcknowledgedAt: r.publishedReviewAcknowledgedAt?.toISOString() ?? null,
+    publishedReviewDisclosure: r.publishedReviewDisclosure,
+    publicationAcknowledgementOutdated: r.status === 'published'
+      && Boolean(r.publishedReviewVersion)
+      && r.publishedReviewVersion !== publicationVersion,
     publicationDisclosure: publicationDisclosure.reviewDisclosure,
     publicationDisclosureSummary: publicationDisclosure.reviewDisclosureSummary,
     researchSufficiency,
