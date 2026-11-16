@@ -12,6 +12,7 @@ def test_learning_contract_is_a_path_not_a_procurement_memo() -> None:
 
     assert "## 心智模型" in contract
     assert "## 可运行示例" in contract
+    assert "## 覆盖检查" in contract
     assert "## 自检" in contract
     assert "采购建议" in contract
 
@@ -24,6 +25,7 @@ def test_investigation_contract_requires_competing_hypotheses() -> None:
     assert "## 竞争假设" in contract
     assert "## 判别性证据" in contract
     assert "## 剩余不确定性" in contract
+    assert "## 覆盖检查" in contract
 
 
 def test_exploration_contract_is_a_map_not_a_decision() -> None:
