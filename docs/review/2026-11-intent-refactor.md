@@ -1,0 +1,70 @@
+# 意图驱动的研究产物：第一轮重构
+
+日期：2026-11-16
+分支：`codex/product-funnel-fixes`（PR #56）
+
+## 结论
+
+现有 `RESEARCH_OBJECTIVE`（explore / learn / investigate / decide）不再只是计划文案，
+而是会决定引擎的报告契约；确认页也会按意图选择默认产物。
+
+第一轮只做“意图 → 契约 → 默认产物”，不重做检索链路，也不引入新的报告类型。
+
+## 改了什么
+
+1. **意图进入引擎请求**
+   - `JobSnapshot` / `ResearchRequest` 增加 `objective`；
+   - `db_store.py` 的 snapshot SQL 读取 `ai_research_jobs.objective`；
+   - `runner.py` 把 objective 传进适配器。
+
+2. **意图决定报告结构**
+   - `gpt_researcher._intent_report_contract()`：
+     - `learn`：一句话回答 / 心智模型 / 分层解释 / 可运行示例 / 边界与误区 / 自检 / 一手来源；
+     - `investigate`：现象与范围 / 竞争假设 / 证据 / 判别性证据 / 结论与置信度 / 剩余不确定性；
+     - `explore`：一句话概览 / 主题地图 / 关键问题 / 主要方向与分歧 / 证据缺口 / 下一步阅读；
+     - `decide`：沿用已有对比/决策契约。
+   - 已确认的意图优先于关键词比较启发式；用户在计划里选了 `learn`，不会因为上下文出现“取舍/对比”就被改写成选型报告。
+   - 没有显式 objective 的旧调用保持原契约，避免影响历史测试和旧任务。
+
+3. **默认产物由意图决定**
+   - 确认页在用户未手动改过产物时：
+     - `decide` → 决策备忘；
+     - `learn` / `investigate` / `explore` → 完整报告。
+   - 用户手动选择后不再被覆盖。
+
+4. **详情页显示研究意图**
+   - `/api/researches/[id]` 返回 `researchObjective`；
+   - 详情页新增「系统学习 / 机制分析 / 主题概览 / 决策对比」徽章。
+
+## 真实运行
+
+引擎重启后，用真实 BFF + MiniMax 跑了两条任务。
+
+### 学习型
+
+- job `1d1aa12c-b152-4c2b-9dff-4bfdababdb51`
+- 问题：PostgreSQL 的 MVCC 是如何工作的？
+- 草稿 `10f474c5-9bd2-5412-a055-929190e20435`
+- 结果：20,520 字，章节为
+  `一句话回答 → 心智模型 → 分层解释 → 可运行示例 → 边界与常见误区 → 自检 → 一手来源与下一步`，
+  包含 SQL 示例和三条常见误区；末尾仍有系统追加的参考文献（完整报告契约，不是备忘）。
+
+### 机制分析
+
+- job `0e0ebcbb-67e1-44ac-bf94-ea2df5895c57`
+- 问题：PgBouncer transaction 模式下 Prisma prepared statement 为什么报 already exists？
+- 草稿 `71a3e535-fa88-5915-bce4-1936d248969c`
+- 结果：26,645 字，章节为
+  `现象与范围 → 竞争假设 → 证据 → 判别性证据 → 结论与置信度 → 剩余不确定性`。
+
+### 浏览器验证
+
+- 详情页 `/researches/10f474c5-...` 渲染「系统学习」徽章。
+- `/ai-research` 输入同一问题、发送后，产物单选中 `research_report`（而不是默认决策备忘）。
+
+## 仍未做
+
+- 覆盖清单还没有持久化并显示“哪些必答问题有证据 / 未知 / 冲突”；
+- 还没有独立的学习路径渲染器（目前是 Markdown 契约，不是交互式路径）；
+- 对比意图仍复用 `decide`，没有“只对比不推荐”的开关；
+- 学习产物仍偏长，尚未按投入档位限制篇幅。

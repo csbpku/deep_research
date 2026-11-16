@@ -110,6 +110,7 @@ interface ResearchDetail {
   reviewStatus?: string | null;
   canEdit: boolean;
   aiJobId?: string | null;
+  researchObjective?: 'explore' | 'learn' | 'investigate' | 'decide' | null;
   currentReview?: { revisionHash: string; status: string } | null;
   reviewRuns?: Array<{ id: string; revisionHash: string; executionStatus: string; outcome?: string | null; summary?: unknown; claims?: unknown; decisions?: unknown }>;
   canManageStatus: boolean;
@@ -332,6 +333,7 @@ export default function ResearchDetailPage() {
 
           <div className={styles.badges}>
             <StatusBadge kind="researchType" value={isDecisionMemo ? 'decision_memo' : isLongResearch ? 'research' : 'knowledge'} />
+            {data.researchObjective ? <StatusBadge kind="researchIntent" value={data.researchObjective} /> : null}
             <StatusBadge kind="method" value={data.creationMethod} />
             {isDraft && <StatusBadge kind="research" value="draft" />}
             {!isDraft && data.reviewVerification

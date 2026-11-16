@@ -91,6 +91,14 @@ const VERIFICATION_TONES: Record<string, Tone> = {
   unverified: { palette: 'warning', outlined: true, label: '尚未完成核验' },
 };
 
+/** 用户确认的研究意图：主题概览 / 系统学习 / 机制分析 / 决策对比 */
+const INTENT_TONES: Record<string, Tone> = {
+  explore: { palette: 'context', outlined: true, label: '主题概览' },
+  learn: { palette: 'inference', outlined: true, label: '系统学习' },
+  investigate: { palette: 'evidence', outlined: true, label: '机制分析' },
+  decide: { palette: 'warning', outlined: true, label: '决策对比' },
+};
+
 const SEARCH_TYPE_TONES: Record<string, Tone> = {
   radar: { palette: 'neutral', label: '雷达' },
   summary: { palette: 'neutral', label: '摘要' },
@@ -110,6 +118,7 @@ const REGISTRY = {
   issue: ISSUE_TONES,
   searchType: SEARCH_TYPE_TONES,
   verification: VERIFICATION_TONES,
+  researchIntent: INTENT_TONES,
 } as const;
 
 export type StatusKind = keyof typeof REGISTRY;

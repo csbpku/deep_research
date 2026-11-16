@@ -239,6 +239,7 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
         source_refs=tuple(clean),
         report_length=str(row.get("reportLength") or "standard"),
         max_urls_to_scrape=max_urls,
+        objective=str(row.get("objective") or "investigate"),
     )
 
 
@@ -765,7 +766,7 @@ class DbJobStore(JobStore):
         t = f'"{self._table_name}"'
         sql = (
             f"SELECT j.\"id\", j.\"requesterId\", j.\"topic\", j.\"context\", "
-            f"j.\"reportType\", j.\"brief\", j.\"sourcePolicy\", j.\"reportLength\", j.\"maxUrlsToScrape\", "
+            f"j.\"reportType\", j.\"objective\", j.\"brief\", j.\"sourcePolicy\", j.\"reportLength\", j.\"maxUrlsToScrape\", "
             f"j.\"status\", j.\"currentStep\", j.\"attempts\", j.\"idempotencyKey\", j.\"sourceRefs\" "
             f"FROM {t} j "
             f"WHERE j.\"requesterId\" = %s AND j.\"idempotencyKey\" = %s "
@@ -833,7 +834,7 @@ class DbJobStore(JobStore):
             )
         else:
             returning_cols = (
-                'j."id", j."requesterId", j."topic", j."context", j."reportType", '
+                'j."id", j."requesterId", j."topic", j."context", j."reportType", j."objective", '
                 'j."sourcePolicy", j."brief", j."reportLength", j."maxUrlsToScrape", '
                 'j."status", j."currentStep", j."attempts", '
                 'j."idempotencyKey", j."sourceRefs"'
@@ -1699,7 +1700,7 @@ class DbJobStore(JobStore):
             )
         else:
             sql = (
-                f'SELECT "id", "requesterId", "topic", "context", "reportType", '
+                f'SELECT "id", "requesterId", "topic", "context", "reportType", "objective", '
                 f'       "sourcePolicy", "brief", "reportLength", "maxUrlsToScrape", "status", "currentStep", "attempts", '
                 f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
                 f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
@@ -1801,7 +1802,7 @@ class DbJobStore(JobStore):
             params.extend(status_filter)
         sql = (
             f"SELECT j.\"id\", j.\"requesterId\", j.\"topic\", j.\"context\", "
-            f"       j.\"reportType\", j.\"brief\", j.\"sourcePolicy\", j.\"status\", "
+            f"       j.\"reportType\", j.\"objective\", j.\"brief\", j.\"sourcePolicy\", j.\"status\", "
             f"       j.\"reportLength\", j.\"maxUrlsToScrape\", j.\"currentStep\", j.\"attempts\", j.\"idempotencyKey\", "
             f"       j.\"sourceRefs\", j.\"partialSources\", j.\"failedSources\", "
             f"       j.\"tokenInputTotal\", j.\"tokenOutputTotal\", j.\"costCents\", "

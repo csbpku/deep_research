@@ -368,6 +368,7 @@ export function AiResearchConversation({
   const [sourceDraft, setSourceDraft] = useState('');
   const [sourceUrls, setSourceUrls] = useState<string[]>([]);
   const [reportType, setReportType] = useState<ReportType>('decision_memo');
+  const reportTypeTouchedRef = useRef(false);
   // Developers start with one focused round; multi-round is an explicit
   // choice, not the silent default that turned a narrow question into 12 minutes.
   const [reportLength, setReportLength] = useState<ResearchLength>('standard');
@@ -386,6 +387,13 @@ export function AiResearchConversation({
   const [conversationCreating, setConversationCreating] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [brief, setBrief] = useState<BriefValue | null>(null);
+
+  // The confirmed intent selects the default artifact; an explicit pick wins.
+  // This keeps "learn" from silently producing a decision memo.
+  useEffect(() => {
+    if (reportTypeTouchedRef.current || !brief?.objective) return;
+    setReportType(brief.objective === 'decide' ? 'decision_memo' : 'research_report');
+  }, [brief?.objective]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorKind, setErrorKind] = useState<'save' | 'submit' | 'restore' | 'validation' | null>(null);
@@ -678,7 +686,7 @@ export function AiResearchConversation({
             setReportType(draft.reportType); setReportLength(draft.reportLength);
             setSourcePolicy(draft.sourcePolicy); setSourceUrls(draft.sourceUrls);
             setSourceDraft(draft.sourceDraft); setInput(draft.input); setSeed(draft.seed ?? null);
-            setBrief(draft.brief); setRestoredBrief(draft.brief);
+            setBrief(draft.brief); setRestoredBrief(draft.brief); reportTypeTouchedRef.current = true;
             // A restored draft means the user already shaped this brief; the
             // replayed transcript may still read as "understand" and would
             // otherwise hide the confirmation form.
@@ -1355,6 +1363,7 @@ export function AiResearchConversation({
                         submitting={submitting}
                         scopeIncomplete={scopeIncomplete}
                         onReportTypeChange={(value) => {
+                          reportTypeTouchedRef.current = true;
                           setReportType(value);
                           setReportLength(value === 'summary_brief' ? 'brief' : 'standard');
                         }}

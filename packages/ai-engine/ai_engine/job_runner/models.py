@@ -58,6 +58,7 @@ class JobSnapshot:
     source_refs: tuple[dict[str, str | bool], ...]
     report_length: str = "standard"
     max_urls_to_scrape: int | None = None
+    objective: str = "investigate"
 
 
 @dataclass(slots=True, frozen=True)

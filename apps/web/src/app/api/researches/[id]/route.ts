@@ -912,6 +912,7 @@ function shapeResearchDetail(r: {
     publicationVersion,
     publicationHardBlocked: publicationDisclosure.reviewVerification === 'conflicted' || currentReviewPublicationGate?.status === 'blocked',
     aiJobId: r.sourceAiJob?.id ?? null,
+    researchObjective: parsedBrief.success ? parsedBrief.data.objective : null,
     publishedReviewAcknowledgedAt: r.publishedReviewAcknowledgedAt?.toISOString() ?? null,
     publishedReviewDisclosure: r.publishedReviewDisclosure,
     publicationAcknowledgementOutdated: r.status === 'published'
