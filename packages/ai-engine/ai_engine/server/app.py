@@ -3304,15 +3304,20 @@ def _preflight_credential(profile: str, suffix: str) -> str:
     return os.environ.get(upper, "").strip() or os.environ.get(lower, "").strip()
 
 
+def _preflight_fingerprint(value: str) -> str:
+    """Hash a credential or URL so cache keys change with the value, not just presence."""
+    return hashlib.sha256(value.encode()).hexdigest()[:16] if value else ""
+
+
 def _preflight_cache_key() -> str:
     """Fingerprint the non-secret inputs that can change a preflight result."""
     profiles = ("minimax", "deepseek", "openai", "anthropic")
     credentials = {
         profile: {
-            "key": bool(_preflight_credential(profile, "API_KEY")),
-            "key_heavy": bool(_preflight_credential(profile, "API_KEY_HEAVY")),
-            "base_url": bool(_preflight_credential(profile, "BASE_URL")),
-            "base_url_heavy": bool(_preflight_credential(profile, "BASE_URL_HEAVY")),
+            "key": _preflight_fingerprint(_preflight_credential(profile, "API_KEY")),
+            "key_heavy": _preflight_fingerprint(_preflight_credential(profile, "API_KEY_HEAVY")),
+            "base_url": _preflight_fingerprint(_preflight_credential(profile, "BASE_URL")),
+            "base_url_heavy": _preflight_fingerprint(_preflight_credential(profile, "BASE_URL_HEAVY")),
             "protocol": _preflight_credential(profile, "PROTOCOL"),
         }
         for profile in profiles
@@ -3353,6 +3358,13 @@ def _check_llm_slot(purpose: LlmPurpose) -> tuple[dict[str, Any], LlmRoute | Non
     label = "RESEARCH_LLM" if purpose == "research" else "UTILITY_LLM"
     try:
         route = resolve_route(purpose)
+        heavy_route = None
+        if not route.api_key:
+            # Deep-research calls use the heavy tier. A heavy-only credential
+            # is a valid configuration, so do not report it as missing.
+            heavy_route = resolve_route(purpose, tier="heavy")
+            if heavy_route.api_key:
+                route = heavy_route
     except ValueError as exc:
         return (
             _preflight_check(
@@ -3363,8 +3375,13 @@ def _check_llm_slot(purpose: LlmPurpose) -> tuple[dict[str, Any], LlmRoute | Non
             None,
         )
     if route.api_key:
+        tier_label = "（heavy 凭据）" if heavy_route else ""
         return (
-            _preflight_check(f"{purpose}_llm", True, f"{label} 槽位可用：{route.spec}"),
+            _preflight_check(
+                f"{purpose}_llm",
+                True,
+                f"{label} 槽位可用{tier_label}：{route.spec}",
+            ),
             route,
         )
 

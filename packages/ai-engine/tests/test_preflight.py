@@ -267,3 +267,48 @@ async def test_preflight_requires_internal_token() -> None:
 
     assert response.status_code == 403
     assert response.json()["code"] == "INTERNAL_TOKEN_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_preflight_accepts_heavy_only_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RESEARCH_LLM", "minimax:MiniMax-M3.1-Flash")
+    monkeypatch.setenv("UTILITY_LLM", "minimax:MiniMax-M3.1-Flash")
+    monkeypatch.setenv("MINIMAX_API_KEY_HEAVY", "heavy-only-key")
+    monkeypatch.setattr(server_app, "_adapter_singleton", lambda: _StubAdapter())
+
+    async def fake_generate_text(**_: object) -> object:
+        return object()
+
+    monkeypatch.setattr(server_app, "generate_text", fake_generate_text)
+
+    response = await _get_preflight()
+    body = response.json()
+
+    assert body["ok"] is True
+    research = _check(body, "research_llm")
+    assert research["ok"] is True
+    assert "heavy" in str(research["message"])
+    assert "heavy-only-key" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_preflight_cache_key_changes_when_a_key_value_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RESEARCH_LLM", "minimax:MiniMax-M3.1-Flash")
+    monkeypatch.setenv("UTILITY_LLM", "minimax:MiniMax-M3.1-Flash")
+    monkeypatch.setenv("MINIMAX_API_KEY", "first-key")
+    monkeypatch.setattr(server_app, "_adapter_singleton", lambda: _StubAdapter())
+    calls: list[dict[str, object]] = []
+
+    async def fake_generate_text(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(server_app, "generate_text", fake_generate_text)
+
+    await _get_preflight()
+    monkeypatch.setenv("MINIMAX_API_KEY", "second-key")
+    await _get_preflight()
+
+    assert len(calls) == 2
