@@ -603,4 +603,6 @@ PR #56 在 11 月 12 日收口后没有直接合并，而是按“先复核、�
 
 **回归验证。** Python 全量单测 1739 passed / 7 skipped（95s），其中新增多分块解析失败重试用例；此前一次实现把 provider 错误也纳入重试，导致 sibling 取消路径挂起、CI 5 分钟超时，已改回快速失败。
 
-**仍待处理。** 发布后的新声明仍无法逐条/批量处置（decisions 接口只允许 draft）；批量处置不幂等；备忘的单页长度仍依赖模型遵守 900 字约束；本轮 CI 与最终 commit 以推送后的 run 为准。
+**发布后处置。** 逐条与批量 decisions 现在都允许 `draft` 和 `published`，并在事务内用 `pg_advisory_xact_lock(hashtext(runId))` 串行化同一轮审核的提交；重复提交同一批声明返回 200、`acceptedCount=0`、`alreadyAcceptedCount=N`，不再产生重复 accept 记录。真实验证：对已发布的 `7076702b…` 批量接受 `B1-C15`/`B2-C15`，首次 201 `acceptedCount=2`，重复提交 201 `acceptedCount=0`、`alreadyAcceptedCount=2`，`openCount` 从 3 降到 1。
+
+**仍待处理。** 已发布文章页还没有“处理待核验声明”的入口，作者需要回到 AI 任务结果页操作；备忘的 900 字上限仍依赖模型遵守；provider 5xx 仍让该轮审核快速失败。
