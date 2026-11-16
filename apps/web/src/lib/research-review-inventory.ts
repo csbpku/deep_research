@@ -115,16 +115,18 @@ export function resolveResearchReviewInventory(input: {
     processedRunIds.add(run.id);
   }
   const inventory = [...entries.values()];
+  // A queued/retrying run is newer than the evidence we actually have. Judge
+  // the gate from the newest completed run instead of reporting the whole
+  // inventory as insufficient while a re-review is still pending.
+  const gateRun = runs.find((run) => run.executionStatus === 'completed'
+    && run.outcome !== 'unavailable' && run.outcome !== 'stale');
   const emptyButClean = Boolean(
-    latest
+    gateRun
     && inventory.length === 0
-    && latest.executionStatus === 'completed'
-    && latest.outcome !== 'unavailable'
-    && latest.outcome !== 'stale'
-    && reviewCoverageStatus(latest.summary) === 'complete'
-    && asReviewClaims(latest.claims).length === 0,
+    && reviewCoverageStatus(gateRun.summary) === 'complete'
+    && asReviewClaims(gateRun.claims).length === 0,
   );
-  const machineIncomplete = !hasCompletedFullReviewInventory(latest) && !emptyButClean;
+  const machineIncomplete = !hasCompletedFullReviewInventory(gateRun) && !emptyButClean;
   // A malformed/legacy blocked outcome with no addressable high-risk claim
   // is still a warning. A one-claim retry cannot silently explain it away.
   // Addressable blockers instead follow their exact claim, so a valid local
@@ -137,10 +139,10 @@ export function resolveResearchReviewInventory(input: {
   // on an identically named ID in another run cannot resolve a different fact.
   const claims = inventory.map((entry, index) => ({ ...entry.claim, claim_id: `inventory-${index}` }));
   const decisions = inventory.flatMap((entry, index) => entry.decision ? [{ ...entry.decision, claimId: `inventory-${index}` }] : []);
-  const gate = latest ? getReviewPublicationGate({
+  const gate = gateRun ? getReviewPublicationGate({
     executionStatus: 'completed',
-    outcome: unexplainedBlocker ? 'blocked' : hasCompletedFullReviewInventory(latest) ? latest.outcome : 'clear',
-    coverageStatus: machineIncomplete ? 'insufficient' : reviewCoverageStatus(latest.summary),
+    outcome: unexplainedBlocker ? 'blocked' : hasCompletedFullReviewInventory(gateRun) ? gateRun.outcome : 'clear',
+    coverageStatus: machineIncomplete ? 'insufficient' : reviewCoverageStatus(gateRun.summary),
     researchSufficiencyStatus: input.researchSufficiencyStatus, claims, decisions,
   }) : null;
   return { runs, latest, inventory, gate, machineIncomplete };

@@ -98,3 +98,55 @@ describe('transitionResearchStatus aggregate restore gate', () => {
     expect(tx.research.update).not.toHaveBeenCalled();
   });
 });
+
+
+describe('transitionResearchStatus with a queued re-review', () => {
+  it('restores from the last completed review instead of deadlocking on a queued run', async () => {
+    const fields = {
+      id: '44444444-4444-4444-8444-444444444444',
+      authorId: '11111111-1111-4111-8111-111111111111',
+      type: 'research',
+      status: RESEARCH_STATUS.ARCHIVED,
+      publishedAt: new Date('2026-11-01T00:00:00.000Z'),
+      creationMethod: 'ai_research',
+      title: 'Queued review report',
+      body: 'Reviewed body',
+      background: null,
+      conclusion: null,
+      risks: null,
+      tags: [],
+      reviewStatus: 'queued',
+    };
+    const revisionHash = hashResearchRevision(fields);
+    const tx = {
+      research: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...fields,
+          sourceAiJob: null,
+          reviewRuns: [
+            {
+              id: 'run-queued', revisionHash, executionStatus: 'queued', outcome: null,
+              attempt: 2, summary: null, claims: [], decisions: [],
+            },
+            {
+              id: 'run-clear', revisionHash, executionStatus: 'completed', outcome: 'clear',
+              attempt: 1, summary: { coverage_status: 'complete' }, claims: [], decisions: [],
+            },
+          ],
+        }),
+        update: vi.fn().mockResolvedValue({
+          id: fields.id, status: RESEARCH_STATUS.PUBLISHED, updatedAt: new Date(),
+        }),
+      },
+      researchAudit: { create: vi.fn() },
+    };
+
+    await transitionResearchStatus(tx as never, {
+      id: fields.id,
+      actorId: fields.authorId,
+      action: 'restore',
+    });
+
+    expect(tx.research.update).toHaveBeenCalledTimes(1);
+  });
+});

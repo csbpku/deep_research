@@ -607,6 +607,6 @@ PR #56 在 11 月 12 日收口后没有直接合并，而是按“先复核、�
 
 **备忘长度。** 备忘现在有 1,600 字硬阈值：首次输出超过阈值时再跑最多两轮只做压缩的短改写，保留六个标题与引用标记；仍失败才保留原稿并记 `ai-engine.decision_memo.too_long`。真实任务 `c8743859…` 的备忘为 1,525 字、无参考文献段，落在阈值内；此前 6,274 字的膨胀来自把 `[S#]` 展开成完整链接，已改为备忘只保留引用标记。
 
-**读者视图收敛。** 详情接口此前把 `reviewRunToken`、`reviewDetails`、每次 run 的 claims/details/decisions 一并返回给任意登录读者。现在只有作者本人或 admin 能看到这些审核内部字段；普通读者只拿到 `currentReview` 的摘要状态与读者披露。用 member 账号实测：顶层 `reviewDetails=null`、run 的 `details=null`、`claims=[]`；作者侧仍返回完整面板数据。批量处置返回的 `publicationGate` 与 archive→restore 的恢复门禁都改用同版本全部 run 的聚合台账，不再按单次 run 计算，避免“新版零声明 clear 把旧冲突洗白”。新增回归用例：旧 run 有 high-risk contradicted、新 run 为 clear 零声明时，恢复仍被拒绝。预检也补了两个边界：research 槽位在只有 `*_API_KEY_HEAVY` 时按 heavy tier 判定为可用；缓存 key 改为凭据/URL 的哈希，换一把同样非空的错误 key 不再命中旧 `ok`。
+**读者视图收敛。** 详情接口此前把 `reviewRunToken`、`reviewDetails`、每次 run 的 claims/details/decisions 一并返回给任意登录读者。现在只有作者本人或 admin 能看到这些审核内部字段；普通读者只拿到 `currentReview` 的摘要状态与读者披露。用 member 账号实测：顶层 `reviewDetails=null`、run 的 `details=null`、`claims=[]`；作者侧仍返回完整面板数据。批量处置返回的 `publicationGate` 与 archive→restore 的恢复门禁都改用同版本全部 run 的聚合台账，不再按单次 run 计算，避免“新版零声明 clear 把旧冲突洗白”。新增回归用例：旧 run 有 high-risk contradicted、新 run 为 clear 零声明时，恢复仍被拒绝。预检也补了两个边界：research 槽位在只有 `*_API_KEY_HEAVY` 时按 heavy tier 判定为可用；缓存 key 改为凭据/URL 的哈希，换一把同样非空的错误 key 不再命中旧 `ok`。聚合门禁改为用“最新的已完成 run”判定，排队的重核验不会把上一轮已完成审核误报成覆盖不足，也不会让归档恢复死锁在 queued 上。
 
 **仍待处理。** provider 连续两次 5xx 时该轮审核仍会失败；这是有意的失败边界，避免无限重试占用预算。
