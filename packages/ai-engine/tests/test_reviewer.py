@@ -405,6 +405,58 @@ async def test_review_separates_claim_inventory_from_evidence_adjudication(
 
 
 @pytest.mark.asyncio
+async def test_transient_inventory_provider_error_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def review(**kwargs: object) -> SimpleNamespace:
+        operation = str(kwargs["operation"])
+        calls.append(operation)
+        if operation == "research.fact_review.inventory":
+            if len([item for item in calls if item == operation]) == 1:
+                raise RuntimeError("provider 500")
+            return SimpleNamespace(text=json.dumps({
+                "coverage_status": "complete",
+                "claims": [{
+                    "claim_id": "C1",
+                    "claim": "目录包含 Installation",
+                    "claim_type": "external_fact",
+                    "risk": "medium",
+                }],
+            }, ensure_ascii=False))
+        return SimpleNamespace(text=json.dumps({
+            "claims": [{
+                "claim_id": "C1",
+                "claim": "目录包含 Installation",
+                "verdict": "verified",
+                "evidence": {
+                    "source_url": "https://example.com/source",
+                    "excerpt": "Installation",
+                },
+            }],
+            "revision_instructions": [],
+        }, ensure_ascii=False))
+
+    monkeypatch.setattr("ai_engine.reviewer.generate_text", review)
+    result = await DefaultResearchReviewer().review(
+        "目录包含 Installation。",
+        (AdapterSource(
+            source_ref={"type": "url", "value": "https://example.com/source"},
+            canonical_key="https://example.com/source",
+            title="source",
+            snippet="Installation",
+            score=1.0,
+            step_captured=AI_JOB_STEP["SEARCH"],  # type: ignore[arg-type]
+        ),),
+        "安装资料",
+    )
+
+    assert calls[:2] == ["research.fact_review.inventory", "research.fact_review.inventory"]
+    assert result.status == "passed"
+
+
+@pytest.mark.asyncio
 async def test_review_checkpoint_persists_inventory_before_adjudication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
