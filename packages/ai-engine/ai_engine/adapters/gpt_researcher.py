@@ -3766,6 +3766,22 @@ def _report_output_contract(
     official_comparison = bool(topic and _official_lane_queries(topic, context))
     generic_comparison = _has_explicit_comparison(topic, context)
 
+    if normalized_type == "comparison_matrix":
+        return (
+            "这是对比矩阵，不是决策备忘，也不是完整报告。必须输出完整 Markdown，"
+            "并严格按以下顺序组织：\n"
+            "1. `# 对比主题`；\n"
+            "2. `## 对比结论`：只在证据支持时给出条件性结论；不要给唯一推荐，不要写‘建议选择’；\n"
+            "3. `## 对比矩阵`：Markdown 表格，行是候选方案，列是用户关心的决策维度；"
+            "每格必须是‘结论 + [S#]’、‘未知’或‘冲突’，禁止用推断填空；每格最多两句，长解释放到矩阵之外；\n"
+            "4. `## 权重敏感性`：说明哪些约束或权重变化会改变结论，至少给出两组不同前提；\n"
+            "5. `## 适用条件`：分别写每个方案在什么条件下更合适；\n"
+            "6. `## 未知与冲突`：列出无法从证据得出的格子及原因；\n"
+            "7. `## 下一步验证`：给出能区分方案的最小实验或核查动作。\n"
+            "不要输出‘推荐方案/置信度’字段；对比的目标是把差异和不确定性讲清楚。"
+            "不要输出参考文献章节，系统会从证据账本补上。\n"
+        )
+
     if normalized_type == "slides":
         from ai_engine.contracts.artifacts import extract_slide_limit
 
@@ -4914,7 +4930,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             report = _materialize_evidence_citations(
                 report,
                 sources,
-                compact=job.request.objective in {"learn", "investigate", "explore"},
+                compact=job.request.objective in {"learn", "investigate", "explore"} or job.request.report_type == "comparison_matrix",
             )
             report = _clean_report_output(report, sources)
             report = await _ensure_complete_report(researcher, report, sources)
@@ -4957,7 +4973,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             report = _materialize_evidence_citations(
                 report,
                 sources,
-                compact=job.request.objective in {"learn", "investigate", "explore"},
+                compact=job.request.objective in {"learn", "investigate", "explore"} or job.request.report_type == "comparison_matrix",
             )
             report = _clean_report_output(report, sources)
             memo_accepted = False

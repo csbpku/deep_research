@@ -73,6 +73,7 @@ const researchSelect = {
   sourceAiJob: {
     select: {
       id: true,
+      reportType: true,
       brief: true,
       sourcePolicy: true,
       aiResearchSources: {
@@ -817,6 +818,7 @@ function shapeResearchDetail(r: {
   publishedReviewAcknowledgedAt?: Date | null;
   sourceAiJob?: {
     id: string;
+    reportType?: string | null;
     brief: unknown;
     sourcePolicy: string;
     aiResearchSources: Array<{
@@ -915,6 +917,7 @@ function shapeResearchDetail(r: {
     publicationVersion,
     publicationHardBlocked: publicationDisclosure.reviewVerification === 'conflicted' || currentReviewPublicationGate?.status === 'blocked',
     aiJobId: r.sourceAiJob?.id ?? null,
+    researchReportType: r.sourceAiJob?.reportType ?? null,
     researchObjective: parsedBrief.success ? parsedBrief.data.objective : null,
     intentCoverage: coerceIntentCoverage(r.publishedIntentCoverage) ?? parseIntCoverage(r.body),
     intentCoverageSnapshot: Boolean(r.publishedIntentCoverage),

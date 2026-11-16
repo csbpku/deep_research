@@ -112,6 +112,7 @@ interface ResearchDetail {
   canEdit: boolean;
   aiJobId?: string | null;
   researchObjective?: 'explore' | 'learn' | 'investigate' | 'decide' | null;
+  researchReportType?: string | null;
   intentCoverage?: IntentCoverage | null;
   intentCoverageSnapshot?: boolean;
   currentReview?: { revisionHash: string; status: string } | null;
@@ -306,6 +307,7 @@ export default function ResearchDetailPage() {
   const isLongResearch = data.type === 'research';
   // Decision memos are markdown research drafts; the format is carried by the
   // artifact heading rather than researches.type, so surface it as a badge.
+  const isComparisonMatrix = data.researchReportType === 'comparison_matrix';
   const isDecisionMemo = isLongResearch && data.body.trimStart().startsWith('# 决策备忘');
   const isKnowledge = data.type === 'knowledge';
   const isDraft = data.status === 'draft';
@@ -339,7 +341,7 @@ export default function ResearchDetailPage() {
           </Typography>
 
           <div className={styles.badges}>
-            <StatusBadge kind="researchType" value={isDecisionMemo ? 'decision_memo' : isLongResearch ? 'research' : 'knowledge'} />
+            <StatusBadge kind="researchType" value={isDecisionMemo ? 'decision_memo' : isComparisonMatrix ? 'comparison_matrix' : isLongResearch ? 'research' : 'knowledge'} />
             {data.researchObjective ? <StatusBadge kind="researchIntent" value={data.researchObjective} /> : null}
             <StatusBadge kind="method" value={data.creationMethod} />
             {isDraft && <StatusBadge kind="research" value="draft" />}

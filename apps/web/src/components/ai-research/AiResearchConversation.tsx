@@ -49,7 +49,7 @@ interface RadarSeed {
   body: string | null;
 }
 
-type ReportType = 'decision_memo' | 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
+type ReportType = 'decision_memo' | 'comparison_matrix' | 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
 type ResearchLength = 'brief' | 'standard' | 'deep';
 type SourcePolicy = 'prefer_user_sources' | 'only_user_sources';
 type ResearchSourceRef = {

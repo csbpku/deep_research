@@ -66,3 +66,17 @@ def test_coverage_table_only_holds_must_answer_questions() -> None:
 
     assert "完成标准不要混进表格" in contract
     assert "行内引用只写 [S#]" in contract
+
+
+def test_comparison_matrix_contract_does_not_recommend_a_winner() -> None:
+    contract = _report_output_contract(
+        "比较 pg_advisory_xact_lock 与 SELECT FOR UPDATE",
+        report_type="comparison_matrix",
+        objective="decide",
+    )
+
+    assert "## 对比矩阵" in contract
+    assert "## 权重敏感性" in contract
+    assert "## 适用条件" in contract
+    assert "不要给唯一推荐" in contract
+    assert "推荐方案" in contract

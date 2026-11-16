@@ -221,7 +221,7 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
         context=context_str,
         report_type=cast(
             Literal[
-                "research_report", "decision_memo", "summary_brief", "slides",
+                "research_report", "decision_memo", "comparison_matrix", "summary_brief", "slides",
                 "web_brief", "evidence_search",
             ],
             str(row.get("reportType", "research_report")),
