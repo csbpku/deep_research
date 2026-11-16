@@ -18,6 +18,7 @@ logger = logging.getLogger("ai-engine")
 
 MEMO_MAX_SOURCE_CHARS = 20_000
 MEMO_MAX_TOKENS = 1_600
+MEMO_MAX_CHARS = 1_200
 
 MEMO_SYSTEM_PROMPT = (
     "你是技术决策备忘编辑。把研究报告压缩成一页可执行的决策备忘；"
@@ -51,6 +52,17 @@ MEMO_INSTRUCTIONS = """请把下面的研究报告改写成中文决策备忘，
 - 明确区分事实、推断和建议。
 """
 
+
+MEMO_SHORTEN_PROMPT = """下面这份决策备忘仍然太长。请在不改变结论、不新增事实的前提下压缩到 900 字以内。
+
+要求：
+- 保留原有的 # 决策备忘 与五个 ## 二级标题，标题顺序不变。
+- 保留关键声明里的 [S#] 引用标记；没有标记的声明继续写“未确认”。
+- 优先删掉重复解释和铺垫，不要删掉风险与下一步验证。
+- 只输出压缩后的 Markdown 正文，不要解释。
+
+待压缩的备忘：
+"""
 
 _REFERENCE_HEADING = re.compile(r"(?m)^##\s*(?:参考文献|参考资料|References)\s*$")
 
@@ -117,6 +129,36 @@ def is_valid_decision_memo(text: str) -> bool:
     return True
 
 
+async def _shorten_decision_memo(*, memo: str, request_id: str, llm_spec: str) -> str | None:
+    """Second, cheaper pass that only shrinks an already-valid memo."""
+    try:
+        result = await generate_text(
+            llm_spec=llm_spec,
+            system_prompt=MEMO_SYSTEM_PROMPT,
+            user_prompt=f"{MEMO_SHORTEN_PROMPT}{memo}",
+            max_tokens=1_200,
+            timeout=60.0,
+            disable_thinking=True,
+            retry_attempts=0,
+            operation="research.decision_memo.shorten",
+            request_id=request_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - keep the longer memo
+        logger.warning(
+            "ai-engine.decision_memo.shorten_failed",
+            extra={"request_id": request_id, "error": type(exc).__name__},
+        )
+        return None
+    text = strip_reference_section((result.text or "").strip())
+    if (
+        not getattr(result, "truncated", False)
+        and is_valid_decision_memo(text)
+        and len(text) < len(memo)
+    ):
+        return text
+    return None
+
+
 async def condense_to_decision_memo(
     *,
     topic: str,
@@ -148,6 +190,19 @@ async def condense_to_decision_memo(
             continue
         text = strip_reference_section((result.text or "").strip())
         if not getattr(result, "truncated", False) and is_valid_decision_memo(text):
+            if len(text) <= MEMO_MAX_CHARS:
+                return text
+            shortened = await _shorten_decision_memo(
+                memo=text,
+                request_id=request_id,
+                llm_spec=llm_spec,
+            )
+            if shortened is not None:
+                return shortened
+            logger.warning(
+                "ai-engine.decision_memo.too_long",
+                extra={"request_id": request_id, "chars": len(text)},
+            )
             return text
         logger.warning(
             "ai-engine.decision_memo.invalid",
