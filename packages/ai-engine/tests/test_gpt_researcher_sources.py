@@ -16,6 +16,7 @@ import pytest
 from ai_engine.adapters.gpt_researcher import _collect_sources_from_research
 from ai_engine.adapters.gpt_researcher import (
     _append_references,
+    _report_output_contract,
     _ACTIVE_RESEARCH_JOB,
     _clean_report_output,
     _format_source_lines,
@@ -2174,3 +2175,32 @@ async def test_brief_preserves_spent_tokens_after_later_failure_or_cancellation(
         await task
         assert job.status == AI_JOB_STATUS["FAILED"]
     assert (job.token_in, job.token_out) == (23, 7)
+
+
+def test_adjacent_materialized_citations_are_separated() -> None:
+    sources = [
+        _source("https://example.com/one", "One guide", "Captured one."),
+        _source("https://example.com/two", "Two guide", "Captured two."),
+    ]
+
+    materialized = _materialize_evidence_citations("[S1][S2]", sources)
+
+    assert "[One guide](https://example.com/one) [Two guide](https://example.com/two)" == materialized
+
+
+def test_web_brief_contract_has_a_brief_length_budget() -> None:
+    brief = _report_output_contract("问题", report_type="web_brief", report_length="brief")
+    standard = _report_output_contract("问题", report_type="web_brief", report_length="standard")
+
+    assert "900 个中文字符" in brief
+    assert "1800 个中文字符" in standard
+
+
+def test_web_brief_does_not_get_a_bibliography() -> None:
+    sources = [_source("https://example.com/one", "One guide", "Captured one.")]
+    body = "简报正文"
+    brief = _append_references(body, sources, report_type="web_brief")
+    report = _append_references(body, sources, report_type="research_report")
+
+    assert brief == body
+    assert "## 参考文献" in report
