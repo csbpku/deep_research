@@ -2243,20 +2243,35 @@ class DefaultResearchReviewer:
                             )
                     return chunk.index, parsed_payload, truncated
 
-                inventory_tasks = [
-                    asyncio.create_task(_inventory_one(chunk, prompt))
-                    for chunk, prompt in zip(inventory_chunks, inventory_prompts)
-                ]
-                try:
-                    inventory_results = await asyncio.gather(*inventory_tasks)
-                except BaseException:
-                    # A failed gather does not cancel siblings. Stop and await
-                    # every provider request before the enclosing reservation
-                    # can settle, including when the whole review is cancelled.
-                    for task in inventory_tasks:
-                        task.cancel()
-                    await asyncio.gather(*inventory_tasks, return_exceptions=True)
-                    raise
+                inventory_results: list[tuple[int, dict[str, Any] | None, bool]] | None = None
+                for inventory_attempt in (1, 2):
+                    inventory_tasks = [
+                        asyncio.create_task(_inventory_one(chunk, prompt))
+                        for chunk, prompt in zip(inventory_chunks, inventory_prompts)
+                    ]
+                    try:
+                        inventory_results = await asyncio.gather(*inventory_tasks)
+                        break
+                    except BaseException as exc:
+                        # A failed gather does not cancel siblings. Stop and
+                        # await every provider request before the enclosing
+                        # reservation can settle, including when the whole
+                        # review is cancelled.
+                        for task in inventory_tasks:
+                            task.cancel()
+                        await asyncio.gather(*inventory_tasks, return_exceptions=True)
+                        if (
+                            inventory_attempt == 2
+                            or isinstance(exc, (TokenBudgetExceeded, TokenBudgetUnavailable))
+                            or isinstance(exc, (asyncio.CancelledError, ValueError))
+                        ):
+                            raise
+                        _review_logger.warning(
+                            "inventory pass failed; retrying attempt=%s error=%s",
+                            inventory_attempt,
+                            type(exc).__name__,
+                        )
+                assert inventory_results is not None
                 failed_inventory = [
                     (chunk, truncated)
                     for chunk, (_, payload, truncated) in zip(inventory_chunks, inventory_results)

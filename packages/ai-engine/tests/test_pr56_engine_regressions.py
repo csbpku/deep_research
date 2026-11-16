@@ -80,7 +80,9 @@ async def test_inventory_failure_awaits_siblings_before_budget_settlement(
         if not task.done():
             task.cancel()
     await asyncio.gather(*provider_tasks, return_exceptions=True)
-    assert events == ['provider_stopped', 'release']
+    assert events[0] == 'provider_stopped'
+    assert events.count('release') == 1
+    assert events[-1] == 'release'
 
 
 @pytest.mark.asyncio
@@ -269,3 +271,22 @@ async def test_real_adapter_preserves_report_when_memo_contract_fails(
     assert job.status == 'succeeded', job.error_message
     assert '完整报告保留研究结论' in job.body
     assert len(prompts) == 2
+
+
+@pytest.mark.asyncio
+async def test_inventory_retries_a_transient_provider_failure(monkeypatch: pytest.MonkeyPatch):
+    invocations = 0
+
+    async def generate(**kwargs):
+        nonlocal invocations
+        if '这是报告全文第' not in kwargs['user_prompt']:
+            return SimpleNamespace(text='{"status":"passed","claims":[],"revision_instructions":[]}', truncated=False)
+        invocations += 1
+        if invocations == 1:
+            raise RuntimeError('provider 500')
+        return SimpleNamespace(text='{"coverage_status":"complete","claims":[]}', truncated=False)
+
+    monkeypatch.setattr(reviewer, 'generate_text', generate)
+    result = await reviewer.DefaultResearchReviewer().review('plain report', (_source(),), 'topic')
+    assert result.status == 'passed'
+    assert invocations == 2

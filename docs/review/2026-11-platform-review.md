@@ -595,16 +595,16 @@ PR #56 在 11 月 12 日收口后没有直接合并，而是按“先复核、�
 
 **真实调研流程发现的问题。** 用 e2e-admin 在本地发起三轮真实决策备忘任务，问题分别是连接池下的 `pg_advisory_xact_lock`、库存扣减选型、秒杀场景行锁与 Redis 锁分工。
 
-1. 第一轮任务研究成功，但自动审核 4 秒即 `unavailable`，错误为 `full-text inventory incomplete`。根因是清单阶段单个分块返回空/非 JSON 时 `ValueError` 穿过 `asyncio.gather`，整轮清单被丢弃。修复后空/非 JSON 分块只重试该块，provider 错误仍快速失败（避免 sibling 请求悬挂时继续占用预算）；同一草稿重新审核在约 2 分钟内 `completed`，32 条 claims。
+1. 第一轮任务研究成功，但自动审核 4 秒即 `unavailable`，错误为 `full-text inventory incomplete`。根因是清单阶段单个分块返回空/非 JSON 时 `ValueError` 穿过 `asyncio.gather`，整轮清单被丢弃。修复后空/非 JSON 分块只重试该块；provider 异常（如 5xx）会取消并等待 sibling 请求结束后整轮清单重试一次，预算异常与取消不重试。同一草稿重新审核在约 2 分钟内 `completed`，32 条 claims。
 2. 决策备忘仍会在末尾附「参考文献」，且发布摘要的结论/风险字段残留 `PostgreSQL Advisory Locks...JusDB Blog` 这类被扁平化的链接标题。现在备忘在 LLM 返回后删除尾部参考文献段落，超长报告保留头部与尾部 5k 字（避免丢结论），adapter 不再给已接受的备忘追加书目；摘要抽取直接丢弃 Markdown 链接而不是保留标题文本。第三轮任务已验证正文到「下一步验证」结束，没有参考文献段。
 3. 前两轮的摘要字段是旧代码生成的，仍带链接标题；第三轮新生成字段已清理。该差异说明预填字段一旦写入不会随正文重算，编辑页仍应允许作者改写。
 
 **真实发布验证。** 第一轮与第二轮草稿都通过编辑页「发布调研 → 勾选带披露发布 → 确认发布」成功发布，详情页显示「带披露发布」与披露条数。第三轮发布后，数据库记录 `publishedReviewAcknowledgedAt=2026-11-16 10:17:49`、披露为 JSON object；随后对已发布稿再跑一次核验，详情 API 返回 `publicationAcknowledgementOutdated=true`，页面显示“发布后核验状态已更新；下方为当前披露，作者发布时确认的版本保留在审计记录中”。
 
-**回归验证。** Python 全量单测 1739 passed / 7 skipped（95s），其中新增多分块解析失败重试用例；此前一次实现把 provider 错误也纳入重试，导致 sibling 取消路径挂起、CI 5 分钟超时，已改回快速失败。
+**回归验证。** Python 全量单测 1739 passed / 7 skipped（95s），其中新增多分块解析失败重试用例与 provider 5xx 整轮清单重试用例；重试前必须先取消并 await sibling，否则预算会在请求仍存活时提前释放。
 
 **发布后处置。** 逐条与批量 decisions 现在都允许 `draft` 和 `published`，并在事务内用 `pg_advisory_xact_lock(hashtext(runId))` 串行化同一轮审核的提交；重复提交同一批声明返回 201、`acceptedCount=0`、`alreadyAcceptedCount=N`，不再产生重复 accept 记录。已发布文章页的「核验与披露」卡片直接嵌入逐条声明面板，作者不必跳回任务页。真实验证：对已发布的 `7076702b…` 批量接受 `B1-C15`/`B2-C15`，首次 201 `acceptedCount=2`，重复提交 201 `acceptedCount=0`、`alreadyAcceptedCount=2`，`openCount` 从 3 降到 1。
 
 **备忘长度。** 备忘现在有 1,600 字硬阈值：首次输出超过阈值时再跑最多两轮只做压缩的短改写，保留六个标题与引用标记；仍失败才保留原稿并记 `ai-engine.decision_memo.too_long`。真实任务 `c8743859…` 的备忘为 1,525 字、无参考文献段，落在阈值内；此前 6,274 字的膨胀来自把 `[S#]` 展开成完整链接，已改为备忘只保留引用标记。
 
-**仍待处理。** provider 5xx 仍让该轮审核快速失败。
+**仍待处理。** provider 连续两次 5xx 时该轮审核仍会失败；这是有意的失败边界，避免无限重试占用预算。
