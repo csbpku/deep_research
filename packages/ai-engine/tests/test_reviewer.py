@@ -405,17 +405,22 @@ async def test_review_separates_claim_inventory_from_evidence_adjudication(
 
 
 @pytest.mark.asyncio
-async def test_transient_inventory_provider_error_is_retried(
+async def test_malformed_inventory_chunk_is_retried_without_losing_siblings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
+    chunk_one_calls = 0
 
     async def review(**kwargs: object) -> SimpleNamespace:
+        nonlocal chunk_one_calls
         operation = str(kwargs["operation"])
         calls.append(operation)
         if operation == "research.fact_review.inventory":
-            if len([item for item in calls if item == operation]) == 1:
-                raise RuntimeError("provider 500")
+            prompt = str(kwargs["user_prompt"])
+            if "第 1/" in prompt or "chunk1" in prompt:
+                chunk_one_calls += 1
+                if chunk_one_calls == 1:
+                    return SimpleNamespace(text="<think>truncated")
             return SimpleNamespace(text=json.dumps({
                 "coverage_status": "complete",
                 "claims": [{
@@ -439,6 +444,13 @@ async def test_transient_inventory_provider_error_is_retried(
         }, ensure_ascii=False))
 
     monkeypatch.setattr("ai_engine.reviewer.generate_text", review)
+    monkeypatch.setattr(
+        "ai_engine.reviewer.split_text_by_token_budget",
+        lambda *args: [
+            SimpleNamespace(index=1, start=0, end=10, text="chunk1 目录包含 Installation。"),
+            SimpleNamespace(index=2, start=10, end=20, text="chunk2 目录包含 Installation。"),
+        ],
+    )
     result = await DefaultResearchReviewer().review(
         "目录包含 Installation。",
         (AdapterSource(
@@ -452,9 +464,8 @@ async def test_transient_inventory_provider_error_is_retried(
         "安装资料",
     )
 
-    assert calls[:2] == ["research.fact_review.inventory", "research.fact_review.inventory"]
-    assert result.status == "passed"
-
+    assert chunk_one_calls == 2
+    assert result.status != "review_unavailable"
 
 @pytest.mark.asyncio
 async def test_review_checkpoint_persists_inventory_before_adjudication(

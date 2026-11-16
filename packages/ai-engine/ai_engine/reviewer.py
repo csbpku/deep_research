@@ -2193,38 +2193,19 @@ class DefaultResearchReviewer:
                     truncated = False
                     async with inventory_semaphore:
                         for attempt in (1, 2):
-                            try:
-                                generated = await generate_text(
-                                    user_prompt=inventory_prompt,
-                                    system_prompt=_CLAIM_INVENTORY_SYSTEM,
-                                    llm_spec=self._llm_spec,
-                                    tier="light",
-                                    max_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
-                                    # Multi-thousand-character chunks can produce
-                                    # JSON that takes slower providers past 90s.
-                                    # A timeout here discards the whole inventory.
-                                    timeout=180.0,
-                                    disable_thinking=True,
-                                    operation="research.fact_review.inventory",
-                                )
-                            except (TokenBudgetExceeded, TokenBudgetUnavailable):
-                                raise
-                            except Exception as exc:
-                                # A provider 5xx or transport error must not
-                                # discard every other chunk's inventory. Retry
-                                # once, then mark only this chunk failed. A
-                                # parse failure still reaches the outer strict
-                                # retry below, which preserves its prompt.
-                                _review_logger.warning(
-                                    "inventory chunk request failed chunk=%s/%s attempt=%s error=%s",
-                                    chunk.index,
-                                    len(inventory_chunks),
-                                    attempt,
-                                    type(exc).__name__,
-                                )
-                                if attempt == 2:
-                                    return chunk.index, None, False
-                                continue
+                            generated = await generate_text(
+                                user_prompt=inventory_prompt,
+                                system_prompt=_CLAIM_INVENTORY_SYSTEM,
+                                llm_spec=self._llm_spec,
+                                tier="light",
+                                max_tokens=_INVENTORY_MAX_OUTPUT_TOKENS,
+                                # Multi-thousand-character chunks can produce
+                                # JSON that takes slower providers past 90s.
+                                # A timeout here discards the whole inventory.
+                                timeout=180.0,
+                                disable_thinking=True,
+                                operation="research.fact_review.inventory",
+                            )
                             truncated = bool(getattr(generated, "truncated", False))
                             if not truncated:
                                 try:
