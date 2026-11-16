@@ -108,6 +108,7 @@ interface ResearchDetail {
   author: { id: string; name: string };
   reviewStatus?: string | null;
   canEdit: boolean;
+  aiJobId?: string | null;
   canManageStatus: boolean;
   researchSources: ResearchSourceItem[];
   researchTopics?: Array<{ topic: { id: string; slug: string; name: string } }>;
@@ -471,6 +472,14 @@ export default function ResearchDetailPage() {
             >
               查看披露明细、修改历史与元数据
             </a>
+            {data.canEdit && data.creationMethod === 'ai_research' && data.aiJobId ? (
+              <>
+                {' · '}
+                <Link href={`/ai-research/${data.aiJobId}`} className={styles.disclosureLink}>
+                  处理待核验声明
+                </Link>
+              </>
+            ) : null}
           </p>
         </SectionCard>
       )}

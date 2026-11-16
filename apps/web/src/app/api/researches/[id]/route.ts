@@ -70,6 +70,7 @@ const researchSelect = {
   publishedReviewAcknowledgedAt: true,
   sourceAiJob: {
     select: {
+      id: true,
       brief: true,
       sourcePolicy: true,
       aiResearchSources: {
@@ -812,6 +813,7 @@ function shapeResearchDetail(r: {
   publishedReviewDisclosure?: unknown;
   publishedReviewAcknowledgedAt?: Date | null;
   sourceAiJob?: {
+    id: string;
     brief: unknown;
     sourcePolicy: string;
     aiResearchSources: Array<{
@@ -909,6 +911,7 @@ function shapeResearchDetail(r: {
     ...readerReview,
     publicationVersion,
     publicationHardBlocked: publicationDisclosure.reviewVerification === 'conflicted' || currentReviewPublicationGate?.status === 'blocked',
+    aiJobId: r.sourceAiJob?.id ?? null,
     publishedReviewAcknowledgedAt: r.publishedReviewAcknowledgedAt?.toISOString() ?? null,
     publishedReviewDisclosure: r.publishedReviewDisclosure,
     publicationAcknowledgementOutdated: r.status === 'published'
