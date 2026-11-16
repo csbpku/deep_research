@@ -73,6 +73,7 @@ import { useUnsavedGuard } from '@/lib/editor/use-unsaved-guard';
 import { useAutoSave } from '@/lib/editor/use-auto-save';
 import { resolveResearchSourceLink } from '@/lib/research-source-link';
 import { sha256Hex } from '@/lib/text-anchor';
+import { hasBlockingIntentCoverage, parseIntCoverage } from '@/lib/research-intent-coverage';
 import { commandQuery, matchingCommands, type MarkdownCommand } from '@/lib/editor/markdown-commands';
 import { activeOutlineItem, parseOutline } from '@/lib/editor/outline';
 import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
@@ -857,7 +858,9 @@ export default function EditorPage() {
   const reviewPublishable = gateClean;
   // A team publish with residual uncertainty is allowed, but never silently:
   // the author ticks the same disclosure the reader will see.
-  const requiresDisclosureAck = reviewRequired && !gateClean && !publishHardBlocked;
+  const intentCoverage = parseIntCoverage(body);
+  const requiresIntentCoverageAck = reviewRequired && hasBlockingIntentCoverage(intentCoverage);
+  const requiresDisclosureAck = (reviewRequired && !gateClean && !publishHardBlocked) || requiresIntentCoverageAck;
   const currentReviewIsCurrent = existing?.currentReview?.isCurrentRevision === true;
   const reviewInstruction = publishHardBlocked
     ? '同版本仍有高风险来源冲突；必须修订相关结论，或完成新一轮核验后再发布。'
@@ -1577,12 +1580,17 @@ export default function EditorPage() {
                 : publicationGate?.status === 'clear' && researchCoverageLabel === '未评估'
                   ? '关键依据已有，但资料范围没有自动评估；请确认当前资料确实足以回答原始问题。'
                 : requiresDisclosureAck
-                  ? '这份调研仍有未完成核验的内容；发布后读者会看到同样的披露。'
+                  ? '这份调研仍有未完成核验或未覆盖的内容；发布后读者会看到同样的披露。'
                 : '请确认结论、证据和风险已核对。'}
           </DialogContentText>
           {requiresDisclosureAck && (
             <Box sx={{ mt: 2, p: 1.5, border: 1, borderColor: 'var(--dr-color-warning)', bgcolor: 'var(--dr-color-warning-container)' }}>
               <Typography variant="metadata" component="p" sx={{ fontWeight: 600 }}>发布时披露</Typography>
+              {requiresIntentCoverageAck ? (
+                <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>
+                  必答问题还有 {intentCoverage?.counts.unknown ?? 0} 个未知、{intentCoverage?.counts.conflict ?? 0} 个冲突；发布后读者会在「必答问题覆盖」中看到同样的状态。
+                </Typography>
+              ) : null}
               <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>
                 {existing?.publicationDisclosureSummary
                   ? researchReviewDisclosureMessages(existing.publicationDisclosureSummary).join(' ')

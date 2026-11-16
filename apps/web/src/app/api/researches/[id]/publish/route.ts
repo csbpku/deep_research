@@ -28,6 +28,7 @@ import { resolveResearchReviewInventory } from '../../../../../lib/research-revi
 import { researchPublicationVersion } from '../../../../../lib/research-publication-version';
 import { projectResearchReviewForReader } from '../../../../../lib/research-review-reader';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
+import { hasBlockingIntentCoverage, parseIntCoverage } from '../../../../../lib/research-intent-coverage';
 
 const IdParam = z.object({ id: z.string().uuid() });
 const PublishBody = z.object({
@@ -230,6 +231,23 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       details: { publicationGate, disclosure: disposition.disclosure },
     });
   }
+  const intentCoverage = parseIntCoverage(existing.body);
+  if (
+    existing.creationMethod === 'ai_research'
+    && hasBlockingIntentCoverage(intentCoverage)
+    && !acknowledgeDisclosure
+  ) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: '必答问题里仍有未知或冲突项；确认披露后才能继续发布',
+      requestId,
+      details: {
+        requiresIntentCoverageAcknowledgement: true,
+        intentCoverage,
+        publicationGate,
+      },
+    });
+  }
   if (
     existing.creationMethod === 'ai_research'
     && (disposition.requiresAcknowledgement || !publicationGate)
@@ -292,6 +310,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       const freshReview = publicationReview(fresh);
       if (freshReview.version !== version) throw new Error('RESEARCH_PUBLISH_CONFLICT');
       if (aiAssisted && freshReview.disposition.hardBlocked) throw new Error('RESEARCH_PUBLISH_REVIEW_GATE');
+      if (aiAssisted && hasBlockingIntentCoverage(parseIntCoverage(fresh.body)) && !acknowledgeDisclosure) {
+        throw new Error('RESEARCH_PUBLISH_COVERAGE_REQUIRED');
+      }
       if (aiAssisted && (freshReview.disposition.requiresAcknowledgement || !freshReview.publicationGate) && !acknowledgeDisclosure) {
         throw new Error('RESEARCH_PUBLISH_DISCLOSURE_REQUIRED');
       }
@@ -423,6 +444,12 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
       return NextResponse.json({ code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '研究或审核状态正在更新，请刷新后重新确认发布。', requestId }, { status: 409 });
+    }
+    if (error instanceof Error && error.message === 'RESEARCH_PUBLISH_COVERAGE_REQUIRED') {
+      return NextResponse.json(
+        { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '必答问题覆盖已更新；请重新确认本次披露。', requestId },
+        { status: 409 },
+      );
     }
     if (error instanceof Error && error.message === 'RESEARCH_PUBLISH_DISCLOSURE_REQUIRED') {
       return NextResponse.json(

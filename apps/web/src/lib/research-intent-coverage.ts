@@ -77,3 +77,10 @@ export function parseIntCoverage(body: string): IntentCoverage | null {
   for (const row of rows) counts[row.status] += 1;
   return { present: true, rows, counts };
 }
+
+/** Unknown or conflicting must-answer questions need an explicit publication ack. */
+export function hasBlockingIntentCoverage(
+  coverage: IntentCoverage | null | undefined,
+): boolean {
+  return Boolean(coverage && (coverage.counts.unknown + coverage.counts.conflict > 0));
+}

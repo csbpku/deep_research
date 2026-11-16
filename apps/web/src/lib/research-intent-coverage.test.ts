@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseIntCoverage } from './research-intent-coverage';
+import { hasBlockingIntentCoverage, parseIntCoverage } from './research-intent-coverage';
 
 const sample = `## 一句话回答
 
@@ -40,5 +40,14 @@ describe('parseIntentCoverage', () => {
     const coverage = parseIntCoverage(body);
     expect(coverage?.rows).toHaveLength(1);
     expect(coverage?.counts.evidence).toBe(1);
+  });
+
+  it('blocks only unknown or conflicting questions', () => {
+    const partial = parseIntCoverage(`## 覆盖检查\n\n| 必答问题 | 状态 | 依据 |\n|---|---|---|\n| Q1 | 有证据 | [S1] |\n| Q2 | 部分覆盖 | 仅覆盖一半 |\n`);
+    const blocked = parseIntCoverage(`## 覆盖检查\n\n| 必答问题 | 状态 | 依据 |\n|---|---|---|\n| Q1 | 未知 | 本轮未确认 |\n| Q2 | 冲突 | 来源互相矛盾 |\n`);
+
+    expect(hasBlockingIntentCoverage(partial)).toBe(false);
+    expect(hasBlockingIntentCoverage(blocked)).toBe(true);
+    expect(hasBlockingIntentCoverage(null)).toBe(false);
   });
 });
