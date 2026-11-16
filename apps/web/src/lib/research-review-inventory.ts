@@ -79,7 +79,6 @@ export function resolveResearchReviewInventory(input: {
 }) {
   const runs = researchReviewInventoryRuns(input.reviewRuns, input.revisionHash);
   const latest = runs[0];
-  const machineIncomplete = !hasCompletedFullReviewInventory(latest);
   const entries = new Map<string, InventoryEntry>();
   const processedRunIds = new Set<string>();
   for (const run of [...runs].reverse()) {
@@ -116,6 +115,16 @@ export function resolveResearchReviewInventory(input: {
     processedRunIds.add(run.id);
   }
   const inventory = [...entries.values()];
+  const emptyButClean = Boolean(
+    latest
+    && inventory.length === 0
+    && latest.executionStatus === 'completed'
+    && latest.outcome !== 'unavailable'
+    && latest.outcome !== 'stale'
+    && reviewCoverageStatus(latest.summary) === 'complete'
+    && asReviewClaims(latest.claims).length === 0,
+  );
+  const machineIncomplete = !hasCompletedFullReviewInventory(latest) && !emptyButClean;
   // A malformed/legacy blocked outcome with no addressable high-risk claim
   // is still a warning. A one-claim retry cannot silently explain it away.
   // Addressable blockers instead follow their exact claim, so a valid local

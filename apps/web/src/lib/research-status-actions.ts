@@ -6,8 +6,7 @@ import type { TxClient } from './radar/tx';
 import { queuePersonalKnowledgeIndex } from './personal-knowledge-index';
 import { resolveCurrentReviewState } from './research-review-state';
 import { resolveResearchReviewInventory } from './research-review-inventory';
-import { evaluateResearchSufficiency } from './research-sufficiency';
-import { ResearchBriefSchema } from '@deep-research/shared/schemas';
+import { getReviewPublicationGate, reviewCoverageStatus } from './research-review-decisions';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { toApiErrorResponse } from './errors';
 
@@ -71,16 +70,6 @@ export async function transitionResearchStatus(
       risks: true,
       tags: true,
       reviewStatus: true,
-      sourceAiJob: {
-        select: {
-          brief: true,
-          sourcePolicy: true,
-          aiResearchSources: {
-            orderBy: { createdAt: 'asc' },
-            select: { canonicalKey: true, title: true, snippet: true },
-          },
-        },
-      },
       reviewRuns: {
         orderBy: { createdAt: 'desc' },
         take: 50,
@@ -126,21 +115,28 @@ export async function transitionResearchStatus(
       existing.reviewRuns ?? [],
       existing.reviewStatus,
     );
-    const brief = ResearchBriefSchema.safeParse(existing.sourceAiJob?.brief);
-    const sufficiency = evaluateResearchSufficiency({
-      brief: brief.success ? brief.data : null,
-      sources: existing.sourceAiJob?.aiResearchSources ?? [],
-      reportContent: existing.body,
-      sourcePolicy: existing.sourceAiJob?.sourcePolicy
-        ?? (brief.success ? brief.data.sourcePolicy : null),
-    });
-    const gate = reviewState.isCurrentRevision
+    const inventoryGate = reviewState.isCurrentRevision
       ? resolveResearchReviewInventory({
           reviewRuns: existing.reviewRuns ?? [],
           revisionHash: reviewState.revisionHash,
-          researchSufficiencyStatus: sufficiency.status,
+          // Restore only asks whether the archived text still matches the
+          // reviewed claims; source sufficiency was assessed at publish time.
+          researchSufficiencyStatus: 'not_assessed',
         }).gate
       : null;
+    // A legitimate all-clear review can contain zero claims; the inventory
+    // intentionally ignores it as a replacement boundary, so fall back to the
+    // current run only when there is no accumulated conflict to carry.
+    const gate = inventoryGate ?? (reviewState.run
+      ? getReviewPublicationGate({
+          executionStatus: reviewState.run.executionStatus,
+          outcome: reviewState.run.outcome,
+          coverageStatus: reviewCoverageStatus(reviewState.run.summary),
+          researchSufficiencyStatus: 'not_assessed',
+          claims: reviewState.run.claims,
+          decisions: reviewState.run.decisions,
+        })
+      : null);
     if (!gate || !['clear', 'publish_with_disclosure'].includes(gate.status)) {
       throw new ResearchRestoreReviewRequiredError({
         reviewStatus: reviewState.status,
