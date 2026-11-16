@@ -580,3 +580,25 @@ P0 14 项已全部完成：雷达可见性、默认视图、时间语义、四�
 P0 14 项全部完成，最终 CI run `43169922086` 七个 job 全绿。PR #56 已更新标题与描述，分支 `codex/product-funnel-fixes` 55 个提交、125 个文件；**未合并、未部署**。
 
 临时脚手架已清理：6 个 P0 worktree 与已合并的 `codex/p0-*` 分支已删除；`.cache/`、`.impeccable/`、`.review-shots/` 与 `/tmp` 下的截图、CI 日志、JWT 脚本已删除。保留 `docs/review/2026-11-platform-review.md`、`docs/review/shots/`（正文引用的验收截图）和 `review-reader/`（Reader 0.2.37 的评审报告与截图），它们是评审证据，不属于临时缓存。
+
+### 13. 复核 PR #56 与真实调研迭代（2026-11-16）
+
+PR #56 在 11 月 12 日收口后没有直接合并，而是按“先复核、再真实跑一遍”的顺序继续。复核发现 GitHub 页面用的是旧 base（`776326f`），把 diff 放大成 144 个文件；按当前 `origin/main` 做三点比较，真实改动是 **106 files, +8,076/−1,585**，PR head 为 `1c4c05b`。三路审计确认聚合审核台账、`publicationVersion` 绑定、雷达可见性、确认页折叠与决策备忘都是真的，但也发现了 1 个 HIGH 与一组边界问题。
+
+**已修复的复核问题。**
+
+- **HIGH：预填草稿的空摘要字段 hash 不一致。** 创建草稿时用 `""` 算 revision hash、入库却写 `NULL`，而 Web 端把 `NULL` 当 `null`；只要背景/结论/风险中有一项为空，自动审核一完成就变成 stale，徽章与披露全部丢失。改为 hash 与 INSERT 共用 `{field: value or None}`。
+- **雷达证据泄露。** 未审核行的 `contentReviewDetails` 仍会带出最多 300 字的正文切片；现在只要正文被脱敏，审核 details 一并置空。
+- **反馈越权。** `/api/radar-feedback` 此前只校验 `source='daily'`，成员可以对隐藏行写判断并影响全局排序；现在先过 `isRadarSummaryVisible`，隐藏/归档行返回 404。
+- **零声明 clear 截断台账。** 空 claims 的 completed run 不再作为 replacement boundary，旧冲突会保留，并标记 `machineIncomplete`。
+- **发布确认未持久化。** 新增 `publishedReviewVersion / publishedReviewDisclosure / publishedReviewAcknowledgedAt`（迁移 `20261116000001_published_review_acknowledgement`），发布时把作者确认的披露快照写入；读者页显示“发布时已于 … 确认披露”，发布后核验状态变化时提示“作者确认的版本保留在审计记录中”。
+
+**真实调研流程发现的问题。** 用 e2e-admin 在本地发起三轮真实决策备忘任务，问题分别是连接池下的 `pg_advisory_xact_lock`、库存扣减选型、秒杀场景行锁与 Redis 锁分工。
+
+1. 第一轮任务研究成功，但自动审核 4 秒即 `unavailable`，错误为 `full-text inventory incomplete`。根因是清单阶段单个分块返回空/非 JSON 时 `ValueError` 穿过 `asyncio.gather`，整轮清单被丢弃。修复后单个分块失败只重试该块并标记未覆盖，不再让整份报告不可用；同一草稿重新审核在约 2 分钟内 `completed`，32 条 claims。
+2. 决策备忘仍会在末尾附「参考文献」，且发布摘要的结论/风险字段残留 `PostgreSQL Advisory Locks...JusDB Blog` 这类被扁平化的链接标题。现在备忘在 LLM 返回后删除尾部参考文献段落，超长报告保留头部与尾部 5k 字（避免丢结论），adapter 不再给已接受的备忘追加书目；摘要抽取直接丢弃 Markdown 链接而不是保留标题文本。第三轮任务已验证正文到「下一步验证」结束，没有参考文献段。
+3. 前两轮的摘要字段是旧代码生成的，仍带链接标题；第三轮新生成字段已清理。该差异说明预填字段一旦写入不会随正文重算，编辑页仍应允许作者改写。
+
+**真实发布验证。** 第一轮与第二轮草稿都通过编辑页「发布调研 → 勾选带披露发布 → 确认发布」成功发布，详情页显示「带披露发布」与披露条数。第三轮发布后，数据库记录 `publishedReviewAcknowledgedAt=2026-11-16 10:17:49`、披露为 JSON object；随后对已发布稿再跑一次核验，详情 API 返回 `publicationAcknowledgementOutdated=true`，页面显示“发布后核验状态已更新；下方为当前披露，作者发布时确认的版本保留在审计记录中”。
+
+**仍待处理。** 发布后的新声明仍无法逐条/批量处置（decisions 接口只允许 draft）；批量处置不幂等；备忘的单页长度仍依赖模型遵守 900 字约束；本轮 CI 与最终 commit 以推送后的 run 为准。
