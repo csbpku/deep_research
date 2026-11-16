@@ -325,7 +325,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     readerReviewRuns = [...new Map([...readerReviewRuns, ...(history?.reviewRuns ?? [])].map((run) => [run.id, run])).values()];
   }
   return NextResponse.json({
-    ...shapeResearchDetail(research, readerReviewRuns),
+    ...shapeResearchDetail(research, readerReviewRuns, research.authorId === u.id || u.role === 'admin'),
     canEdit,
     canManageStatus,
     researchTopics: research.researchTopics ?? [],
@@ -855,7 +855,7 @@ function shapeResearchDetail(r: {
   createdAt: Date;
   updatedAt: Date;
   author: { id: string; name: string; email: string };
-}, readerReviewRuns = r.reviewRuns) {
+}, readerReviewRuns = r.reviewRuns, includeAuditInternals = true) {
   const currentReview = resolveCurrentReviewState(r, readerReviewRuns, r.reviewStatus);
   const currentRevisionHash = currentReview.revisionHash;
   const parsedBrief = ResearchBriefSchema.safeParse(r.sourceAiJob?.brief);
@@ -902,9 +902,9 @@ function shapeResearchDetail(r: {
     reviewSummary: r.reviewSummary,
     reviewClaims: r.reviewClaims,
     reviewStartedAt: r.reviewStartedAt?.toISOString() ?? null,
-    reviewRunToken: r.reviewRunToken,
+    reviewRunToken: includeAuditInternals ? r.reviewRunToken : null,
     reviewedAt: r.reviewedAt?.toISOString() ?? null,
-    reviewDetails: r.reviewDetails,
+    reviewDetails: includeAuditInternals ? r.reviewDetails : null,
     // Published AI research must carry the reader-facing consequence of an
     // accepted low/medium-risk exception. This is derived from the exact
     // current run, so it cannot survive an edit as if it still applied.
@@ -955,10 +955,10 @@ function shapeResearchDetail(r: {
           heartbeatAt: run.heartbeatAt?.toISOString() ?? null,
           completedAt: run.completedAt?.toISOString() ?? null,
           summary: run.summary,
-          claims: run.claims,
-          details: run.details,
+          claims: includeAuditInternals ? run.claims : [],
+          details: includeAuditInternals ? run.details : null,
           triggeredBy: run.triggeredBy,
-          decisions: (run.decisions ?? []).map((decision) => ({
+          decisions: includeAuditInternals ? (run.decisions ?? []).map((decision) => ({
             id: decision.id,
             claimId: decision.claimId,
             revisionHash: decision.revisionHash,
@@ -967,7 +967,7 @@ function shapeResearchDetail(r: {
             metadata: decision.metadata,
             actorId: decision.actorId,
             createdAt: decision.createdAt.toISOString(),
-          })),
+          })) : [],
           createdAt: run.createdAt.toISOString(),
         }))
       : [],
