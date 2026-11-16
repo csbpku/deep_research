@@ -31,6 +31,7 @@ import { resolveResearchSourceLink } from '../../../../lib/research-source-link'
 import { resolveCurrentReviewState } from '../../../../lib/research-review-state';
 import { resolveResearchReviewInventory } from '../../../../lib/research-review-inventory';
 import { hasCompletedReviewInventory, projectResearchReviewForReader } from '../../../../lib/research-review-reader';
+import { parseIntCoverage } from '../../../../lib/research-intent-coverage';
 import { researchPublicationVersion } from '../../../../lib/research-publication-version';
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
@@ -913,6 +914,7 @@ function shapeResearchDetail(r: {
     publicationHardBlocked: publicationDisclosure.reviewVerification === 'conflicted' || currentReviewPublicationGate?.status === 'blocked',
     aiJobId: r.sourceAiJob?.id ?? null,
     researchObjective: parsedBrief.success ? parsedBrief.data.objective : null,
+    intentCoverage: parseIntCoverage(r.body),
     publishedReviewAcknowledgedAt: r.publishedReviewAcknowledgedAt?.toISOString() ?? null,
     publishedReviewDisclosure: r.publishedReviewDisclosure,
     publicationAcknowledgementOutdated: r.status === 'published'

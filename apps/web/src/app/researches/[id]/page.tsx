@@ -15,6 +15,7 @@
 // 布局：max-w-measure（760px）—— 中文长文的舒适量度。
 
 import { researchReviewDisclosureMessages, type ResearchReviewReaderItem, type ResearchReviewReaderSummary, type ResearchReviewVerification } from '@/lib/research-review-reader';
+import type { IntentCoverage, IntentCoverageStatus } from '@/lib/research-intent-coverage';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -111,6 +112,7 @@ interface ResearchDetail {
   canEdit: boolean;
   aiJobId?: string | null;
   researchObjective?: 'explore' | 'learn' | 'investigate' | 'decide' | null;
+  intentCoverage?: IntentCoverage | null;
   currentReview?: { revisionHash: string; status: string } | null;
   reviewRuns?: Array<{ id: string; revisionHash: string; executionStatus: string; outcome?: string | null; summary?: unknown; claims?: unknown; decisions?: unknown }>;
   canManageStatus: boolean;
@@ -125,6 +127,10 @@ interface ResearchDetail {
   audits?: AuditEntry[];
   commentCount?: number;
 }
+
+const COVERAGE_LABEL: Record<IntentCoverageStatus, string> = {
+  evidence: '有证据', partial: '部分覆盖', unknown: '未知', conflict: '冲突',
+};
 
 interface AuditEntry {
   id: string;
@@ -492,6 +498,37 @@ export default function ResearchDetailPage() {
           </p>
         </SectionCard>
       )}
+
+      {data.intentCoverage?.present && data.intentCoverage.rows.length > 0 ? (
+        <SectionCard
+          title="必答问题覆盖"
+          tone={data.intentCoverage.counts.unknown + data.intentCoverage.counts.conflict > 0 ? 'warning' : 'success'}
+          icon={data.intentCoverage.counts.unknown + data.intentCoverage.counts.conflict > 0 ? AlertTriangle : CheckCircle2}
+        >
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1.5 }}>
+            {(['evidence', 'partial', 'unknown', 'conflict'] as IntentCoverageStatus[]).map(status => (
+              <Typography key={status} component="span" variant="metadata" sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: 'action.hover' }}>
+                {COVERAGE_LABEL[status]} {data.intentCoverage!.counts[status]}
+              </Typography>
+            ))}
+          </Box>
+          <Box component="ul" sx={{ m: 0, pl: 2.5, display: 'grid', gap: 0.75 }}>
+            {data.intentCoverage.rows.map((row, index) => (
+              <Box component="li" key={`${row.question}-${index}`} sx={{ typography: 'body2' }}>
+                <span>{row.question}</span>
+                <Typography component="span" variant="metadata" sx={{ ml: 1, color: row.status === 'evidence' ? 'success.main' : row.status === 'conflict' ? 'error.main' : 'warning.main' }}>
+                  {COVERAGE_LABEL[row.status]}
+                </Typography>
+                {row.evidence ? (
+                  <Typography component="span" variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                    {row.evidence.replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1').slice(0, 160)}
+                  </Typography>
+                ) : null}
+              </Box>
+            ))}
+          </Box>
+        </SectionCard>
+      ) : null}
 
       <div className={styles.columns} data-has-aside={data.status === 'published' ? 'true' : 'false'}>
       <div className={styles.mainColumn}>
