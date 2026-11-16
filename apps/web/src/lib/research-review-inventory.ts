@@ -126,7 +126,8 @@ export function resolveResearchReviewInventory(input: {
     && reviewCoverageStatus(gateRun.summary) === 'complete'
     && asReviewClaims(gateRun.claims).length === 0,
   );
-  const machineIncomplete = !hasCompletedFullReviewInventory(gateRun) && !emptyButClean;
+  const machineIncomplete = !hasCompletedFullReviewInventory(latest) && !emptyButClean;
+  const gateInventoryIncomplete = !hasCompletedFullReviewInventory(gateRun) && !emptyButClean;
   // A malformed/legacy blocked outcome with no addressable high-risk claim
   // is still a warning. A one-claim retry cannot silently explain it away.
   // Addressable blockers instead follow their exact claim, so a valid local
@@ -142,7 +143,7 @@ export function resolveResearchReviewInventory(input: {
   const gate = gateRun ? getReviewPublicationGate({
     executionStatus: 'completed',
     outcome: unexplainedBlocker ? 'blocked' : hasCompletedFullReviewInventory(gateRun) ? gateRun.outcome : 'clear',
-    coverageStatus: machineIncomplete ? 'insufficient' : reviewCoverageStatus(gateRun.summary),
+    coverageStatus: gateInventoryIncomplete ? 'insufficient' : reviewCoverageStatus(gateRun.summary),
     researchSufficiencyStatus: input.researchSufficiencyStatus, claims, decisions,
   }) : null;
   return { runs, latest, inventory, gate, machineIncomplete };
