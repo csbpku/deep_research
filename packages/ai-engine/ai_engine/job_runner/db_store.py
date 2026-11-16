@@ -239,7 +239,7 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
         source_refs=tuple(clean),
         report_length=str(row.get("reportLength") or "standard"),
         max_urls_to_scrape=max_urls,
-        objective=str(row.get("objective") or "investigate"),
+        objective=str(row.get("objective") or ""),
     )
 
 
