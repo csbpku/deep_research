@@ -1237,7 +1237,7 @@ async def test_browser_reading_mode_uses_full_text_transiently_without_persistin
     assert full_text not in str(insert_params)
 
 
-async def test_browser_reading_mode_fetches_arxiv_full_html_for_scoring(
+async def test_browser_reading_mode_uses_arxiv_abstract_without_full_html(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RADAR_READING_MODE", "browser")
@@ -1309,16 +1309,17 @@ async def test_browser_reading_mode_fetches_arxiv_full_html_for_scoring(
     )
 
     assert len(scored_content) == 1
-    assert fetched_urls
-    assert fetched_urls[0] == "https://arxiv.org/html/2609.12345"
-    assert "full paper describes its evaluation protocol" in scored_content[0]
+    assert fetched_urls == []
+    assert "measured task results" in scored_content[0]
+    assert "full paper describes its evaluation protocol" not in scored_content[0]
     _insert_sql, insert_params = next(
         item for item in pool.connection_value.executions
         if 'INSERT INTO "summaries"' in item[0]
     )
     assert "external_reading" in insert_params[10]
     assert insert_params[18] == insert_params[19]
-    assert not insert_params[15].startswith("来源摘要初筛：")
+    assert insert_params[15].startswith("来源摘要初筛：")
+    assert "evidence_source_abstract" in insert_params[10]
     assert insert_params[23] is None
     assert insert_params[24] == "arxiv"
     assert insert_params[27] is None

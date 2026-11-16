@@ -364,3 +364,9 @@ migration does not grant a review pass or manufacture a score.
 默认每次发现最近 30 条；来源配置 `max_entries` 可设为 1–60，超过 60 按 60 处理。重放依靠数据库去重，扩大窗口可能增加模型调用，且不能保证补回窗口以外历史；历史补收应先核对来源可提供的范围和成本，不能将窗口重放视为完整补收。
 
 RSS 的非成功 HTTP 响应或 HTML 错误页记为错误；合法空 feed 仍可成功，连续空结果仅作为排查提示。运行明细分别显示本次待评分与来源当前积压。本次有 token 但无费用记录时展示费用未记录；已记录金额不代表完整账单，不能据此推算实际费用。
+
+### 自动发现的成本和证据范围
+
+外部阅读模式的 arXiv 新条目以来源官方摘要初筛，标记 `evidence_source_abstract`；其他长文章共享最多三个原文块的证据提取，抽样时标记 `evidence_source_excerpt`。导读与评分必须声明有限证据范围，不声称通读未提供的全文。片段低分只进入 `SOURCE_EXCERPT_NOISE_PENDING`，不能建立永久噪声处置；同一出版身份在未解决时不重复付费初筛。已有有效评分与历史原文不自动重跑或覆盖。
+
+单篇、来源run、整条pipeline的每个真实发送尝试均先预留完整prompt估算和最大输出，重试不重置预算，并发不得超订。触顶记录 `MODEL_WORK_BUDGET_EXCEEDED` 和 partial，不增加来源连续失败或自动暂停，也不在同一pipeline整轮重试。已发生的提取、摘要、评分用量计入run；没有供应商usage的失败只占保守预算，不虚构实付tokens。环境阈值见[环境契约](./env-and-scripts.md)。

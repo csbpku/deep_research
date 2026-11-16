@@ -72,6 +72,7 @@ asyncio_mode = "auto"
 # 客户端驱动 event loop 排到后台 task。asyncio_mode = auto 让所有 test/fixture
 # 默认当 async 处理。
 markers = [
+    "live_llm: explicit paid provider integration; requires opt-in and daily budget.",
     "requires_db: tests that hit a real Postgres — skip if DATABASE_URL is unreachable.",
     "e2e: end-to-end tests that need a real Postgres + real workers. Run with `pytest -m e2e` (and E2E=1).",
 ]
