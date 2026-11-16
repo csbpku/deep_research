@@ -1,6 +1,6 @@
 import pytest
 
-from ai_engine.decision_memo import build_decision_memo_prompt, is_valid_decision_memo
+from ai_engine.decision_memo import build_decision_memo_prompt, is_valid_decision_memo, memo_readable_chars
 
 
 def test_memo_prompt_keeps_topic_sources_and_contract() -> None:
@@ -83,3 +83,9 @@ async def test_oversized_memo_gets_one_shortening_pass(monkeypatch: pytest.Monke
 
     assert result == short_memo.strip()
     assert len(calls) == 2
+
+
+def test_memo_length_ignores_link_targets() -> None:
+    text = "决定 [Prisma 文档](https://prisma.io/very/long/path) 后继续。"
+    assert memo_readable_chars(text) < len(text)
+    assert memo_readable_chars(text) == len("决定 Prisma 文档 后继续。")

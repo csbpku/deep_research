@@ -4891,10 +4891,10 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     llm_spec=memo_spec,
                 )
                 if memo:
-                    # The converter is a second writer. Use the same captured
-                    # source namespace and citation boundary as the report,
-                    # then replace atomically only when all sections survive.
-                    memo = _materialize_evidence_citations(memo, sources)
+                    # A memo keeps the compact [S#] markers instead of
+                    # expanding every citation into a full Markdown link:
+                    # the link titles alone can triple the page length and
+                    # defeat the one-page contract.
                     memo = _clean_report_output(memo, sources)
                     memo_accepted = is_valid_decision_memo(memo)
                     if memo_accepted:

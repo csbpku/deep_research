@@ -18,7 +18,7 @@ logger = logging.getLogger("ai-engine")
 
 MEMO_MAX_SOURCE_CHARS = 20_000
 MEMO_MAX_TOKENS = 1_600
-MEMO_MAX_CHARS = 1_200
+MEMO_MAX_CHARS = 1_600
 
 MEMO_SYSTEM_PROMPT = (
     "你是技术决策备忘编辑。把研究报告压缩成一页可执行的决策备忘；"
@@ -53,7 +53,7 @@ MEMO_INSTRUCTIONS = """请把下面的研究报告改写成中文决策备忘，
 """
 
 
-MEMO_SHORTEN_PROMPT = """下面这份决策备忘仍然太长。请在不改变结论、不新增事实的前提下压缩到 900 字以内。
+MEMO_SHORTEN_PROMPT = """下面这份决策备忘仍然太长。请在不改变结论、不新增事实的前提下压缩到 1200 字以内。
 
 要求：
 - 保留原有的 # 决策备忘 与五个 ## 二级标题，标题顺序不变。
@@ -80,6 +80,13 @@ def strip_reference_section(text: str) -> str:
     if match is None:
         return text
     return text[: match.start()].rstrip()
+
+
+def memo_readable_chars(text: str) -> int:
+    """Count prose, not Markdown link targets or raw URLs."""
+    without_links = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    without_urls = re.sub(r"https?://\S+", "", without_links)
+    return len(without_urls)
 
 
 def build_decision_memo_prompt(topic: str, report: str, sources: Sequence[dict[str, Any]]) -> str:
@@ -153,7 +160,7 @@ async def _shorten_decision_memo(*, memo: str, request_id: str, llm_spec: str) -
     if (
         not getattr(result, "truncated", False)
         and is_valid_decision_memo(text)
-        and len(text) < len(memo)
+        and memo_readable_chars(text) < memo_readable_chars(memo)
     ):
         return text
     return None
@@ -190,18 +197,33 @@ async def condense_to_decision_memo(
             continue
         text = strip_reference_section((result.text or "").strip())
         if not getattr(result, "truncated", False) and is_valid_decision_memo(text):
-            if len(text) <= MEMO_MAX_CHARS:
+            if memo_readable_chars(text) <= MEMO_MAX_CHARS:
                 return text
-            shortened = await _shorten_decision_memo(
-                memo=text,
-                request_id=request_id,
-                llm_spec=llm_spec,
-            )
-            if shortened is not None:
-                return shortened
+            shortest = text
+            for _ in range(2):
+                shortened = await _shorten_decision_memo(
+                    memo=shortest,
+                    request_id=request_id,
+                    llm_spec=llm_spec,
+                )
+                if shortened is None:
+                    break
+                shortest = shortened
+                if memo_readable_chars(shortest) <= MEMO_MAX_CHARS:
+                    return shortest
+            if memo_readable_chars(shortest) < memo_readable_chars(text):
+                logger.warning(
+                    "ai-engine.decision_memo.shorten_missed_target",
+                    extra={
+                        "request_id": request_id,
+                        "chars": memo_readable_chars(shortest),
+                        "target": MEMO_MAX_CHARS,
+                    },
+                )
+                return shortest
             logger.warning(
                 "ai-engine.decision_memo.too_long",
-                extra={"request_id": request_id, "chars": len(text)},
+                extra={"request_id": request_id, "chars": memo_readable_chars(text)},
             )
             return text
         logger.warning(
