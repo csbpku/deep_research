@@ -2204,3 +2204,15 @@ def test_web_brief_does_not_get_a_bibliography() -> None:
 
     assert brief == body
     assert "## 参考文献" in report
+
+
+def test_materialize_does_not_duplicate_an_existing_markdown_link() -> None:
+    sources = [_source("https://example.com/guide", "Guide", "Evidence.")]
+
+    materialized = _materialize_evidence_citations(
+        "结论 [S1](https://example.com/guide)。",
+        sources,
+        compact=True,
+    )
+
+    assert materialized == "结论 [S1](https://example.com/guide)。"

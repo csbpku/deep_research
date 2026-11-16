@@ -3626,7 +3626,7 @@ def _materialize_evidence_citations(
     # that Chinese writers occasionally emit. Do not interpret arbitrary
     # numeric bracket text as a citation.
     materialized = re.sub(
-        r"(?:\[S(?P<index>\d+)\]|【S(?P<full_index>\d+)】)",
+        r"(?:\[S(?P<index>\d+)\](?!\()|【S(?P<full_index>\d+)】)",
         replace,
         report,
     )
@@ -3713,10 +3713,10 @@ def _intent_report_contract(objective: str) -> str | None:
             "3. `## 分层解释`：从最小可用例子出发，逐层解释工作原理、关键机制和为什么这样设计；\n"
             "4. `## 可运行示例`：给出能直接执行或复现的最小代码/命令，并解释每一步；\n"
             "5. `## 边界与常见误区`：说明什么时候不适用、容易误解的点，以及错误使用会发生什么；\n"
-            "6. `## 覆盖检查`：用表格逐行列出研究计划中的每个必答问题，标记‘有证据 / 未知 / 冲突’，并给出 [S#] 或说明缺口；\n"
-            "7. `## 自检`：给出 3 个由浅入深的问题，并附简短答案，帮助读者确认是否理解；\n"
+            "6. `## 覆盖检查`：用表格只列研究计划中的必答问题，标记‘有证据 / 未知 / 冲突’，并给出 [S#] 或说明缺口；完成标准不要混进表格；\n"
+            "7. `## 自检`：先逐条写‘完成标准：已满足/未满足’，再给出 3 个由浅入深的问题和简短答案；\n"
             "8. `## 一手来源与下一步`：列出官方文档、源码或规范，并给出一个最小的下一步练习。\n"
-            "每个事实性判断尽量紧邻 [S#]；没有直接证据就写‘本轮未确认’。不要堆砌链接，"
+            "每个事实性判断尽量紧邻 [S#]；行内引用只写 [S#]，完整链接放到参考来源；没有直接证据就写‘本轮未确认’。不要堆砌链接，"
             "不要用大段产品对比替代机制解释。\n"
         )
     if objective == "investigate":
@@ -4911,7 +4911,11 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             # Resolve stable evidence ids before cleaning links. This makes
             # citations deterministic even when the writer chooses a nearby
             # first-party URL variant such as www/non-www.
-            report = _materialize_evidence_citations(report, sources)
+            report = _materialize_evidence_citations(
+                report,
+                sources,
+                compact=job.request.objective in {"learn", "investigate", "explore"},
+            )
             report = _clean_report_output(report, sources)
             report = await _ensure_complete_report(researcher, report, sources)
             # Preserve the distinction between a successful report writer and
@@ -4950,7 +4954,11 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             )
             # Recovery is a second writer, so its output must cross the same
             # citation/materialization boundary as the primary writer.
-            report = _materialize_evidence_citations(report, sources)
+            report = _materialize_evidence_citations(
+                report,
+                sources,
+                compact=job.request.objective in {"learn", "investigate", "explore"},
+            )
             report = _clean_report_output(report, sources)
             memo_accepted = False
             if job.request.report_type == "decision_memo":

@@ -57,3 +57,12 @@ def test_decision_intent_keeps_the_comparison_contract() -> None:
 
     assert "## 对比矩阵" in contract
     assert "## 结构化推荐" in contract
+
+
+def test_coverage_table_only_holds_must_answer_questions() -> None:
+    contract = _report_output_contract(
+        "学习 PostgreSQL 的 MVCC", report_type="research_report", objective="learn"
+    )
+
+    assert "完成标准不要混进表格" in contract
+    assert "行内引用只写 [S#]" in contract
