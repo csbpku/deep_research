@@ -88,6 +88,7 @@ beforeEach(() => {
   });
   mocks.createMany.mockResolvedValue({ count: 2 });
   mocks.transaction.mockImplementation((callback: (tx: unknown) => Promise<unknown>) => callback({
+    $executeRaw: vi.fn(),
     research: { findUnique: mocks.txResearchFindUnique },
     researchReviewRun: { findUnique: mocks.txRunFindUnique },
     researchReviewDecision: { createMany: mocks.createMany, findMany: mocks.findMany },
@@ -118,6 +119,44 @@ describe('batch review claim decisions', () => {
       actorId: USER_ID,
     });
     expect(await response.json()).toMatchObject({ acceptedCount: 2 });
+  });
+
+
+  it('accepts decisions on a published report', async () => {
+    const research = { ...baseResearch(twoClaims), status: 'published' };
+    mocks.researchFindUnique.mockResolvedValue(research);
+    mocks.txResearchFindUnique.mockResolvedValue(research);
+    mocks.txRunFindUnique.mockResolvedValue(research.reviewRuns[0]);
+    const response = await batchPost(
+      new Request(`http://localhost/api/researches/${RESEARCH_ID}/review/decisions/batch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ runId: RUN_ID, claimIds: ['claim-1'], reason: '发布后补充确认。' }),
+      }) as never,
+      params(),
+    );
+    expect(response.status).toBe(201);
+    expect(mocks.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('is idempotent when the same claims were already accepted', async () => {
+    const research = baseResearch(twoClaims);
+    const existing = [{
+      id: 'd1', claimId: 'claim-1', revisionHash: research.reviewRuns[0].revisionHash,
+      action: 'accept_uncertainty', reason: '批量接受', metadata: {}, actorId: USER_ID, createdAt: new Date(),
+    }];
+    mocks.txRunFindUnique.mockResolvedValue({ ...research.reviewRuns[0], decisions: existing });
+    const response = await batchPost(
+      new Request(`http://localhost/api/researches/${RESEARCH_ID}/review/decisions/batch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ runId: RUN_ID, claimIds: ['claim-1'], reason: '重复提交。' }),
+      }) as never,
+      params(),
+    );
+    expect(response.status).toBe(201);
+    expect(mocks.createMany).not.toHaveBeenCalled();
+    expect(await response.json()).toMatchObject({ acceptedCount: 0, alreadyAcceptedCount: 1 });
   });
 
   it('rejects a high-risk claim instead of silently skipping it', async () => {

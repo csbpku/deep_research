@@ -99,7 +99,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       },
     },
   });
-  if (!research || research.status !== 'draft' || (research.authorId !== user.id && user.role !== 'admin')) {
+  if (!research || (research.status !== 'draft' && research.status !== 'published') || (research.authorId !== user.id && user.role !== 'admin')) {
     return toApiErrorResponse({ code: ERROR_CODES.DRAFT_NOT_FOUND, message: '草稿不存在', requestId });
   }
   if (research.creationMethod !== 'ai_research') {
@@ -132,16 +132,11 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 
   const claims = asReviewClaims(run.claims);
   const claimById = new Map(claims.map((claim) => [reviewClaimId(claim), claim]));
-  const alreadyDecided = new Set((run.decisions ?? []).map((decision) => decision.claimId));
   const ineligible: Array<{ claimId: string; reason: string }> = [];
   for (const claimId of claimIds) {
     const claim = claimById.get(claimId);
     if (!claim) {
       ineligible.push({ claimId, reason: 'missing' });
-      continue;
-    }
-    if (alreadyDecided.has(claimId)) {
-      ineligible.push({ claimId, reason: 'already_decided' });
       continue;
     }
     if (!claimIsFactual(claim)) {
@@ -204,8 +199,13 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     ) {
       throw new Error('REVIEW_DECISION_STALE');
     }
+    // Serialize concurrent submissions for the same run. Without this, two
+    // requests can both observe "no decision" and write duplicate accepts.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${freshRun.id}))`;
+    const freshAlreadyDecided = new Set((freshRun.decisions ?? []).map((decision) => decision.claimId));
+    const freshClaimIds = claimIds.filter((claimId) => !freshAlreadyDecided.has(claimId));
     const freshClaims = asReviewClaims(freshRun.claims);
-    const records = claimIds.map((claimId) => {
+    const records = freshClaimIds.map((claimId) => {
       const claim = freshClaims.find((item) => reviewClaimId(item) === claimId);
       return {
         researchReviewRunId: freshRun.id,
@@ -223,7 +223,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         actorId: user.id,
       };
     });
-    await tx.researchReviewDecision.createMany({ data: records });
+    if (records.length > 0) await tx.researchReviewDecision.createMany({ data: records });
     const decisions = await tx.researchReviewDecision.findMany({
       where: { researchReviewRunId: freshRun.id },
       select: { id: true, claimId: true, revisionHash: true, action: true, reason: true, metadata: true, actorId: true, createdAt: true },
@@ -243,7 +243,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       claims: freshRun.claims,
       decisions,
     });
-    return { acceptedCount: records.length, gate };
+    return { acceptedCount: records.length, alreadyAcceptedCount: claimIds.length - records.length, gate };
   }).catch((error: unknown) => {
     if (error instanceof Error && error.message === 'REVIEW_DECISION_STALE') return null;
     throw error;
@@ -258,6 +258,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   }
   return NextResponse.json({
     acceptedCount: result.acceptedCount,
+    alreadyAcceptedCount: result.alreadyAcceptedCount,
     publicationGate: { status: result.gate.status, openCount: result.gate.openCount },
   }, { status: 201 });
 });
