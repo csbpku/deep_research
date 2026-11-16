@@ -29,6 +29,7 @@ import { researchPublicationVersion } from '../../../../../lib/research-publicat
 import { projectResearchReviewForReader } from '../../../../../lib/research-review-reader';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import { hasBlockingIntentCoverage, parseIntCoverage } from '../../../../../lib/research-intent-coverage';
+import { checkComparisonMatrix } from '../../../../../lib/research-comparison-matrix';
 
 const IdParam = z.object({ id: z.string().uuid() });
 const PublishBody = z.object({
@@ -55,6 +56,7 @@ const publicationSelect = {
   updatedAt: true,
   sourceAiJob: {
     select: {
+      reportType: true,
       brief: true,
       sourcePolicy: true,
       aiResearchSources: {
@@ -231,6 +233,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       details: { publicationGate, disclosure: disposition.disclosure },
     });
   }
+  const comparison = checkComparisonMatrix(existing.body);
+  if (existing.creationMethod === 'ai_research' && existing.sourceAiJob?.reportType === 'comparison_matrix' && comparison.unmarked.length > 0) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: `对比矩阵有 ${comparison.unmarked.length} 个单元格既没有证据编号，也没有标为未知或冲突`,
+      requestId,
+      details: { requiresComparisonEvidence: true, comparison },
+    });
+  }
   const intentCoverage = parseIntCoverage(existing.body);
   if (
     existing.creationMethod === 'ai_research'
@@ -295,6 +306,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   // factual conflicts; an artificial "must edit one field" requirement is
   // not part of the publishing contract.
   const aiAssisted = existing.creationMethod === 'ai_research';
+
 
   // $transaction: compare-and-set status/review + audit —— 审计失败时正文
   // 修改整体回滚。The initial read above is only for a friendly response;

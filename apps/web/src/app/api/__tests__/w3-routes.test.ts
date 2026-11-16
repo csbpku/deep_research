@@ -232,6 +232,28 @@ describe('research provenance input', () => {
     expect(published.publishedReviewDisclosure).toBeTruthy();
   });
 
+  it('rejects a comparison matrix cell that has neither evidence nor an explicit gap', async () => {
+    const body = '# 对比\n\n## 对比矩阵\n\n| 方案 | 并发安全 |\n|---|---|\n| A | 性能更好，无需锁。 |\n';
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'Compare', body, background: '背景', conclusion: '结论',
+      risks: '风险', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [],
+      sourceAiJob: { reportType: 'comparison_matrix', brief: null, sourcePolicy: 'prefer_user_sources', aiResearchSources: [] },
+    });
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).details.requiresComparisonEvidence).toBe(true);
+  });
+
   it('snapshots intent coverage when publishing an AI draft', async () => {
     const now = new Date();
     const body = 'AI output\n\n## 覆盖检查\n\n| 必答问题 | 状态 | 依据 |\n|---|---|---|\n| 核心机制是什么？ | 有证据 | [S1] |\n\n## 自检\n'.replace(/\n/g, '\n');
