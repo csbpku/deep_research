@@ -2577,7 +2577,8 @@ async def _run_source(
                     # Confirmed noise never enters summaries. A minimal identity
                     # receipt prevents rediscovery from paying for the same work.
                     if ((feed_excerpt_fallback or abstract_first
-                            or (shared is not None and shared.is_excerpt)) and distilled_result is not None
+                            or (shared is not None and shared.selected_chunks < shared.source_chunks))
+                            and distilled_result is not None
                             and not getattr(distilled_result, "is_default", False)
                             and getattr(distilled_result, "tier", None) == "noise"):
                         # Incomplete source evidence cannot establish that the

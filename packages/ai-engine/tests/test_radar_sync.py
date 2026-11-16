@@ -951,8 +951,12 @@ async def test_new_noise_with_prior_research_url_is_preserved(monkeypatch: pytes
                    for sql, _ in pool.connection_value.executions)
 
 
-async def test_github_repo_metadata_fallback_still_gets_one_distilled_score() -> None:
+@pytest.mark.parametrize("reading_mode,description_repeat", [("enriched", 1), ("browser", 1), ("browser", 10)])
+async def test_github_repo_metadata_fallback_still_gets_one_distilled_score(
+    monkeypatch: pytest.MonkeyPatch, reading_mode: str, description_repeat: int,
+) -> None:
     """A blocked repo page must not bypass the repo's tier decision."""
+    monkeypatch.setenv("RADAR_READING_MODE", reading_mode)
     pool = _Pool([_source("github-source", "github")])
     calls: list[tuple[str, str, dict[str, Any]]] = []
 
@@ -961,7 +965,7 @@ async def test_github_repo_metadata_fallback_still_gets_one_distilled_score() ->
             RadarCandidate(
                 title="acme/agent",
                 url="https://github.com/acme/agent",
-                snippet="An agent runtime with durable workflows and CLI tooling.",
+                snippet="An agent runtime with durable workflows and CLI tooling. " * description_repeat,
                 content_origin="api",
                 tags=("github", "repository"),
                 repo_signals={"stars": 1200, "forks": 80, "openIssues": 4},
@@ -1015,7 +1019,11 @@ async def test_github_repo_metadata_fallback_still_gets_one_distilled_score() ->
     assert result.runs[0].skipped_distilled_noise == 1
     assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
     assert len(calls) == 1
-    assert "acme/agent" in calls[0][1]
+    assert calls[0][0] == "acme/agent"
+    if description_repeat == 1:
+        assert "acme/agent" in calls[0][1]
+    else:
+        assert "durable workflows and CLI tooling" in calls[0][1]
     assert calls[0][2]["structured_signals"]["stars"] == 1200
     assert not any(
         sql.startswith('INSERT INTO "radar_sync_diagnostics"') and 'PENDING_SCORE' in params

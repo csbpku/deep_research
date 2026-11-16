@@ -31,7 +31,7 @@ async def prepare_shared_evidence(title: str, content: str, *, is_excerpt: bool 
     selected = chunks if len(chunks) <= 3 else [chunks[0], chunks[len(chunks) // 2], chunks[-1]]
     limited = is_excerpt or len(selected) < len(chunks)
     selected = [
-        replace(c, index=i, section=f"原文分块{c.index}/{len(chunks)} {c.section}")
+        replace(c, index=i, section=f"原文分块{c.index}/{len(chunks)} {c.section}"[:160])
         for i, c in enumerate(selected, 1)
     ]
     packets = await _extract_scoring_evidence(
