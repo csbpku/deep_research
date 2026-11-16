@@ -494,6 +494,7 @@ model Research {
   // state can change later; this snapshot keeps that confirmation auditable
   // and lets readers see when the live disclosure has moved on.
   publishedReviewVersion        String?   @db.Char(64)
+  publishedReviewRevisionHash   String?   @db.Char(64)
   publishedReviewDisclosure     Json?     @db.JsonB
   publishedReviewAcknowledgedAt DateTime? @db.Timestamptz(3)
 

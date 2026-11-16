@@ -13,6 +13,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../../../../lib/db';
 import { apiHandler } from '../../../../../lib/api-handler';
 import { requireUser } from '../../../../../lib/auth/session';
+import { hashResearchRevision } from '../../../../../lib/research-revision';
 import { toApiErrorResponse } from '../../../../../lib/errors';
 import { log, withRequestId } from '../../../../../lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
@@ -326,6 +327,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           // Keep the acknowledged disclosure immutable even if a later review
           // changes what the reader would see today.
           publishedReviewVersion: version,
+          publishedReviewRevisionHash: hashResearchRevision(existing),
           publishedReviewDisclosure: acknowledgeDisclosure && freshReview.disposition.disclosure
             ? (freshReview.disposition.disclosure as unknown as Prisma.InputJsonValue)
             : Prisma.JsonNull,

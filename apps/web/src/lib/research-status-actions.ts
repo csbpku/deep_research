@@ -5,6 +5,7 @@ import { ADMIN_TARGET_TYPE, writeAdminAction } from './radar/admin-actions';
 import type { TxClient } from './radar/tx';
 import { queuePersonalKnowledgeIndex } from './personal-knowledge-index';
 import { resolveCurrentReviewState } from './research-review-state';
+import { hashResearchRevision } from './research-revision';
 import { resolveResearchReviewInventory } from './research-review-inventory';
 import { getReviewPublicationGate, reviewCoverageStatus } from './research-review-decisions';
 import { ERROR_CODES } from '@deep-research/shared/errors';
@@ -60,6 +61,8 @@ export async function transitionResearchStatus(
       id: true,
       status: true,
       publishedAt: true,
+      publishedReviewAcknowledgedAt: true,
+      publishedReviewRevisionHash: true,
       type: true,
       authorId: true,
       creationMethod: true,
@@ -127,7 +130,12 @@ export async function transitionResearchStatus(
     // A legitimate all-clear review can contain zero claims; the inventory
     // intentionally ignores it as a replacement boundary, so fall back to the
     // current run only when there is no accumulated conflict to carry.
-    const gate = inventoryGate ?? (reviewState.run
+    const unchangedAcknowledged = Boolean(
+      existing.publishedReviewAcknowledgedAt
+      && existing.publishedReviewRevisionHash
+      && existing.publishedReviewRevisionHash === hashResearchRevision(existing),
+    );
+    const gate = unchangedAcknowledged ? { status: 'clear' } : inventoryGate ?? (reviewState.run
       ? getReviewPublicationGate({
           executionStatus: reviewState.run.executionStatus,
           outcome: reviewState.run.outcome,
