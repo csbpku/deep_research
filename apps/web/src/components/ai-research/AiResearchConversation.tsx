@@ -388,12 +388,12 @@ export function AiResearchConversation({
   const [planning, setPlanning] = useState(false);
   const [brief, setBrief] = useState<BriefValue | null>(null);
 
-  // The confirmed intent selects the default artifact; an explicit pick wins.
-  // This keeps "learn" from silently producing a decision memo.
-  useEffect(() => {
-    if (reportTypeTouchedRef.current || !brief?.objective) return;
-    setReportType(brief.objective === 'decide' ? 'decision_memo' : 'research_report');
-  }, [brief?.objective]);
+  // Apply the confirmed intent's default once, when the plan arrives. A user
+  // pick wins, and a late re-render must never reset it.
+  function applyIntentDefault(next: BriefValue | null) {
+    if (!next?.objective || reportTypeTouchedRef.current) return;
+    setReportType(next.objective === 'decide' ? 'decision_memo' : 'research_report');
+  }
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorKind, setErrorKind] = useState<'save' | 'submit' | 'restore' | 'validation' | null>(null);
@@ -1342,6 +1342,7 @@ export function AiResearchConversation({
                     )}
                       onBriefReady={(value) => {
                         setBrief(value);
+                        applyIntentDefault(value);
                         // A new plan gets a fresh cached preflight; only an
                         // explicit "重新检查" should bypass the engine cache.
                         setPreflightAttempt(0);
