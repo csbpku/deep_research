@@ -5,7 +5,9 @@ import { ADMIN_TARGET_TYPE, writeAdminAction } from './radar/admin-actions';
 import type { TxClient } from './radar/tx';
 import { queuePersonalKnowledgeIndex } from './personal-knowledge-index';
 import { resolveCurrentReviewState } from './research-review-state';
-import { getReviewPublicationGate, reviewCoverageStatus } from './research-review-decisions';
+import { resolveResearchReviewInventory } from './research-review-inventory';
+import { evaluateResearchSufficiency } from './research-sufficiency';
+import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { toApiErrorResponse } from './errors';
 
@@ -69,6 +71,16 @@ export async function transitionResearchStatus(
       risks: true,
       tags: true,
       reviewStatus: true,
+      sourceAiJob: {
+        select: {
+          brief: true,
+          sourcePolicy: true,
+          aiResearchSources: {
+            orderBy: { createdAt: 'asc' },
+            select: { canonicalKey: true, title: true, snippet: true },
+          },
+        },
+      },
       reviewRuns: {
         orderBy: { createdAt: 'desc' },
         take: 50,
@@ -114,14 +126,20 @@ export async function transitionResearchStatus(
       existing.reviewRuns ?? [],
       existing.reviewStatus,
     );
-    const gate = reviewState.run && reviewState.isCurrentRevision
-      ? getReviewPublicationGate({
-          executionStatus: reviewState.run.executionStatus,
-          outcome: reviewState.run.outcome,
-          coverageStatus: reviewCoverageStatus(reviewState.run.summary),
-          claims: reviewState.run.claims,
-          decisions: reviewState.run.decisions,
-        })
+    const brief = ResearchBriefSchema.safeParse(existing.sourceAiJob?.brief);
+    const sufficiency = evaluateResearchSufficiency({
+      brief: brief.success ? brief.data : null,
+      sources: existing.sourceAiJob?.aiResearchSources ?? [],
+      reportContent: existing.body,
+      sourcePolicy: existing.sourceAiJob?.sourcePolicy
+        ?? (brief.success ? brief.data.sourcePolicy : null),
+    });
+    const gate = reviewState.isCurrentRevision
+      ? resolveResearchReviewInventory({
+          reviewRuns: existing.reviewRuns ?? [],
+          revisionHash: reviewState.revisionHash,
+          researchSufficiencyStatus: sufficiency.status,
+        }).gate
       : null;
     if (!gate || !['clear', 'publish_with_disclosure'].includes(gate.status)) {
       throw new ResearchRestoreReviewRequiredError({
