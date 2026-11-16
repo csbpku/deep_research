@@ -52,6 +52,24 @@ MEMO_INSTRUCTIONS = """请把下面的研究报告改写成中文决策备忘，
 """
 
 
+_REFERENCE_HEADING = re.compile(r"(?m)^##\s*(?:参考文献|参考资料|References)\s*$")
+
+
+def strip_reference_section(text: str) -> str:
+    """Remove a trailing bibliography copied from the source report.
+
+    The memo is a single page; citations stay inline, but a second reference
+    list makes the condensed artifact look like a full report and duplicates
+    the adapter's bibliography append.
+    """
+    match = None
+    for candidate in _REFERENCE_HEADING.finditer(text):
+        match = candidate
+    if match is None:
+        return text
+    return text[: match.start()].rstrip()
+
+
 def build_decision_memo_prompt(topic: str, report: str, sources: Sequence[dict[str, Any]]) -> str:
     """Build the condensation prompt from the finished report and its sources."""
     source_lines: list[str] = []
@@ -60,11 +78,18 @@ def build_decision_memo_prompt(topic: str, report: str, sources: Sequence[dict[s
         url = str(source.get("url") or "").strip()
         source_lines.append(f"[S{index}] {title}" + (f" — {url}" if url else ""))
     source_block = "\n".join(source_lines) if source_lines else "(本轮没有可引用来源)"
+    if len(report) <= MEMO_MAX_SOURCE_CHARS:
+        excerpt = report
+    else:
+        # Conclusions usually live at the end of a long report. Keeping only
+        # the head would condense the setup and drop the decision.
+        tail = MEMO_MAX_SOURCE_CHARS // 4
+        excerpt = f"{report[: MEMO_MAX_SOURCE_CHARS - tail]}\n\n[...]\n\n{report[-tail:]}"
     return (
         f"{MEMO_INSTRUCTIONS}\n\n"
         f"研究问题：{topic}\n\n"
         f"可用来源（引用标记必须与报告一致）：\n{source_block}\n\n"
-        f"研究报告正文：\n{report[:MEMO_MAX_SOURCE_CHARS]}"
+        f"研究报告正文：\n{excerpt}"
     )
 
 
@@ -121,7 +146,7 @@ async def condense_to_decision_memo(
                 extra={"request_id": request_id, "attempt": attempt + 1, "error": type(exc).__name__},
             )
             continue
-        text = (result.text or "").strip()
+        text = strip_reference_section((result.text or "").strip())
         if not getattr(result, "truncated", False) and is_valid_decision_memo(text):
             return text
         logger.warning(

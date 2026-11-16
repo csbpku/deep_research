@@ -4986,7 +4986,8 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     audit_progress,
                     None,
                 )
-            report = _append_references(report, sources)
+            if not (job.request.report_type == "decision_memo" and memo_accepted):
+                report = _append_references(report, sources)
 
             async with job.lock:
                 job.body = report

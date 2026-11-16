@@ -28,3 +28,19 @@ def test_memo_validation_requires_complete_nonempty_sections() -> None:
     assert not is_valid_decision_memo("# 决策备忘\n\n## 建议\n\n## 关键声明\n")
     assert not is_valid_decision_memo("## 建议\n")
     assert not is_valid_decision_memo("")
+
+
+def test_memo_strips_bibliography_and_keeps_report_tail() -> None:
+    from ai_engine.decision_memo import (
+        MEMO_MAX_SOURCE_CHARS,
+        build_decision_memo_prompt,
+        strip_reference_section,
+    )
+
+    memo = "# 决策备忘\n\n## 下一步验证\n\n做实验。\n\n## 参考文献\n\n1. [x](https://x)"
+    assert strip_reference_section(memo).endswith("做实验。")
+
+    report = "HEAD\n" + ("A" * (MEMO_MAX_SOURCE_CHARS + 100)) + "\nTAIL-CONCLUSION"
+    prompt = build_decision_memo_prompt("问题", report, [])
+    assert "HEAD" in prompt
+    assert "TAIL-CONCLUSION" in prompt

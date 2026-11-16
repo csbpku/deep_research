@@ -23,7 +23,7 @@ from collections.abc import Mapping
 MAX_FIELD_CHARS = 1_200
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
-_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_LINK = re.compile(r"\[[^\n]*?\]\([^)]*\)")
 _IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _CITE_BLOCK = re.compile(r"\[\[/?cite\]\]", re.IGNORECASE)
 _EMPHASIS = re.compile(r"(\*\*|__|\*|_|`)")
@@ -38,11 +38,17 @@ _RISK_KEYS = ("风险", "待验证", "未确认", "局限", "证据缺口", "限
 
 def _clean_inline(text: str) -> str:
     text = _IMAGE.sub("", text)
-    text = _LINK.sub(r"\1", text)
+    # Summary fields are read before the report: a trailing run of
+    # citation labels adds no meaning and, once links are flattened,
+    # turns into "…BlogPostgreSQL Advisory…". Drop the link entirely
+    # instead of keeping its title text.
+    text = _LINK.sub("", text)
     text = _CITE_BLOCK.sub("", text)
     text = _HTML_TAG.sub("", text)
     text = _EMPHASIS.sub("", text)
-    return re.sub(r"[ \t]+", " ", text).strip()
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\s+([，。；：！？])", r"\1", text)
+    return text.strip()
 
 
 def _split_sections(body: str) -> tuple[str, list[tuple[str, str]]]:

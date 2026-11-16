@@ -42,11 +42,16 @@ def test_keeps_risks_empty_when_report_has_no_risk_section():
 
 
 def test_strips_links_and_emphasis_and_bounds_length():
-    body = "## 结论\n\n**重点**：[官方文档](https://example.com/a) 说明该行为。\n" * 200
+    body = (
+        "## 结论\n\n**重点**：[官方文档](https://example.com/a) 说明该行为。"
+        "[[翻译]PostgreSQL中的死锁 | PostgreSQL DBA](https://example.com/b) 完成。\n"
+    ) * 200
 
     fields = derive_research_summary(body)
 
     assert "https://example.com" not in fields["conclusion"]
+    assert "官方文档" not in fields["conclusion"]
+    assert "PostgreSQL DBA" not in fields["conclusion"]
     assert "**" not in fields["conclusion"]
     assert len(fields["conclusion"]) <= 1_200
 
