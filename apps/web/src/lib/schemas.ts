@@ -65,6 +65,8 @@ export const ResearchListQuery = z.object({
   objective: z.enum(['explore', 'learn', 'investigate', 'decide']).optional(),
   reviewStatus: z.string().max(32).optional(),
   hasOpenClaims: z.coerce.boolean().optional(),
+  // Learning review: only reports where this user has unsure/missed questions.
+  needsReview: z.coerce.boolean().optional(),
 });
 export type ResearchListQuery = z.infer<typeof ResearchListQuery>;
 

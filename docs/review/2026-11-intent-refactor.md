@@ -181,3 +181,10 @@
 唯一；页面加载先读本地缓存，再以服务端结果覆盖，换设备/换浏览器也能恢复。
 接口 `GET/POST /api/learning/self-check` 只返回当前用户自己的评分。
 迁移 `20261117000002_learning_self_check` 已在本地应用。
+
+### 待复习筛选
+
+研究库新增“只看待复习”复选框，走 `GET /api/researches?needsReview=true`。
+`researchListWhere` 只保留当前用户在该文章下有 `unsure`/`missed` 自评的记录，
+按文章聚合，不展开到题目。draft 视图下实测命中 1 篇（MVCC 学习稿），
+列表数从 20 降到 1，`scrollWidth - clientWidth = 0`。

@@ -117,6 +117,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     objective: url.searchParams.get('objective') ?? undefined,
     reviewStatus: url.searchParams.get('reviewStatus') ?? undefined,
     hasOpenClaims: url.searchParams.get('hasOpenClaims') ?? undefined,
+    needsReview: url.searchParams.get('needsReview') ?? undefined,
   });
   if (!parsed.success) {
     return toApiErrorResponse({
@@ -127,12 +128,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { type, scope, q, sort, page, limit, topicId, objective, reviewStatus, hasOpenClaims } = parsed.data;
+  const { type, scope, q, sort, page, limit, topicId, objective, reviewStatus, hasOpenClaims, needsReview } = parsed.data;
 
   // 安全规则：published scope 所有人可见；draft scope 仅 owner 自己可见
   const where = researchListWhere({
     scope, userId: u.id, type, query: q,
-    topicId, objective, reviewStatus, hasOpenClaims,
+    topicId, objective, reviewStatus, hasOpenClaims, needsReview,
   });
 
   const [items, total] = await Promise.all([
