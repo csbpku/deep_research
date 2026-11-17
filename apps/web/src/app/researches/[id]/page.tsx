@@ -45,6 +45,7 @@ import { LoadingState } from '@/components/StateMessage';
 import { useCurrentUser } from '@/lib/auth/client';
 import { BackToSearchButton } from '@/components/domain/BackToSearchButton';
 import { AppButton } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
 import { space } from '@deep-research/design-system';
 import {
   cleanResearchLabel,
@@ -71,6 +72,7 @@ import {
   Info,
   MessageSquare,
   Pencil,
+  Send,
   Star,
   User,
   X,
@@ -237,6 +239,9 @@ export default function ResearchDetailPage() {
   const me = useCurrentUser();
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [publishKnowledgeOpen, setPublishKnowledgeOpen] = useState(false);
+  const [publishKnowledgeBusy, setPublishKnowledgeBusy] = useState(false);
+  const [publishKnowledgeError, setPublishKnowledgeError] = useState<string | null>(null);
   const [loadingElapsed, setLoadingElapsed] = useState(0);
 
   const { data, isLoading, isError, error, refetch } = useQuery<ResearchDetail>({
@@ -402,6 +407,16 @@ export default function ResearchDetailPage() {
                 }}
               />
             ) : null}
+            {isDraft && data.canEdit && isKnowledge ? (
+              <AppButton
+                variant="contained"
+                size="small"
+                startIcon={<Send size={16} aria-hidden="true" />}
+                onClick={() => setPublishKnowledgeOpen(true)}
+              >
+                发布知识卡
+              </AppButton>
+            ) : null}
             {isDraft && data.canEdit ? (
               <DeleteDraftButton
                 researchId={data.id}
@@ -461,6 +476,41 @@ export default function ResearchDetailPage() {
           </div>
         ) : null}
       </div>
+      <AppDialog
+        open={publishKnowledgeOpen}
+        onClose={() => { if (!publishKnowledgeBusy) setPublishKnowledgeOpen(false); }}
+        title="发布这张知识卡？"
+        description="发布后团队成员可以阅读、引用和评论。知识卡保留你的来源摘录与笔记，不需要补研究摘要。"
+        actions={<>
+          <AppButton variant="outlined" onClick={() => setPublishKnowledgeOpen(false)} disabled={publishKnowledgeBusy}>继续编辑</AppButton>
+          <AppButton
+            variant="contained"
+            disabled={publishKnowledgeBusy}
+            onClick={() => {
+              setPublishKnowledgeBusy(true);
+              setPublishKnowledgeError(null);
+              void fetch(`/api/researches/${data.id}/publish`, {
+                method: 'POST', headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({}),
+              }).then(async response => {
+                if (!response.ok) {
+                  const payload = await response.json().catch(() => ({}));
+                  throw new Error(payload.message || `发布失败（${response.status}）`);
+                }
+                setPublishKnowledgeOpen(false);
+                await queryClient.invalidateQueries({ queryKey: ['research', data.id] });
+                router.refresh();
+              }).catch((error: unknown) => {
+                setPublishKnowledgeError(error instanceof Error ? error.message : '发布失败，请稍后重试。');
+              }).finally(() => setPublishKnowledgeBusy(false));
+            }}
+          >
+            {publishKnowledgeBusy ? '发布中…' : '确认发布'}
+          </AppButton>
+        </>}
+      >
+        {publishKnowledgeError ? <Typography component="p" variant="body2" color="error.main" role="alert">{publishKnowledgeError}</Typography> : null}
+      </AppDialog>
       {reviewError ? <Typography component="p" variant="metadata" color="error.main" role="alert">{reviewError}</Typography> : null}
 
       {data.tags.length > 0 && (
