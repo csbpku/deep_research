@@ -78,6 +78,7 @@ interface ResearchItem {
   author: { id: string; name: string };
   canEdit?: boolean;
   reviewDue?: { missed: number; unsure: number };
+  judgementDue?: { due: boolean; daysOverdue: number | null };
 }
 
 interface ListResponse {
@@ -139,11 +140,12 @@ function ResearchesContent() {
     hasExplicitTab ? researchTypeForTab(tab) : 'all'
   ));
   const [needsReview, setNeedsReview] = useState(false);
+  const [judgementDue, setJudgementDue] = useState(false);
   const [loadingElapsed, setLoadingElapsed] = useState(0);
   const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
 
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery<ListResponse>({
-    queryKey: ['researches', view, type, sort, page, debouncedQ, needsReview],
+    queryKey: ['researches', view, type, sort, page, debouncedQ, needsReview, judgementDue],
     queryFn: async () => {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 12_000);
@@ -156,6 +158,7 @@ function ResearchesContent() {
       if (type !== 'all') params.set('type', type);
       if (debouncedQ.trim()) params.set('q', debouncedQ.trim());
       if (needsReview) params.set('needsReview', 'true');
+      if (judgementDue) params.set('judgementDue', 'true');
       try {
         const res = await fetch(`/api/researches?${params}`, { signal: controller.signal });
         if (!res.ok) throw await toApiHttpError(res, '研究库暂时无法读取。');
@@ -209,7 +212,7 @@ function ResearchesContent() {
   // 在第 21 条之后变成假象，排序也会看起来像全库顺序。
   const visible = data?.items ?? [];
   // 服务端已按 q/type 过滤，total 就是筛选后的全库命中数。
-  const hasActiveFilter = Boolean(debouncedQ.trim()) || sort !== 'newest' || type !== 'all' || needsReview;
+  const hasActiveFilter = Boolean(debouncedQ.trim()) || sort !== 'newest' || type !== 'all' || needsReview || judgementDue;
   const filteredOut = !!data && visible.length === 0 && data.total === 0 && hasActiveFilter;
 
   return (
@@ -263,7 +266,7 @@ function ResearchesContent() {
       <FilterBar
         onSubmit={(e) => e.preventDefault()}
         trailing={
-          q || sort !== 'newest' || type !== 'all' || needsReview ? (
+          q || sort !== 'newest' || type !== 'all' || needsReview || judgementDue ? (
             <span className={styles.filteredCount}>
               <ArrowDownNarrowWide size={12} aria-hidden />
               {data?.total ?? 0} 条
@@ -305,6 +308,10 @@ function ResearchesContent() {
           <FormControlLabel
             control={<Checkbox size="small" checked={needsReview} onChange={event => { setNeedsReview(event.target.checked); setPage(1); }} />}
             label="只看待复习"
+          />
+          <FormControlLabel
+            control={<Checkbox size="small" checked={judgementDue} onChange={event => { setJudgementDue(event.target.checked); setPage(1); }} />}
+            label="只看待复查判断"
           />
       </FilterBar>
 
@@ -442,6 +449,12 @@ function ResearchesContent() {
                       {item.reviewDue.missed > 0 ? `${item.reviewDue.missed} 题未掌握` : ''}
                       {item.reviewDue.missed > 0 && item.reviewDue.unsure > 0 ? ' · ' : ''}
                       {item.reviewDue.unsure > 0 ? `${item.reviewDue.unsure} 题待确认` : ''}
+                    </p>
+                  )}
+
+                  {judgementDue && item.judgementDue?.due && (
+                    <p className={styles.reviewDue}>
+                      判断已过期 {item.judgementDue.daysOverdue} 天
                     </p>
                   )}
 

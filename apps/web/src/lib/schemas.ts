@@ -67,6 +67,8 @@ export const ResearchListQuery = z.object({
   hasOpenClaims: z.coerce.boolean().optional(),
   // Learning review: only reports where this user has unsure/missed questions.
   needsReview: z.coerce.boolean().optional(),
+  // Knowledge cards whose published judgement has passed its review date.
+  judgementDue: z.coerce.boolean().optional(),
 });
 export type ResearchListQuery = z.infer<typeof ResearchListQuery>;
 

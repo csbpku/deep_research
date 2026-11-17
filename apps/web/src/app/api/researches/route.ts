@@ -24,6 +24,7 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { researchListOrderBy, researchListWhere } from '../../../lib/research-list-where';
 import { rankResearchForReview } from '../../../lib/research-review-priority';
+import { judgementDueSummary } from '../../../lib/research-judgement-due';
 import { confirmedKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../lib/personal-knowledge-index';
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
@@ -119,6 +120,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     reviewStatus: url.searchParams.get('reviewStatus') ?? undefined,
     hasOpenClaims: url.searchParams.get('hasOpenClaims') ?? undefined,
     needsReview: url.searchParams.get('needsReview') ?? undefined,
+    judgementDue: url.searchParams.get('judgementDue') ?? undefined,
   });
   if (!parsed.success) {
     return toApiErrorResponse({
@@ -129,12 +131,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { type, scope, q, sort, page, limit, topicId, objective, reviewStatus, hasOpenClaims, needsReview } = parsed.data;
+  const { type, scope, q, sort, page, limit, topicId, objective, reviewStatus, hasOpenClaims, needsReview, judgementDue } = parsed.data;
 
   // 安全规则：published scope 所有人可见；draft scope 仅 owner 自己可见
   const where = researchListWhere({
     scope, userId: u.id, type, query: q,
-    topicId, objective, reviewStatus, hasOpenClaims, needsReview,
+    topicId, objective, reviewStatus, hasOpenClaims, needsReview, judgementDue,
   });
 
   const needsReviewQuery = needsReview === true;
@@ -145,6 +147,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     publishedAt: Date | null; featuredAt: Date | null; createdAt: Date; updatedAt: Date;
     author: { id: string; name: string; email: string };
     learningSelfChecks?: { rating: string; updatedAt: Date }[];
+    judgement?: string | null; judgementConfidence?: string | null;
+    judgementScope?: string | null; judgementReviewAt?: Date | null;
   };
   let items: ListRow[];
   let total: number;
@@ -209,6 +213,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           id: true, type: true, status: true, title: true, body: true, background: true,
           conclusion: true, risks: true, tags: true, authorId: true, creationMethod: true,
           aiAssisted: true, publishedAt: true, featuredAt: true, createdAt: true, updatedAt: true,
+          judgement: true, judgementConfidence: true, judgementScope: true, judgementReviewAt: true,
           author: { select: { id: true, name: true, email: true } },
         },
       }),
@@ -240,6 +245,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
       ...(needsReviewQuery ? { reviewDue: { missed: (item as typeof item & { learningSelfChecks: { rating: string }[] }).learningSelfChecks.filter(check => check.rating === 'missed').length, unsure: (item as typeof item & { learningSelfChecks: { rating: string }[] }).learningSelfChecks.filter(check => check.rating === 'unsure').length } } : {}),
+      ...(judgementDue === true ? { judgementDue: judgementDueSummary(item) } : {}),
       author: { id: item.author.id, name: item.author.name },
     })),
     page,
