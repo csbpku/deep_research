@@ -213,6 +213,7 @@ model User {
   adminActions          AdminAction[]
   sharesSubmitted       ShareSubmission[]  @relation("share_submitter")
   sharesReviewed        ShareSubmission[]  @relation("share_reviewer")
+  learningSelfChecks    LearningSelfCheck[]
   radarFeedback         RadarFeedback[]
   chatSessions          AiChatSession[]
   aiResearchConversations AiResearchConversation[]
@@ -454,6 +455,23 @@ model Summary {
 // 3. researches — 沉淀（长文 + 精华共用，按 type 切分）
 // ─────────────────────────────────────────────────────────────────────
 
+
+model LearningSelfCheck {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @db.Uuid
+  researchId  String   @db.Uuid
+  questionKey String   @db.Text
+  rating      String   @db.VarChar(16)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  research    Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, researchId, questionKey])
+  @@index([userId, rating])
+  @@map("learning_self_check")
+}
+
 model Research {
   id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   type        ResearchType
@@ -508,6 +526,7 @@ model Research {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   author        User     @relation("research_author", fields: [authorId], references: [id], onDelete: Restrict)
+  learningSelfChecks LearningSelfCheck[]
   sourceComment Comment? @relation("comment_to_knowledge", fields: [sourceCommentId], references: [id], onDelete: SetNull)
 
   researchSources ResearchSource[]

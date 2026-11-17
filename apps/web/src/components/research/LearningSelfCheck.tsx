@@ -62,7 +62,20 @@ export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps)
     setRatings(stored);
     // A rated question already had its attempt; restore its answer on return.
     setOpen(new Set(Object.keys(stored)));
-  }, [key]);
+    if (!researchId) return;
+    let cancelled = false;
+    fetch(`/api/learning/self-check?researchId=${encodeURIComponent(researchId)}`, { cache: 'no-store' })
+      .then(response => (response.ok ? response.json() : null))
+      .then((payload: { ratings?: Record<string, SelfCheckRating> } | null) => {
+        if (cancelled || !payload?.ratings) return;
+        // The server is the cross-device source of truth; merge it over the local cache.
+        setRatings(payload.ratings);
+        setOpen(new Set(Object.keys(payload.ratings)));
+        writeRatings(key, payload.ratings);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [key, researchId]);
 
   if (items.length === 0) return null;
 
@@ -70,6 +83,13 @@ export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps)
     const next = { ...ratings, [question]: rating };
     setRatings(next);
     writeRatings(key, next);
+    if (researchId) {
+      void fetch('/api/learning/self-check', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ researchId, questionKey: question, rating }),
+      }).catch(() => undefined);
+    }
     setOpen(prev => new Set(prev).add(question));
   };
 
