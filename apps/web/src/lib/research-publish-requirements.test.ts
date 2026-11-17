@@ -25,3 +25,14 @@ describe('publicationSummaryRequirement', () => {
     expect(result.missingLabels).toContain('背景');
   });
 });
+
+describe('comparison matrix', () => {
+  it('carries its own structure and only needs a body', () => {
+    const requirement = publicationSummaryRequirement({
+      creationMethod: 'ai_research', reportType: 'comparison_matrix', body: '# 对比结论', background: '', conclusion: '', risks: '',
+    });
+    expect(requirement.kind).toBe('comparison_matrix');
+    expect(requirement.required).toEqual(['body']);
+    expect(requirement.complete).toBe(true);
+  });
+});

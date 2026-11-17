@@ -18,7 +18,7 @@ export interface PublicationSummaryInput {
 }
 
 export interface PublicationSummaryRequirement {
-  kind: 'knowledge' | 'learning_path' | 'research';
+  kind: 'knowledge' | 'learning_path' | 'comparison_matrix' | 'research';
   required: PublicationSummaryField[];
   missing: PublicationSummaryField[];
   missingLabels: string[];
@@ -38,7 +38,9 @@ export function publicationSummaryRequirement(input: PublicationSummaryInput): P
     ? 'knowledge'
     : isAiReport && input.reportType === 'learning_path'
       ? 'learning_path'
-      : 'research';
+      : isAiReport && input.reportType === 'comparison_matrix'
+        ? 'comparison_matrix'
+        : 'research';
   const required: PublicationSummaryField[] = kind === 'research'
     ? ['background', 'conclusion', 'risks']
     : ['body'];

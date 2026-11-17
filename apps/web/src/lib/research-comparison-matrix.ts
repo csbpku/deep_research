@@ -30,6 +30,7 @@ export interface ComparisonMatrix {
 }
 
 const EVIDENCE = /\[S\d+\]/gu;
+const HAS_EVIDENCE = /\[S\d+\]/u;
 const EXPLICIT_GAP = /未知|待实测|未确认|冲突|未找到|无直接证据|未核验|没有证据/u;
 const PARTIAL = /部分|仅覆盖|未完全|尚未|有限/u;
 
@@ -56,7 +57,7 @@ export function checkComparisonMatrix(body: string): ComparisonMatrixCheck {
     row.forEach((cell, column) => {
       if (column === 0) return;
       if (!cell) return;
-      if (EVIDENCE.test(cell) || EXPLICIT_GAP.test(cell)) return;
+      if (HAS_EVIDENCE.test(cell) || EXPLICIT_GAP.test(cell)) return;
       unmarked.push({ row: row[0] || `第 ${rows} 行`, column: header?.[column] || `第 ${column + 1} 列`, text: cell.slice(0, 120) });
     });
   }
@@ -101,4 +102,23 @@ export function parseComparisonMatrix(body: string): ComparisonMatrix | null {
   }
   if (!header || rows.length === 0) return null;
   return { dimensions: header.slice(1), rows, counts };
+}
+
+/**
+ * Comparison is an artifact choice, not a softer decision memo: the reader
+ * asked for differences, not a winner. Prompts already say this, but prompts
+ * are advisory; this check makes the boundary enforceable at publish time.
+ */
+const RECOMMENDATION = /(?:建议|推荐|应当|应该)(?:选择|采用|使用|优先)|优先选择|推荐方案/gu;
+const NEGATED = /(?:不|不要|无需|没有|禁止|避免)(?:建议|推荐)|不建议|不推荐/u;
+
+export function findRecommendationLanguage(body: string): string[] {
+  const hits: string[] = [];
+  for (const line of String(body ?? '').split(/\r?\n/u)) {
+    if (!RECOMMENDATION.test(line)) continue;
+    RECOMMENDATION.lastIndex = 0;
+    if (NEGATED.test(line)) continue;
+    hits.push(line.trim().slice(0, 160));
+  }
+  return hits;
 }

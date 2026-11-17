@@ -29,7 +29,7 @@ import { researchPublicationVersion } from '../../../../../lib/research-publicat
 import { projectResearchReviewForReader } from '../../../../../lib/research-review-reader';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import { hasBlockingIntentCoverage, parseIntCoverage } from '../../../../../lib/research-intent-coverage';
-import { checkComparisonMatrix } from '../../../../../lib/research-comparison-matrix';
+import { checkComparisonMatrix, findRecommendationLanguage } from '../../../../../lib/research-comparison-matrix';
 import { checkLearningPath } from '../../../../../lib/research-learning-path';
 import { publicationSummaryRequirement } from '../../../../../lib/research-publish-requirements';
 
@@ -242,6 +242,17 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       message: `对比矩阵有 ${comparison.unmarked.length} 个单元格既没有证据编号，也没有标为未知或冲突`,
       requestId,
       details: { requiresComparisonEvidence: true, comparison },
+    });
+  }
+  const recommendations = existing.sourceAiJob?.reportType === 'comparison_matrix'
+    ? findRecommendationLanguage(existing.body)
+    : [];
+  if (existing.creationMethod === 'ai_research' && recommendations.length > 0) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: `对比矩阵只比较差异，不给唯一推荐；请删掉推荐措辞或改成条件性结论：${recommendations[0]}`,
+      requestId,
+      details: { requiresComparisonNeutrality: true, recommendations },
     });
   }
   const learningPath = checkLearningPath(existing.body);

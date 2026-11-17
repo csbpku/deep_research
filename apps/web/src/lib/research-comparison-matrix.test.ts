@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkComparisonMatrix, parseComparisonMatrix } from './research-comparison-matrix';
+import { checkComparisonMatrix, findRecommendationLanguage, parseComparisonMatrix } from './research-comparison-matrix';
 
 const marked = `# 对比
 
@@ -41,5 +41,23 @@ describe('parseComparisonMatrix', () => {
 
   it('returns null when the section is missing', () => {
     expect(parseComparisonMatrix('## 结论\n')).toBeNull();
+  });
+});
+
+describe('findRecommendationLanguage', () => {
+  it('leaves a compare-only artifact alone', () => {
+    expect(findRecommendationLanguage(marked)).toEqual([]);
+  });
+
+  it('catches a winner sentence but not its negation', () => {
+    const body = '## 对比结论\n\n建议选择 A，因为证据更多。\n\n不建议选择 B。';
+    expect(findRecommendationLanguage(body)).toHaveLength(1);
+  });
+});
+
+describe('checkComparisonMatrix evidence detection', () => {
+  it('keeps scanning after the first cited cell', () => {
+    const body = '## 对比矩阵\n\n| 方案 | A | B | C |\n|---|---|---|---|\n| x | [S1] | [S2] | [S3] |';
+    expect(checkComparisonMatrix(body).unmarked).toEqual([]);
   });
 });
