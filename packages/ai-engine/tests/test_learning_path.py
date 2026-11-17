@@ -30,3 +30,15 @@ def test_missing_section_is_not_rewritten() -> None:
     text = "# 学习\n\n## 90 秒回答\n短。\n"
     assert not is_valid_learning_path(text)
     assert enforce_learning_budget(text) == text
+
+
+def test_concept_table_is_not_cut_below_four_rows() -> None:
+    rows = "\n".join(f"| C{i} | 含义 | 关系 [S1] |" for i in range(1, 8))
+    text = (
+        "# 学习\n\n## 90 秒回答\n短。\n\n## 概念图\n\n| 概念 | 含义 | 关系 |\n|---|---|---|\n"
+        + rows
+        + "\n\n## 分层解释\n短。\n\n## 可运行示例\n短。\n\n## 常见误区\n短。\n\n## 自检\n短。\n"
+    )
+    bounded = enforce_learning_budget(text)
+    table_rows = [line for line in bounded.splitlines() if line.startswith("| C")]
+    assert 4 <= len(table_rows) <= 6

@@ -30,6 +30,7 @@ import { projectResearchReviewForReader } from '../../../../../lib/research-revi
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import { hasBlockingIntentCoverage, parseIntCoverage } from '../../../../../lib/research-intent-coverage';
 import { checkComparisonMatrix } from '../../../../../lib/research-comparison-matrix';
+import { checkLearningPath } from '../../../../../lib/research-learning-path';
 
 const IdParam = z.object({ id: z.string().uuid() });
 const PublishBody = z.object({
@@ -240,6 +241,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       message: `对比矩阵有 ${comparison.unmarked.length} 个单元格既没有证据编号，也没有标为未知或冲突`,
       requestId,
       details: { requiresComparisonEvidence: true, comparison },
+    });
+  }
+  const learningPath = checkLearningPath(existing.body);
+  if (existing.creationMethod === 'ai_research' && existing.sourceAiJob?.reportType === 'learning_path' && learningPath.issues.length > 0) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: `学习路径的结构还不完整：${learningPath.issues[0]}`,
+      requestId,
+      details: { requiresLearningPathStructure: true, learningPath },
     });
   }
   const intentCoverage = parseIntCoverage(existing.body);

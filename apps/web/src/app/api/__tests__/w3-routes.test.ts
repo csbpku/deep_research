@@ -232,6 +232,52 @@ describe('research provenance input', () => {
     expect(published.publishedReviewDisclosure).toBeTruthy();
   });
 
+  it('rejects a learning path whose concept map has fewer than four concepts', async () => {
+    const body = `# 学习
+
+## 90 秒回答
+回答。
+
+## 概念图
+
+| 概念 | 含义 | 关系 |
+|---|---|---|
+| A | a | 指向 B |
+| B | b | 被 A 引用 |
+
+## 分层解释
+解释。
+
+## 可运行示例
+示例。
+
+## 常见误区
+误区。
+
+## 自检
+问题。
+`;
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '33333333-3333-3333-3333-333333333333',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'Learn', body, background: '背景', conclusion: '结论',
+      risks: '风险', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [],
+      sourceAiJob: { reportType: 'learning_path', brief: null, sourcePolicy: 'prefer_user_sources', aiResearchSources: [] },
+    });
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }) as never,
+      { params: Promise.resolve({ id: '33333333-3333-3333-3333-333333333333' }) },
+    );
+    const payload = await response.json();
+    expect(response.status).toBe(400);
+    expect(payload.details.requiresLearningPathStructure).toBe(true);
+  });
+
   it('rejects a comparison matrix cell that has neither evidence nor an explicit gap', async () => {
     const body = '# 对比\n\n## 对比矩阵\n\n| 方案 | 并发安全 |\n|---|---|\n| A | 性能更好，无需锁。 |\n';
     mocks.researchFindUnique.mockResolvedValue({
