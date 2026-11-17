@@ -21,6 +21,22 @@ SECTION_CAPS = {
 HEADINGS = tuple(SECTION_CAPS)
 
 
+def normalize_learning_headings(text: str) -> str:
+    """Separate a heading glued to the first line of its body.
+
+    Writers occasionally emit ``## 概念图| 核心概念 | ...`` because the table is
+    the next token in their buffer. Without the newline the heading is not a
+    heading, the table is invisible to the parser, and the budget pass truncates
+    the section as prose.
+    """
+    return re.sub(
+        r"^(##\s+[^\n|]+?)\s*(\|)",
+        r"\1\n\n\2",
+        text,
+        flags=re.MULTILINE,
+    )
+
+
 def learning_headings(text: str) -> list[str]:
     return re.findall(r"^##\s+(.+?)\s*$", text, re.MULTILINE)
 
@@ -53,11 +69,13 @@ def _trim_concept_map(content: str) -> str:
         return _trim_section(content, SECTION_CAPS["概念图"])
     kept = table[:8]  # header + separator + up to 6 concepts
     rest = [line for line in lines if not line.strip().startswith("|")]
-    return "\n".join(kept + ([""] + rest if rest else [])) + "\n"
+    prefix = "\n\n" if content.startswith("\n") else ""
+    return prefix + "\n".join(kept + ([""] + rest if rest else [])) + "\n"
 
 
 def enforce_learning_budget(text: str) -> str:
     """Trim overlong sections, keeping the six-section order and all headings."""
+    text = normalize_learning_headings(text)
     if not is_valid_learning_path(text):
         return text
     parts = re.split(r"^(##\s+.+)$", text, flags=re.MULTILINE)

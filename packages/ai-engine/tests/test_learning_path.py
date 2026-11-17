@@ -42,3 +42,20 @@ def test_concept_table_is_not_cut_below_four_rows() -> None:
     bounded = enforce_learning_budget(text)
     table_rows = [line for line in bounded.splitlines() if line.startswith("| C")]
     assert 4 <= len(table_rows) <= 6
+
+
+def test_heading_glued_to_table_is_normalized() -> None:
+    from ai_engine.learning_path import enforce_learning_budget
+
+    text = (
+        "## 90 秒回答\n回答\n\n"
+        "## 概念图| 核心概念 | 作用 | 关系 |\n|---|---|---|\n"
+        "| A | a | 与 B 相连 |\n| B | b | 与 A 相连 |\n"
+        "| C | c | 依赖 A |\n| D | d | 依赖 B |\n\n"
+        "## 分层解释\n解释\n\n## 可运行示例\n示例\n\n"
+        "## 常见误区\n误区\n\n## 自检\n问题\n"
+    )
+    normalized = enforce_learning_budget(text)
+    assert "## 概念图\n\n| 核心概念" in normalized
+    assert "| D | d | 依赖 B |" in normalized
+    assert "## 概念图|" not in normalized
