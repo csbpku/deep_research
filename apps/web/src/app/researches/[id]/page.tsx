@@ -35,6 +35,7 @@ import { ExportResearchMarkdownButton } from '@/components/research/ExportResear
 import { ComparisonMatrixView } from '@/components/research/ComparisonMatrixView';
 import { LearningSelfCheck } from '@/components/research/LearningSelfCheck';
 import { parseSelfCheck, stripSelfCheckSection } from '@/lib/research-self-check';
+import { shouldRenderResearchSummary } from '@/lib/research-artifact-shape';
 import { ReviewClaimsPanel, type ReviewClaimRun } from '@/components/ai-research/ReviewClaimsPanel';
 import { MetaItem, MetaRow } from '@/components/domain/MetaRow';
 import { SectionCard } from '@/components/domain/SectionCard';
@@ -561,7 +562,10 @@ export default function ResearchDetailPage() {
         {/* ── 长文布局：研究摘要 → 正文；参考文献由正文引用承担 ── */}
         {isLongResearch && (
           <>
-            {(data.background || data.conclusion || data.risks) && (
+            {shouldRenderResearchSummary(
+              { type: data.type, reportType: data.researchReportType, body: data.body },
+              { background: data.background, conclusion: data.conclusion, risks: data.risks },
+            ) && (
               <SectionCard
                 title="研究摘要"
                 tone="default"
