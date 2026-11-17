@@ -131,6 +131,7 @@ REPORT_TYPE: Final[dict[str, str]] = {
     "RESEARCH_REPORT": "research_report",
     "DECISION_MEMO": "decision_memo",
     "COMPARISON_MATRIX": "comparison_matrix",
+    "LEARNING_PATH": "learning_path",
     "SUMMARY_BRIEF": "summary_brief",
     "SLIDES": "slides",
     "WEB_BRIEF": "web_brief",
@@ -139,7 +140,7 @@ REPORT_TYPE: Final[dict[str, str]] = {
     "EVIDENCE_SEARCH": "evidence_search",
 }
 ReportType = Literal[
-    "research_report", "decision_memo", "comparison_matrix", "summary_brief", "slides", "web_brief", "evidence_search"
+    "research_report", "decision_memo", "comparison_matrix", "learning_path", "summary_brief", "slides", "web_brief", "evidence_search"
 ]
 
 # Helpers for partial-job rule (架构 §九 风险 10 / state-machines §1):

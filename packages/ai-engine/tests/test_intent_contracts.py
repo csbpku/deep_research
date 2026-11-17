@@ -80,3 +80,17 @@ def test_comparison_matrix_contract_does_not_recommend_a_winner() -> None:
     assert "## 适用条件" in contract
     assert "不要给唯一推荐" in contract
     assert "推荐方案" in contract
+
+
+def test_learning_path_contract_is_a_bounded_path() -> None:
+    contract = _report_output_contract(
+        "PostgreSQL 的 MVCC 如何工作", report_type="learning_path", objective="learn"
+    )
+
+    assert "## 90 秒回答" in contract
+    assert "## 概念图" in contract
+    assert "## 分层解释" in contract
+    assert "## 可运行示例" in contract
+    assert "## 常见误区" in contract
+    assert "## 自检" in contract
+    assert "2,400" in contract

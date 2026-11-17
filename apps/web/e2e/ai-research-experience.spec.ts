@@ -38,7 +38,7 @@ for (const mode of ['light', 'dark'] as const) {
     await openAdvancedSettings(page);
     await expect(page.getByRole('textbox', { name: '重点回答' })).toHaveValue('适用边界与工程代价');
     const output = page.getByRole('radiogroup', { name: '交付什么', exact: true });
-    await expect(output.getByRole('radio')).toHaveCount(6);
+    await expect(output.getByRole('radio')).toHaveCount(7);
     await expect(output.getByRole('radio', { name: /^决策备忘/ })).toBeChecked();
     await output.getByRole('radio', { name: /网页简报/ }).check();
     await expect(page.getByRole('region', { name: '启动配置摘要', exact: true })).toContainText('网页简报');
@@ -219,6 +219,8 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await tabTo(output);
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('radio', { name: /^对比矩阵/ })).toBeChecked();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: /^学习路径/ })).toBeChecked();
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('radio', { name: /^完整报告/ })).toBeChecked();
   await page.keyboard.press('ArrowRight');

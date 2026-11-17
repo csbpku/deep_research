@@ -3766,6 +3766,20 @@ def _report_output_contract(
     official_comparison = bool(topic and _official_lane_queries(topic, context))
     generic_comparison = _has_explicit_comparison(topic, context)
 
+    if normalized_type == "learning_path":
+        return (
+            "这是学习路径，不是研究报告，也不是压缩后的长文。目标 2,400 字、最多 3,200 字，"
+            "必须输出完整 Markdown，并严格按以下顺序组织：\n"
+            "1. `## 90 秒回答`：用 3–5 句话回答‘它是什么、为什么重要、什么时候用’；\n"
+            "2. `## 概念图`：用无序列表或短表格列出 4–6 个核心概念及其关系，不写长段落；\n"
+            "3. `## 分层解释`：从已知到未知分三层，每层 2–3 段，必须解释机制而不是罗列结论；\n"
+            "4. `## 可运行示例`：给一个最小、可复制运行的例子，并说明预期输出；\n"
+            "5. `## 常见误区`：列 3 条，每条写‘误区 → 实际情况’；\n"
+            "6. `## 自检`：给 3 个能自查理解的问题，附一句话答案要点。\n"
+            "重要事实在句末用 `[S#]`；没有证据就写‘本轮未确认’。"
+            "不要写采购建议、不要给唯一推荐、不要输出参考文献章节。\n"
+        )
+
     if normalized_type == "comparison_matrix":
         return (
             "这是对比矩阵，不是决策备忘，也不是完整报告。必须输出完整 Markdown，"
@@ -4930,7 +4944,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             report = _materialize_evidence_citations(
                 report,
                 sources,
-                compact=job.request.objective in {"learn", "investigate", "explore"} or job.request.report_type == "comparison_matrix",
+                compact=job.request.objective in {"learn", "investigate", "explore"} or job.request.report_type in {"comparison_matrix", "learning_path"},
             )
             report = _clean_report_output(report, sources)
             report = await _ensure_complete_report(researcher, report, sources)
@@ -4973,9 +4987,13 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             report = _materialize_evidence_citations(
                 report,
                 sources,
-                compact=job.request.objective in {"learn", "investigate", "explore"} or job.request.report_type == "comparison_matrix",
+                compact=job.request.objective in {"learn", "investigate", "explore"} or job.request.report_type in {"comparison_matrix", "learning_path"},
             )
             report = _clean_report_output(report, sources)
+            if job.request.report_type == "learning_path":
+                from ai_engine.learning_path import enforce_learning_budget
+
+                report = enforce_learning_budget(report)
             memo_accepted = False
             if job.request.report_type == "decision_memo":
                 # Condense the report without another search. The resulting

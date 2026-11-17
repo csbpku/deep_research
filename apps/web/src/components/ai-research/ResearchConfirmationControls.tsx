@@ -1,6 +1,6 @@
 'use client';
 
-import { FileText, Globe2, Link2, NotebookPen, Presentation, Sparkles, Table2, X } from 'lucide-react';
+import { FileText, Globe2, GraduationCap, Link2, NotebookPen, Presentation, Sparkles, Table2, X } from 'lucide-react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import FormControl from '@mui/material/FormControl';
@@ -12,7 +12,7 @@ import Typography from '@mui/material/Typography';
 import Alert from '@mui/material/Alert';
 import Input from '@mui/material/TextField';
 
-export type ReportType = 'decision_memo' | 'comparison_matrix' | 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
+export type ReportType = 'decision_memo' | 'comparison_matrix' | 'learning_path' | 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
 export type ResearchLength = 'brief' | 'standard' | 'deep';
 export type SourcePolicy = 'prefer_user_sources' | 'only_user_sources';
 export type ResearchSourceRef = { type: 'url' | 'favorite' | 'research' | 'summary'; value: string; required: boolean };
@@ -48,6 +48,7 @@ export interface ResearchAdvancedSettingsProps {
 const outputs = [
   { value: 'decision_memo', label: '决策备忘', detail: '一页结论、关键声明、风险与下一步，默认产物。', icon: NotebookPen },
   { value: 'comparison_matrix', label: '对比矩阵', detail: '只对比，不给推荐；矩阵、条件结论与权重敏感性。', icon: Table2 },
+  { value: 'learning_path', label: '学习路径', detail: '90 秒回答、概念图、分层解释、例子、误区与自检。', icon: GraduationCap },
   { value: 'research_report', label: '完整报告', detail: '完整论证与引用，生成可编辑的私有草稿。', icon: FileText },
   { value: 'slides', label: 'Slides 提纲', detail: '按页组织要点与讲述线索，可继续编辑；不是 PPT 文件。', icon: Presentation },
   { value: 'web_brief', label: '网页简报', detail: '适合独立阅读的网页版本，保留研究依据。', icon: Globe2 },
