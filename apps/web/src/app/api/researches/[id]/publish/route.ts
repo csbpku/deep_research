@@ -474,17 +474,21 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     // 写入 product_events（research_published 指标事件）
     // Re-publishing a previously drafted article must not fail on the metric
     // dedupe key; the event records first publication, not every attempt.
-    await tx.productEvent.createMany({
-      data: [{
-        userId: u.id,
-        eventName: 'research_published',
-        entityType: 'research',
-        entityId: parsed.data.id,
-        metadata: { creationMethod: published.creationMethod },
-        dedupeKey: `research_published:${parsed.data.id}`,
-      }],
-      skipDuplicates: true,
-    });
+    try {
+      await tx.productEvent.create({
+        data: {
+          userId: u.id,
+          eventName: 'research_published',
+          entityType: 'research',
+          entityId: parsed.data.id,
+          metadata: { creationMethod: published.creationMethod },
+          dedupeKey: `research_published:${parsed.data.id}`,
+        },
+      });
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== 'P2002') throw error;
+    }
 
       return published;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
