@@ -94,6 +94,7 @@ interface ResearchDetail {
   creationMethod: string;
   aiAssisted: boolean;
   supersedesResearchId?: string | null;
+  researchReportType?: string | null;
   publishedAt: string | null;
   createdAt: string;
   reviewStatus: string | null;
@@ -825,11 +826,12 @@ export default function EditorPage() {
   const isKnowledgeCard = existing?.type === 'knowledge';
   // A knowledge card is source + note, so it publishes without the research
   // report's background/risk sections; only the body is required.
-  const summaryComplete = isKnowledgeCard
+  const isLearningPath = existing?.creationMethod === 'ai_research' && existing?.researchReportType === 'learning_path';
+  const summaryComplete = isKnowledgeCard || isLearningPath
     ? body.trim().length > 0
     : background.trim().length > 0 && conclusion.trim().length > 0 && risks.trim().length > 0;
-  const missingSummaryFields = isKnowledgeCard
-    ? (!body.trim() ? ['正文'] : [])
+  const missingSummaryFields = isKnowledgeCard || isLearningPath
+    ? (!body.trim() ? ['学习路径正文'] : [])
     : [
       !background.trim() ? '背景' : null,
       !conclusion.trim() ? '结论' : null,

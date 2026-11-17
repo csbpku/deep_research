@@ -331,6 +331,49 @@ describe('research provenance input', () => {
     expect(published.publishedIntentCoverage).toMatchObject({ present: true, counts: { evidence: 1, unknown: 0, conflict: 0 } });
   });
 
+  it('publishes a learning path without the report summary sections', async () => {
+    const id = '55555555-5555-4555-8555-555555555555';
+    const authorId = '11111111-1111-1111-1111-111111111111';
+    const now = new Date();
+    const body = `# 学习
+
+## 概念图
+
+| 概念 | 含义 | 关系 |
+|---|---|---|
+| A | a | 指向 B |
+| B | b | 被 A 引用 |
+| C | c | 与 A 并列 |
+| D | d | 依赖 C |
+
+## 自检
+问题。
+`;
+    mocks.researchFindUnique.mockResolvedValue({
+      id, type: 'research', authorId, status: 'draft', title: 'Learn', body,
+      background: null, conclusion: null, risks: null, tags: [], creationMethod: 'ai_research',
+      reviewStatus: null, reviewRuns: [], updatedAt: now,
+      sourceAiJob: { reportType: 'learning_path', brief: null, sourcePolicy: 'prefer_user_sources', aiResearchSources: [] },
+    });
+    mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
+      id, type: 'research', status: 'published', title: 'Learn', body,
+      background: null, conclusion: null, risks: null, tags: [], authorId,
+      creationMethod: 'ai_research', aiAssisted: data.aiAssisted, publishedAt: now,
+      createdAt: now, updatedAt: now,
+      author: { id: authorId, name: 'User', email: 'u@test' },
+    }));
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ acknowledgeDisclosure: true, publicationVersion: researchPublicationVersion(await mocks.researchFindUnique(), 'attention') }),
+      }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+    expect((await response.json()).details?.missing).toBeUndefined();
+    expect(response.status).not.toBe(400);
+  });
+
   it('publishes a knowledge card without research-report summary sections', async () => {
     const id = '44444444-4444-4444-8444-444444444444';
     const authorId = '11111111-1111-1111-1111-111111111111';

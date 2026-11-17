@@ -252,6 +252,11 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       details: { requiresLearningPathStructure: true, learningPath },
     });
   }
+  // A learning path carries its own summary contract (90-second answer,
+  // concept map, misconceptions). Requiring the generic research-report
+  // background/conclusion/risks would force authors to duplicate it.
+  const isLearningPath = existing.creationMethod === 'ai_research'
+    && existing.sourceAiJob?.reportType === 'learning_path';
   const intentCoverage = parseIntCoverage(existing.body);
   if (
     existing.creationMethod === 'ai_research'
@@ -295,8 +300,8 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   // report: background/risk sections are optional, so their own gate only
   // requires a non-empty body.
   const isKnowledgeCard = existing.type === 'knowledge';
-  const missingSummaryFields = isKnowledgeCard
-    ? (!existing.body.trim() ? ['正文'] : [])
+  const missingSummaryFields = isKnowledgeCard || isLearningPath
+    ? (!existing.body.trim() ? (isKnowledgeCard ? ['正文'] : ['学习路径正文']) : [])
     : [
       !existing.background?.trim() ? '背景' : null,
       !existing.conclusion?.trim() ? '结论' : null,
