@@ -392,7 +392,7 @@ export function AiResearchConversation({
   // pick wins, and a late re-render must never reset it.
   function applyIntentDefault(next: BriefValue | null) {
     if (!next?.objective || reportTypeTouchedRef.current) return;
-    setReportType(next.objective === 'decide' ? 'decision_memo' : 'research_report');
+    setReportType(next.brief?.comparisonOnly ? 'comparison_matrix' : next.objective === 'decide' ? 'decision_memo' : 'research_report');
   }
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

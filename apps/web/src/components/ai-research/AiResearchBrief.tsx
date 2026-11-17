@@ -22,6 +22,7 @@ import Button from '@mui/material/Button';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Checkbox from '@mui/material/Checkbox';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
 import Paper from '@mui/material/Paper';
@@ -46,10 +47,18 @@ const OBJECTIVE_LABELS: Record<Objective, string> = {
   decide: '决策对比',
 };
 
+const COMPARISON_ONLY_STEPS = [
+  { title: '梳理备选方案', detail: '枚举待比较方案与各自适用前提' },
+  { title: '逐格对照', detail: '按已确认的关键维度逐格对照' },
+  { title: '标注未知与冲突', detail: '每个单元格标明有证据/未知/冲突' },
+  { title: '条件性结论', detail: '说明各方案在什么条件下更合适，不给唯一推荐' },
+];
+
 interface PlanResponse {
   assistantMessage: string;
   brief: {
     objective: Objective;
+    comparisonOnly?: boolean;
     question: string;
     constraints?: string[];
     questionsToAnswer?: string[];
@@ -108,6 +117,7 @@ export interface BriefValue {
   decisionNeedsConfirmation?: boolean;
   brief?: {
     objective: Objective;
+    comparisonOnly?: boolean;
     question: string;
     constraints: string[];
     questionsToAnswer: string[];
@@ -148,6 +158,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
   const legacySelectionRef = useRef(initialLegacy);
   const [focusText, setFocusText] = useState(initialBrief?.brief?.questionsToAnswer.join('\n') ?? '');
   const [comparisonText, setComparisonText] = useState(initialBrief?.brief?.comparisonOptions.join('\n') ?? '');
+  const [comparisonOnly, setComparisonOnly] = useState(initialBrief?.brief?.comparisonOnly ?? false);
   const [objective, setObjective] = useState<Objective>(initialBrief?.objective ?? 'investigate');
   const [timeRange, setTimeRange] = useState<ResearchTimeRange['preset']>(initialBrief?.brief?.scope.timeRange.preset ?? 'any');
   const [scopeFrom, setScopeFrom] = useState(initialBrief?.brief?.scope.timeRange.from ?? '');
@@ -250,6 +261,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
         }
         setFocusText((data.brief.questionsToAnswer ?? []).join('\n'));
         setComparisonText((data.brief.comparisonOptions ?? []).join('\n'));
+        setComparisonOnly(data.brief.comparisonOnly ?? false);
         setObjective(data.brief.objective);
         setTimeRange(data.brief.scope?.timeRange?.preset ?? 'any');
         setScopeFrom(data.brief.scope?.timeRange?.from ?? '');
@@ -363,6 +375,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
     nextObjective = objective,
     nextFocusText = focusText,
     nextComparisonText = comparisonText,
+    nextComparisonOnly = comparisonOnly,
     nextTimeRange = timeRange,
     nextScopeFrom = scopeFrom,
     nextScopeTo = scopeTo,
@@ -372,6 +385,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
     nextObjective?: Objective;
     nextFocusText?: string;
     nextComparisonText?: string;
+    nextComparisonOnly?: boolean;
     nextTimeRange?: ResearchTimeRange['preset'];
     nextScopeFrom?: string;
     nextScopeTo?: string;
@@ -391,7 +405,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
         selectedContextItems: selected, legacyContextSelection: retainedLegacy, contextSelectionIncomplete: legacyIncomplete,
         assistantMessage: '', scopeValid: true,
         brief: {
-          objective, primaryTopicId: topicHint, question: trimmed,
+          objective, comparisonOnly: nextComparisonOnly, primaryTopicId: topicHint, question: trimmed,
           constraints: context.trim() ? [context.trim()] : [], questionsToAnswer: [],
           comparisonOptions: [], decisionDimensions: [], successCriteria: [],
           sourcePolicy: 'prefer_user_sources', outputType: 'markdown', scope: emptyScope(),
@@ -403,11 +417,15 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
       return;
     }
     const ids = selectedIds;
+    const comparisonOnlyActive = nextObjective === 'decide' && nextComparisonOnly;
     const questionsToAnswer = nextFocusText
       .split(/\n|；|;/u)
       .map((item) => item.trim())
       .filter(Boolean)
-      .slice(0, 20);
+      .slice(0, 20)
+      .map((item) => comparisonOnlyActive && /推荐/u.test(item)
+        ? '哪些差异只在特定条件下成立，条件变化时结论如何变化？'
+        : item);
     const comparisonOptions = nextComparisonText
       .split(/\n|；|;|、/u)
       .map((item) => item.trim())
@@ -429,12 +447,18 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
       decisionNeedsConfirmation: nextObjective === 'decide' && (comparisonOptions.length < 2 || decisionDimensions.length === 0),
       brief: {
         objective: nextObjective,
+        comparisonOnly: nextObjective === 'decide' ? nextComparisonOnly : false,
         question: plan!.brief.question,
         constraints: plan!.brief.constraints ?? [],
         questionsToAnswer,
         comparisonOptions: nextObjective === 'decide' ? comparisonOptions : [],
         decisionDimensions,
-        successCriteria: plan!.brief.successCriteria ?? [],
+        successCriteria: comparisonOnlyActive
+          ? [
+              ...(plan!.brief.successCriteria ?? []).filter((item) => !/推荐/u.test(item)),
+              '说明每个选项在什么条件下更合适，不给出唯一推荐',
+            ]
+          : plan!.brief.successCriteria ?? [],
         sourcePolicy: plan!.brief.sourcePolicy ?? 'prefer_user_sources',
         scope: {
           timeRange: {
@@ -559,16 +583,20 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
                       <Typography component="p" variant="body2" sx={{ fontWeight: 500 }}>
                         {objectiveChanged
                           ? objective === 'decide' && currentComparisons.length > 0
-                            ? `对比 ${currentComparisons.join('、')}，并形成有证据支撑的优先级建议。`
+                            ? comparisonOnly
+                              ? `对比 ${currentComparisons.join('、')}，只给差异与条件性结论，不给唯一推荐。`
+                              : `对比 ${currentComparisons.join('、')}，并形成有证据支撑的优先级建议。`
                             : `按「${OBJECTIVE_LABELS[objective]}」目标组织证据并生成结论。`
-                          : resolvedPlan.plan.summary}
+                          : comparisonOnly && objective === 'decide'
+                            ? `对比 ${currentComparisons.join('、')}，只给差异与条件性结论，不给唯一推荐。`
+                            : resolvedPlan.plan.summary}
                       </Typography>
                       <Typography component="p" variant="metadata" sx={{ mt: 0.5, color: 'text.secondary' }}>
                         预计需要几分钟到十几分钟；可以离开页面，完成后再回来查看。
                       </Typography>
                       {resolvedPlan.plan.steps?.length ? (
                         <Box component="ul" sx={{ mt: 1, pt: 1, display: 'flex', flexWrap: 'wrap', columnGap: 1.5, rowGap: 0.5, borderTop: 1, borderColor: 'divider', color: 'text.secondary', listStyle: 'none', m: 0, pl: 0 }}>
-                          {resolvedPlan.plan.steps.slice(0, 4).map((step) => <Box component="li" key={step.title}><Box component="span" aria-hidden="true">·</Box>{' '}{step.title}</Box>)}
+                          {(comparisonOnly && objective === 'decide' ? COMPARISON_ONLY_STEPS : resolvedPlan.plan.steps).slice(0, 4).map((step) => <Box component="li" key={step.title}><Box component="span" aria-hidden="true">·</Box>{' '}{step.title}</Box>)}
                         </Box>
                       ) : null}
                     </div>
@@ -609,6 +637,16 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
                   sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
                 />
               </Box>
+
+              {objective === 'decide' ? (
+                <Box sx={{ display: 'grid', gap: 1 }}>
+                  <FormControlLabel
+                    control={<Checkbox size="small" checked={comparisonOnly} onChange={(event) => { const next = event.target.checked; setComparisonOnly(next); publishPlan({ nextComparisonOnly: next }); }} />}
+                    label={<Box component="span"><Box component="span" sx={{ fontWeight: 500 }}>只对比，不推荐</Box><Typography component="span" variant="metadata" sx={{ display: 'block', color: 'text.secondary' }}>输出差异矩阵和条件性结论，不给唯一选择</Typography></Box>}
+                    sx={{ m: 0, alignItems: 'flex-start' }}
+                  />
+                </Box>
+              ) : null}
 
               {objective === 'decide' ? (
                 <Box component="label" sx={{ display: 'grid', gap: 1 }}>

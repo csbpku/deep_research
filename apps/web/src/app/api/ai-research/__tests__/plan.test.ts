@@ -377,3 +377,16 @@ describe('POST /api/ai-research/plan', () => {
 function ctx(): { params: Promise<Record<string, string>> } {
   return { params: Promise.resolve({}) };
 }
+
+describe('comparison-only plans', () => {
+  it('does not ask for a recommendation', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 PostgreSQL advisory lock 与行锁', comparisonOnly: true,
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOnly).toBe(true);
+    expect(body.brief.questionsToAnswer.join(' ')).not.toContain('推荐什么选择');
+    expect(body.brief.successCriteria.join(' ')).not.toContain('推荐和下一步');
+    expect(body.plan.summary).toContain('不给出唯一推荐');
+  });
+});

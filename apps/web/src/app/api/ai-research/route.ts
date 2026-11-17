@@ -84,6 +84,9 @@ function briefInstruction(brief: ResearchBrief | undefined): string {
     '[用户确认的研究计划]',
     `- 研究目标：${brief.objective}`,
     `- 核心问题：${brief.question}`,
+    ...(brief.objective === 'decide' && brief.comparisonOnly
+      ? ['- 输出约束：只对比，不推荐。给出差异矩阵与条件性结论，不要给唯一选择或推荐方案。']
+      : []),
     ...(brief.questionsToAnswer.length > 0
       ? ['- 必须回答的问题：', ...brief.questionsToAnswer.map((item) => `  - ${item}`)]
       : []),

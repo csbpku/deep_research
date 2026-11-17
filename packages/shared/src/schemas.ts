@@ -514,6 +514,10 @@ export const DEFAULT_RESEARCH_DECISION_DIMENSIONS = [
 
 export const ResearchBriefSchema = z.object({
   objective: ResearchObjectiveSchema,
+  // A comparison is often a deliberate "show me the differences, not a
+  // winner". Keep that separate from the objective so the plan does not turn
+  // back into a recommendation request.
+  comparisonOnly: z.boolean().default(false),
   question: z.string().min(2).max(RESEARCH_INPUT_MAX_CHARS),
   context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
   scope: ResearchScopeSchema,
