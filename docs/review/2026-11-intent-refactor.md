@@ -237,3 +237,11 @@ missing / missingLabels / complete`；新增类型只改这一个函数。测试
 所以先 groupBy 自评，再用这些 `researchId` 作为候选集；空集合直接返回 0。
 
 这把候选集从“整个研究库”降到“用户实际评过的文章”，分页语义和排序规则不变。
+
+
+## compare-only 开关（2026-11-17）
+
+- `ResearchBriefSchema` 增加 `comparisonOnly`。它改变确认页的默认问题、计划步骤、完成标准与默认产物，不只是提示词。
+- 真实 API：`comparisonOnly:true` 返回 `brief.comparisonOnly=true`，必答问题不含“推荐什么”，计划摘要写明“不给出唯一推荐”。
+- 真实任务 `923f11c1…`：对比矩阵 6,618 字、审核 42 条声明、coverage `complete`、15 条未核验、0 反证，发布为 `comparison_matrix`。
+- 发现并修复：比较对象推断把 `SELECT FOR UPDATE` 在英文介词处截成 `SELECT`；现在只对中文场景词和大小写敏感的英文 `for/in` 生效，SQL 关键字保持完整。
