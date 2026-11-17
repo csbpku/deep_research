@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coerceIntentCoverage, hasBlockingIntentCoverage, parseIntCoverage } from './research-intent-coverage';
+import { coerceIntentCoverage, hasBlockingIntentCoverage, hasDisclosableIntentCoverage, parseIntCoverage } from './research-intent-coverage';
 
 const sample = `## 一句话回答
 
@@ -47,6 +47,7 @@ describe('parseIntentCoverage', () => {
     const blocked = parseIntCoverage(`## 覆盖检查\n\n| 必答问题 | 状态 | 依据 |\n|---|---|---|\n| Q1 | 未知 | 本轮未确认 |\n| Q2 | 冲突 | 来源互相矛盾 |\n`);
 
     expect(hasBlockingIntentCoverage(partial)).toBe(false);
+    expect(hasDisclosableIntentCoverage(partial)).toBe(true);
     expect(hasBlockingIntentCoverage(blocked)).toBe(true);
     expect(hasBlockingIntentCoverage(null)).toBe(false);
   });

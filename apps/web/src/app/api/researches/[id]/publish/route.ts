@@ -28,7 +28,7 @@ import { resolveResearchReviewInventory } from '../../../../../lib/research-revi
 import { researchPublicationVersion } from '../../../../../lib/research-publication-version';
 import { projectResearchReviewForReader } from '../../../../../lib/research-review-reader';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
-import { hasBlockingIntentCoverage, parseIntCoverage } from '../../../../../lib/research-intent-coverage';
+import { hasDisclosableIntentCoverage, parseIntCoverage } from '../../../../../lib/research-intent-coverage';
 import { checkComparisonMatrix, findRecommendationLanguage } from '../../../../../lib/research-comparison-matrix';
 import { checkLearningPath } from '../../../../../lib/research-learning-path';
 import { publicationSummaryRequirement } from '../../../../../lib/research-publish-requirements';
@@ -270,14 +270,18 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const isLearningPath = existing.creationMethod === 'ai_research'
     && existing.sourceAiJob?.reportType === 'learning_path';
   const intentCoverage = parseIntCoverage(existing.body);
+  // Partial coverage means the evidence exists but is qualified; it is
+  // disclosed, not silently accepted. Unknown/conflict remain the hard cases,
+  // but all three require the same explicit acknowledgement.
   if (
     existing.creationMethod === 'ai_research'
-    && hasBlockingIntentCoverage(intentCoverage)
+    && hasDisclosableIntentCoverage(intentCoverage)
     && !acknowledgeDisclosure
   ) {
+    const counts = intentCoverage!.counts;
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: '必答问题里仍有未知或冲突项；确认披露后才能继续发布',
+      message: `必答问题里还有 ${counts.unknown} 个未知、${counts.conflict} 个冲突、${counts.partial} 个部分覆盖；确认披露后才能继续发布`,
       requestId,
       details: {
         requiresIntentCoverageAcknowledgement: true,
@@ -351,7 +355,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       const freshReview = publicationReview(fresh);
       if (freshReview.version !== version) throw new Error('RESEARCH_PUBLISH_CONFLICT');
       if (aiAssisted && freshReview.disposition.hardBlocked) throw new Error('RESEARCH_PUBLISH_REVIEW_GATE');
-      if (aiAssisted && hasBlockingIntentCoverage(parseIntCoverage(fresh.body)) && !acknowledgeDisclosure) {
+      if (aiAssisted && !acknowledgeDisclosure && hasDisclosableIntentCoverage(parseIntCoverage(fresh.body))) {
         throw new Error('RESEARCH_PUBLISH_COVERAGE_REQUIRED');
       }
       if (aiAssisted && (freshReview.disposition.requiresAcknowledgement || !freshReview.publicationGate) && !acknowledgeDisclosure) {

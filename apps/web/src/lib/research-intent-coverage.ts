@@ -85,6 +85,13 @@ export function hasBlockingIntentCoverage(
   return Boolean(coverage && (coverage.counts.unknown + coverage.counts.conflict > 0));
 }
 
+/** Partial coverage is disclosed too, but it is not an unanswered question. */
+export function hasDisclosableIntentCoverage(
+  coverage: IntentCoverage | null | undefined,
+): boolean {
+  return Boolean(coverage && (coverage.counts.unknown + coverage.counts.conflict + coverage.counts.partial > 0));
+}
+
 /** Accept a coverage snapshot read back from JSON without trusting its shape. */
 export function coerceIntentCoverage(value: unknown): IntentCoverage | null {
   if (!value || typeof value !== 'object') return null;

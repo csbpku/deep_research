@@ -74,7 +74,7 @@ import { useUnsavedGuard } from '@/lib/editor/use-unsaved-guard';
 import { useAutoSave } from '@/lib/editor/use-auto-save';
 import { resolveResearchSourceLink } from '@/lib/research-source-link';
 import { sha256Hex } from '@/lib/text-anchor';
-import { hasBlockingIntentCoverage, parseIntCoverage } from '@/lib/research-intent-coverage';
+import { hasDisclosableIntentCoverage, parseIntCoverage } from '@/lib/research-intent-coverage';
 import { commandQuery, matchingCommands, type MarkdownCommand } from '@/lib/editor/markdown-commands';
 import { activeOutlineItem, parseOutline } from '@/lib/editor/outline';
 import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
@@ -862,7 +862,7 @@ export default function EditorPage() {
   // A team publish with residual uncertainty is allowed, but never silently:
   // the author ticks the same disclosure the reader will see.
   const intentCoverage = parseIntCoverage(body);
-  const requiresIntentCoverageAck = reviewRequired && hasBlockingIntentCoverage(intentCoverage);
+  const requiresIntentCoverageAck = reviewRequired && hasDisclosableIntentCoverage(intentCoverage);
   const requiresDisclosureAck = (reviewRequired && !gateClean && !publishHardBlocked) || requiresIntentCoverageAck;
   const currentReviewIsCurrent = existing?.currentReview?.isCurrentRevision === true;
   const reviewInstruction = publishHardBlocked
@@ -1591,7 +1591,7 @@ export default function EditorPage() {
               <Typography variant="metadata" component="p" sx={{ fontWeight: 600 }}>发布时披露</Typography>
               {requiresIntentCoverageAck ? (
                 <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>
-                  必答问题还有 {intentCoverage?.counts.unknown ?? 0} 个未知、{intentCoverage?.counts.conflict ?? 0} 个冲突；发布后读者会在「必答问题覆盖」中看到同样的状态。
+                  必答问题还有 {intentCoverage?.counts.unknown ?? 0} 个未知、{intentCoverage?.counts.conflict ?? 0} 个冲突、{intentCoverage?.counts.partial ?? 0} 个部分覆盖；发布后读者会在「必答问题覆盖」中看到同样的状态。
                 </Typography>
               ) : null}
               <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>

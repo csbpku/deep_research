@@ -331,6 +331,37 @@ describe('research provenance input', () => {
     expect(published.publishedIntentCoverage).toMatchObject({ present: true, counts: { evidence: 1, unknown: 0, conflict: 0 } });
   });
 
+  it('requires an acknowledgement for partial must-answer coverage', async () => {
+    const id = '66666666-6666-4666-8666-666666666666';
+    const authorId = '11111111-1111-1111-1111-111111111111';
+    const body = `AI output
+
+## 覆盖检查
+
+| 必答问题 | 状态 | 依据 |
+|---|---|---|
+| 核心机制是什么？ | 有证据 | [S1] |
+| 边界是什么？ | 有证据 | 只覆盖了部分边界 |
+`;
+    mocks.researchFindUnique.mockResolvedValue({
+      id, authorId, status: 'draft', title: 'AI draft', body,
+      background: '研究背景', conclusion: '研究结论', risks: '风险', tags: [],
+      creationMethod: 'ai_research', reviewStatus: null, reviewRuns: [],
+    });
+
+    const noAck = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ publicationVersion: researchPublicationVersion(await mocks.researchFindUnique(), 'not_assessed') }),
+      }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+    expect(noAck.status).toBe(400);
+    const payload = await noAck.json();
+    expect(payload.details.requiresIntentCoverageAcknowledgement).toBe(true);
+    expect(payload.details.intentCoverage.counts.partial).toBe(1);
+  });
+
   it('publishes a learning path without the report summary sections', async () => {
     const id = '55555555-5555-4555-8555-555555555555';
     const authorId = '11111111-1111-1111-1111-111111111111';
