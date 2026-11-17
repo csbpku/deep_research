@@ -239,10 +239,10 @@ describe('buildSearchSql', () => {
     });
     // 不强制正则在多行 SQL 上的贪婪匹配；改为分段断言
     expect(rowsSql).toContain('ORDER BY');
-    expect(rowsSql).toContain('rank DESC');
+    expect(rowsSql).toContain('(rank + boost) DESC');
     expect(rowsSql).toContain('"publishedAt" DESC');
-    // rank 必须在 publishedAt 之前（rank DESC 是第一排序键）
-    const rankIdx = rowsSql.indexOf('rank DESC');
+    // rank + boost 必须在 publishedAt 之前（第一排序键）
+    const rankIdx = rowsSql.indexOf('(rank + boost) DESC');
     const pubIdx = rowsSql.indexOf('"publishedAt" DESC');
     expect(rankIdx).toBeGreaterThan(0);
     expect(pubIdx).toBeGreaterThan(rankIdx);
