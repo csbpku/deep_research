@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Flame, LayoutGrid, Library, Radar, Search, Settings, Workflow, type LucideIcon } from 'lucide-react';
+import { Flame, Inbox, LayoutGrid, Library, Radar, Search, Settings, Workflow, type LucideIcon } from 'lucide-react';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import { space, tokens } from '@deep-research/design-system';
@@ -14,7 +14,7 @@ import { isNavActive, PILL_LABELS, type NavItem, type NavItemIconKey } from './s
 export type { NavItem } from './sidebar-nav-config';
 export { PRIMARY_NAV, ADMIN_NAV, PILL_LABELS, PLACEHOLDER_P1 } from './sidebar-nav-config';
 
-const ICONS: Record<NavItemIconKey, LucideIcon> = { home: LayoutGrid, radar: Radar, research: Library, aiResearch: Workflow, search: Search, topic: Flame, admin: Settings };
+const ICONS: Record<NavItemIconKey, LucideIcon> = { home: LayoutGrid, radar: Radar, research: Library, inbox: Inbox, aiResearch: Workflow, search: Search, topic: Flame, admin: Settings };
 
 export function SidebarNav({ items, onNavigate, collapsed = false, horizontal = false }: {
   items: NavItem[]; onNavigate?: () => void; collapsed?: boolean; horizontal?: boolean;
