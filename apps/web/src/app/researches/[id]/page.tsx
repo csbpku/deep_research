@@ -32,6 +32,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
 import { ExportResearchMarkdownButton } from '@/components/research/ExportResearchMarkdownButton';
+import { ComparisonMatrixView } from '@/components/research/ComparisonMatrixView';
 import { LearningSelfCheck } from '@/components/research/LearningSelfCheck';
 import { parseSelfCheck, stripSelfCheckSection } from '@/lib/research-self-check';
 import { ReviewClaimsPanel, type ReviewClaimRun } from '@/components/ai-research/ReviewClaimsPanel';
@@ -50,7 +51,17 @@ import {
   cleanResearchText,
 } from '@/lib/research-markdown-cleanup';
 import { resolveResearchSourceLink } from '@/lib/research-source-link';
+import { parseComparisonMatrix } from '@/lib/research-comparison-matrix';
 import styles from '../research-detail.module.css';
+
+function splitMarkdownSection(body: string, heading: string): { before: string; after: string } | null {
+  const lines = body.split(/\r?\n/u);
+  const start = lines.findIndex(line => new RegExp(`^##\\s+${heading}\\s*$`, 'u').test(line.trim()));
+  if (start < 0) return null;
+  let end = start + 1;
+  while (end < lines.length && !/^##\s+/u.test(lines[end])) end += 1;
+  return { before: lines.slice(0, start).join('\n'), after: lines.slice(end).join('\n') };
+}
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -310,8 +321,10 @@ export default function ResearchDetailPage() {
   // Decision memos are markdown research drafts; the format is carried by the
   // artifact heading rather than researches.type, so surface it as a badge.
   const isComparisonMatrix = data.researchReportType === 'comparison_matrix';
+  const comparisonMatrix = isComparisonMatrix ? parseComparisonMatrix(data.body) : null;
   const isLearningPath = data.researchReportType === 'learning_path';
   const selfCheck = isLearningPath ? parseSelfCheck(data.body) : [];
+  const comparisonParts = comparisonMatrix ? splitMarkdownSection(data.body, '对比矩阵') : null;
   const bodyMarkdown = selfCheck.length > 0 ? stripSelfCheckSection(data.body) : data.body;
   const isDecisionMemo = isLongResearch && data.body.trimStart().startsWith('# 决策备忘');
   const isKnowledge = data.type === 'knowledge';
@@ -577,7 +590,18 @@ export default function ResearchDetailPage() {
             )}
 
             <SectionCard title="正文">
-              <MarkdownContent content={cleanResearchMarkdown(bodyMarkdown)} />
+              {comparisonParts ? (
+                <>
+                  <MarkdownContent content={cleanResearchMarkdown(comparisonParts.before)} />
+                  <Box sx={{ my: 2 }}>
+                    <Typography component="h2" sx={{ mb: 1, fontSize: "var(--dr-type-title-medium)", fontWeight: 600 }}>对比矩阵</Typography>
+                    <ComparisonMatrixView matrix={comparisonMatrix!} />
+                  </Box>
+                  <MarkdownContent content={cleanResearchMarkdown(comparisonParts.after)} />
+                </>
+              ) : (
+                <MarkdownContent content={cleanResearchMarkdown(bodyMarkdown)} />
+              )}
               {selfCheck.length > 0 && <LearningSelfCheck items={selfCheck} researchId={data.id} />}
             </SectionCard>
 
@@ -613,7 +637,18 @@ export default function ResearchDetailPage() {
             )}
 
             <SectionCard title="正文">
-              <MarkdownContent content={cleanResearchMarkdown(bodyMarkdown)} />
+              {comparisonParts ? (
+                <>
+                  <MarkdownContent content={cleanResearchMarkdown(comparisonParts.before)} />
+                  <Box sx={{ my: 2 }}>
+                    <Typography component="h2" sx={{ mb: 1, fontSize: "var(--dr-type-title-medium)", fontWeight: 600 }}>对比矩阵</Typography>
+                    <ComparisonMatrixView matrix={comparisonMatrix!} />
+                  </Box>
+                  <MarkdownContent content={cleanResearchMarkdown(comparisonParts.after)} />
+                </>
+              ) : (
+                <MarkdownContent content={cleanResearchMarkdown(bodyMarkdown)} />
+              )}
               {selfCheck.length > 0 && <LearningSelfCheck items={selfCheck} researchId={data.id} />}
             </SectionCard>
 
