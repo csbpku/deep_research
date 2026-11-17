@@ -96,7 +96,7 @@ export default function ReviewQueuePage() {
           icon={<AlarmClock size={18} aria-hidden />}
           render={item => (
             <>
-              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--dr-color-warning, #b25e09)' }}>已过期</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--dr-color-warning)' }}>已过期</span>
               <span style={{ fontSize: 13, color: 'var(--dr-color-text-secondary)' }}>
                 {item.judgementDue ? `已过期 ${item.judgementDue.daysOverdue} 天` : '待复查'}
               </span>
