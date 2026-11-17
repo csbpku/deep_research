@@ -3,7 +3,7 @@ CREATE TABLE "learning_self_check" (
     "userId" UUID NOT NULL,
     "researchId" UUID NOT NULL,
     "questionKey" TEXT NOT NULL,
-    "rating" TEXT NOT NULL,
+    "rating" VARCHAR(16) NOT NULL,
     "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ(3) NOT NULL,
     CONSTRAINT "learning_self_check_pkey" PRIMARY KEY ("id")
