@@ -40,6 +40,8 @@ export function JudgementReviewActions({ researchId }: { researchId: string }) {
       }
       await queryClient.invalidateQueries({ queryKey: ['research', researchId] });
       await queryClient.invalidateQueries({ queryKey: ['researches'] });
+      await queryClient.invalidateQueries({ queryKey: ['review-queue'] });
+      await queryClient.invalidateQueries({ queryKey: ['review-queue-count'] });
       setOpen(false);
       router.refresh();
     } catch (err) {

@@ -39,6 +39,7 @@ export function SidebarNav({ items, onNavigate, collapsed = false, horizontal = 
             label={item.badge > 99 ? '99+' : item.badge}
             size="small"
             color="warning"
+            data-review-queue-badge
             aria-label={`${item.label}：${item.badge} 项待处理`}
             sx={{ marginLeft: horizontal ? 0.5 : 'auto' }}
           />

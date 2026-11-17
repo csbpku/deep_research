@@ -10,6 +10,7 @@ import { LoadingState } from '@/components/StateMessage';
 // 触发 "X is not iterable"。
 import { ADMIN_NAV, PRIMARY_NAV, type NavItem } from './sidebar-nav-config';
 import { getReviewQueueCounts } from '@/lib/review-queue-count';
+import { ReviewQueueBadgeUpdater } from './ReviewQueueBadgeUpdater';
 import { prisma } from '@/lib/db';
 import styles from './shell.module.css';
 
@@ -43,6 +44,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     <div className={styles.shell}>
       <a href="#main-content" className={styles.skipLink}>跳到主要内容</a>
       <Topbar navItems={navItems} user={navUser} />
+      {reviewCounts ? <ReviewQueueBadgeUpdater initial={reviewCounts.total} /> : null}
       <ContextualShellBanner>
         <Suspense fallback={null}>
           <UnreadIssuesBanner user={user} />
