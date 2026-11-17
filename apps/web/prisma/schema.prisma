@@ -496,6 +496,12 @@ model Research {
   sourceCommentId     String?        @db.Uuid // type=knowledge 时指向源评论
   // 用户确认的短判断/笔记；不包含 Reader 原文摘录，AnythingLLM 只索引此字段。
   knowledgeIndexText String?         @db.Text
+  // A published knowledge card must say what the reader is claiming, not only
+  // what they read. Kept separate from `conclusion` so the note stays original.
+  judgement              String?   @db.VarChar(500)
+  judgementConfidence    String?   @db.VarChar(16)
+  judgementScope         String?   @db.VarChar(500)
+  judgementReviewAt      DateTime? @db.Timestamptz(3)
   // 已发布 AI 研究是稳定的、经过审核的版本；后续编辑创建新的私有草稿。
   supersedesResearchId String?       @db.Uuid
   reviewStatus        String?        @db.VarChar(32)

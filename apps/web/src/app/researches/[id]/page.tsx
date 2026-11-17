@@ -36,6 +36,8 @@ import { ComparisonMatrixView } from '@/components/research/ComparisonMatrixView
 import { LearningSelfCheck } from '@/components/research/LearningSelfCheck';
 import { parseSelfCheck, stripSelfCheckSection } from '@/lib/research-self-check';
 import { shouldRenderResearchSummary } from '@/lib/research-artifact-shape';
+import { KnowledgeJudgementForm, EMPTY_JUDGEMENT, type KnowledgeJudgementDraft } from '@/components/research/KnowledgeJudgementForm';
+import { JUDGEMENT_CONFIDENCE_LABELS, isJudgementDue } from '@/lib/research-knowledge-judgement';
 import { ReviewClaimsPanel, type ReviewClaimRun } from '@/components/ai-research/ReviewClaimsPanel';
 import { MetaItem, MetaRow } from '@/components/domain/MetaRow';
 import { SectionCard } from '@/components/domain/SectionCard';
@@ -115,6 +117,10 @@ interface ResearchDetail {
   background: string | null;
   conclusion: string | null;
   risks: string | null;
+  judgement?: string | null;
+  judgementConfidence?: 'low' | 'medium' | 'high' | null;
+  judgementScope?: string | null;
+  judgementReviewAt?: string | null;
   tags: string[];
   authorId: string;
   creationMethod: string;
@@ -242,6 +248,7 @@ export default function ResearchDetailPage() {
   const [publishKnowledgeOpen, setPublishKnowledgeOpen] = useState(false);
   const [publishKnowledgeBusy, setPublishKnowledgeBusy] = useState(false);
   const [publishKnowledgeError, setPublishKnowledgeError] = useState<string | null>(null);
+  const [judgementDraft, setJudgementDraft] = useState<KnowledgeJudgementDraft>(EMPTY_JUDGEMENT);
   const [loadingElapsed, setLoadingElapsed] = useState(0);
 
   const { data, isLoading, isError, error, refetch } = useQuery<ResearchDetail>({
@@ -480,7 +487,7 @@ export default function ResearchDetailPage() {
         open={publishKnowledgeOpen}
         onClose={() => { if (!publishKnowledgeBusy) setPublishKnowledgeOpen(false); }}
         title="发布这张知识卡？"
-        description="发布后团队成员可以阅读、引用和评论。知识卡保留你的来源摘录与笔记，不需要补研究摘要。"
+        description="发布后团队成员可以阅读、引用和评论。请先写下你愿意负责的判断，而不只是你读过什么。"
         actions={<>
           <AppButton variant="outlined" onClick={() => setPublishKnowledgeOpen(false)} disabled={publishKnowledgeBusy}>继续编辑</AppButton>
           <AppButton
@@ -491,7 +498,12 @@ export default function ResearchDetailPage() {
               setPublishKnowledgeError(null);
               void fetch(`/api/researches/${data.id}/publish`, {
                 method: 'POST', headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({}),
+                body: JSON.stringify({
+                  judgement: judgementDraft.judgement,
+                  judgementConfidence: judgementDraft.judgementConfidence,
+                  judgementScope: judgementDraft.judgementScope,
+                  judgementReviewAt: judgementDraft.judgementReviewAt,
+                }),
               }).then(async response => {
                 if (!response.ok) {
                   const payload = await response.json().catch(() => ({}));
@@ -509,7 +521,8 @@ export default function ResearchDetailPage() {
           </AppButton>
         </>}
       >
-        {publishKnowledgeError ? <Typography component="p" variant="body2" color="error.main" role="alert">{publishKnowledgeError}</Typography> : null}
+        <KnowledgeJudgementForm value={judgementDraft} onChange={setJudgementDraft} disabled={publishKnowledgeBusy} />
+        {publishKnowledgeError ? <Typography component="p" variant="body2" color="error.main" role="alert" sx={{ mt: 2 }}>{publishKnowledgeError}</Typography> : null}
       </AppDialog>
       {reviewError ? <Typography component="p" variant="metadata" color="error.main" role="alert">{reviewError}</Typography> : null}
 
@@ -671,6 +684,19 @@ export default function ResearchDetailPage() {
         {/* ── 知识卡片：结论 → 正文 → 来源评论/来源，证据统一排在正文之后 ── */}
         {isKnowledge && (
           <>
+            {data.judgement && (
+              <SectionCard title="判断" tone="default" icon={CheckCircle2}>
+                <Typography component="p" sx={{ m: 0, fontSize: 'var(--dr-type-body)', lineHeight: 1.7 }}>{data.judgement}</Typography>
+                <div className={styles.sourceMeta}>
+                  <span>置信度：{data.judgementConfidence ? JUDGEMENT_CONFIDENCE_LABELS[data.judgementConfidence] : '未标注'}</span>
+                  {data.judgementScope ? <span>适用边界：{data.judgementScope}</span> : null}
+                  {data.judgementReviewAt ? (
+                    <span>{isJudgementDue(data.judgementReviewAt) ? '已到复查时间' : '复查时间'}：{new Date(data.judgementReviewAt).toLocaleDateString('zh-CN')}</span>
+                  ) : null}
+                </div>
+              </SectionCard>
+            )}
+
             {data.conclusion && (
               <SectionCard title="结论" tone="success" icon={CheckCircle2}>
                 <MarkdownContent content={cleanResearchMarkdown(data.conclusion)} />

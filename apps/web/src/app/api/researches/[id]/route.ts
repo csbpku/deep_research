@@ -52,6 +52,10 @@ const researchSelect = {
   background: true,
   conclusion: true,
   risks: true,
+  judgement: true,
+  judgementConfidence: true,
+  judgementScope: true,
+  judgementReviewAt: true,
   tags: true,
   authorId: true,
   creationMethod: true,
@@ -798,6 +802,10 @@ function shapeResearchDetail(r: {
   background: string | null;
   conclusion: string | null;
   risks: string | null;
+  judgement?: string | null;
+  judgementConfidence?: string | null;
+  judgementScope?: string | null;
+  judgementReviewAt?: Date | null;
   tags: string[];
   authorId: string;
   creationMethod: string;
@@ -897,6 +905,10 @@ function shapeResearchDetail(r: {
     background: r.background,
     conclusion: r.conclusion,
     risks: r.risks,
+    judgement: r.judgement ?? null,
+    judgementConfidence: r.judgementConfidence ?? null,
+    judgementScope: r.judgementScope ?? null,
+    judgementReviewAt: r.judgementReviewAt?.toISOString() ?? null,
     tags: r.tags,
     authorId: r.authorId,
     creationMethod: r.creationMethod,

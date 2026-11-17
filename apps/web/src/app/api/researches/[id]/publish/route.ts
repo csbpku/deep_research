@@ -32,6 +32,7 @@ import { hasDisclosableIntentCoverage, parseIntCoverage } from '../../../../../l
 import { checkComparisonMatrix, findRecommendationLanguage } from '../../../../../lib/research-comparison-matrix';
 import { checkLearningPath } from '../../../../../lib/research-learning-path';
 import { publicationSummaryRequirement } from '../../../../../lib/research-publish-requirements';
+import { validateKnowledgeJudgement } from '../../../../../lib/research-knowledge-judgement';
 
 const IdParam = z.object({ id: z.string().uuid() });
 const PublishBody = z.object({
@@ -39,6 +40,10 @@ const PublishBody = z.object({
   // explicitly acknowledges it. The flag is an action, not a hidden default.
   acknowledgeDisclosure: z.boolean().optional(),
   publicationVersion: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  judgement: z.string().max(500).optional(),
+  judgementConfidence: z.enum(['low', 'medium', 'high']).optional(),
+  judgementScope: z.string().max(500).optional(),
+  judgementReviewAt: z.string().optional(),
 });
 
 const publicationSelect = {
@@ -46,6 +51,10 @@ const publicationSelect = {
   type: true,
   authorId: true,
   knowledgeIndexText: true,
+  judgement: true,
+  judgementConfidence: true,
+  judgementScope: true,
+  judgementReviewAt: true,
   status: true,
   title: true,
   body: true,
@@ -334,6 +343,27 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
 
+  // A knowledge card is a reusable claim, not a reading log. Requiring the
+  // judgement fields at publication keeps the library from filling with notes
+  // that only say "I read this".
+  if (existing.type === 'knowledge') {
+    const judgement = validateKnowledgeJudgement({
+      ...existing,
+      judgement: body.data.judgement ?? existing.judgement,
+      judgementConfidence: body.data.judgementConfidence ?? existing.judgementConfidence,
+      judgementScope: body.data.judgementScope ?? existing.judgementScope,
+      judgementReviewAt: body.data.judgementReviewAt ?? existing.judgementReviewAt,
+    });
+    if (!judgement.ok) {
+      return toApiErrorResponse({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: judgement.message,
+        requestId,
+        details: { requiresKnowledgeJudgement: true, missing: judgement.missing, errors: judgement.errors },
+      });
+    }
+  }
+
   // AI-generated drafts may be published as-is after the author explicitly
   // confirms publication. The review status remains the safety gate for
   // factual conflicts; an artificial "must edit one field" requirement is
@@ -360,6 +390,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       }
       if (aiAssisted && (freshReview.disposition.requiresAcknowledgement || !freshReview.publicationGate) && !acknowledgeDisclosure) {
         throw new Error('RESEARCH_PUBLISH_DISCLOSURE_REQUIRED');
+      }
+      if (fresh.type === 'knowledge' && !validateKnowledgeJudgement({
+        ...fresh,
+        judgement: body.data.judgement ?? fresh.judgement,
+        judgementConfidence: body.data.judgementConfidence ?? fresh.judgementConfidence,
+        judgementScope: body.data.judgementScope ?? fresh.judgementScope,
+        judgementReviewAt: body.data.judgementReviewAt ?? fresh.judgementReviewAt,
+      }).ok) {
+        throw new Error('RESEARCH_PUBLISH_JUDGEMENT_REQUIRED');
       }
       const claimed = await tx.research.updateMany({
         where: {
@@ -401,6 +440,14 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
             ? (parseIntCoverage(fresh.body) as unknown as Prisma.InputJsonValue)
             : Prisma.JsonNull,
           publishedReviewAcknowledgedAt: publishedAt,
+          ...(fresh.type === 'knowledge' ? {
+            judgement: (body.data.judgement ?? fresh.judgement)?.trim() || null,
+            judgementConfidence: body.data.judgementConfidence ?? fresh.judgementConfidence,
+            judgementScope: (body.data.judgementScope ?? fresh.judgementScope)?.trim() || null,
+            judgementReviewAt: body.data.judgementReviewAt
+              ? new Date(body.data.judgementReviewAt)
+              : fresh.judgementReviewAt,
+          } : {}),
         },
         select: {
           id: true,
@@ -503,6 +550,12 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     if (error instanceof Error && error.message === 'RESEARCH_PUBLISH_COVERAGE_REQUIRED') {
       return NextResponse.json(
         { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '必答问题覆盖已更新；请重新确认本次披露。', requestId },
+        { status: 409 },
+      );
+    }
+    if (error instanceof Error && error.message === 'RESEARCH_PUBLISH_JUDGEMENT_REQUIRED') {
+      return NextResponse.json(
+        { code: ERROR_CODES.VALIDATION_FAILED, message: '发布知识卡前需要补充判断、置信度、适用边界与复查时间。', requestId, details: { requiresKnowledgeJudgement: true } },
         { status: 409 },
       );
     }
