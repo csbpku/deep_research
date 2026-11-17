@@ -578,7 +578,7 @@ export default function ResearchDetailPage() {
 
             <SectionCard title="正文">
               <MarkdownContent content={cleanResearchMarkdown(bodyMarkdown)} />
-              {selfCheck.length > 0 && <LearningSelfCheck items={selfCheck} />}
+              {selfCheck.length > 0 && <LearningSelfCheck items={selfCheck} researchId={data.id} />}
             </SectionCard>
 
             {data.researchSources.length > 0 && (
@@ -614,7 +614,7 @@ export default function ResearchDetailPage() {
 
             <SectionCard title="正文">
               <MarkdownContent content={cleanResearchMarkdown(bodyMarkdown)} />
-              {selfCheck.length > 0 && <LearningSelfCheck items={selfCheck} />}
+              {selfCheck.length > 0 && <LearningSelfCheck items={selfCheck} researchId={data.id} />}
             </SectionCard>
 
             {data.sourceComment && (

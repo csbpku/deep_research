@@ -167,3 +167,10 @@
 选择写入 `localStorage` key `deep-research.self-check.v1`，刷新后保留；同题再次
 进入时直接显示上次自评与答案。正文渲染改用 `stripSelfCheckSection` 精确移除
 `## 自检` 段，避免答案在正文与组件里重复出现。
+
+### 复习队列
+
+自评结果按研究 id 分开存储（`deep-research.self-check.v1.<researchId>`），
+避免不同文章的题目互相串。标为“不确定/不会”的题会在组件顶部汇总：
+“还有 N 道题需要复习”。刷新后自评与已展开的答案一起恢复，读者能直接
+回到上次的薄弱点。

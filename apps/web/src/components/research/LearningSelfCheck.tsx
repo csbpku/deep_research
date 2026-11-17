@@ -10,11 +10,17 @@ import type { SelfCheckItem } from '@/lib/research-self-check';
 
 export interface LearningSelfCheckProps {
   items: SelfCheckItem[];
+  /** Research id keeps one article's review queue from leaking into another. */
+  researchId?: string;
 }
 
 export type SelfCheckRating = 'got_it' | 'unsure' | 'missed';
 
 const STORAGE_KEY = 'deep-research.self-check.v1';
+
+function storageKey(researchId?: string): string {
+  return researchId ? `${STORAGE_KEY}.${researchId}` : STORAGE_KEY;
+}
 
 const RATINGS: Array<{ value: SelfCheckRating; label: string }> = [
   { value: 'got_it', label: '会' },
@@ -28,41 +34,54 @@ const RATING_LABELS: Record<SelfCheckRating, string> = {
   missed: '不会',
 };
 
-function readRatings(): Record<string, SelfCheckRating> {
+function readRatings(key: string): Record<string, SelfCheckRating> {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as Record<string, SelfCheckRating>) : {};
   } catch {
     return {};
   }
 }
 
-function writeRatings(ratings: Record<string, SelfCheckRating>): void {
+function writeRatings(key: string, ratings: Record<string, SelfCheckRating>): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(ratings));
+    window.localStorage.setItem(key, JSON.stringify(ratings));
   } catch {
     // Storage can be unavailable in private mode; the rating still applies this session.
   }
 }
 
 /** Answers stay hidden until the reader commits to an attempt and rates it. */
-export function LearningSelfCheck({ items }: LearningSelfCheckProps) {
+export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps) {
+  const key = storageKey(researchId);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [ratings, setRatings] = useState<Record<string, SelfCheckRating>>({});
 
-  useEffect(() => setRatings(readRatings()), []);
+  useEffect(() => {
+    const stored = readRatings(key);
+    setRatings(stored);
+    // A rated question already had its attempt; restore its answer on return.
+    setOpen(new Set(Object.keys(stored)));
+  }, [key]);
 
   if (items.length === 0) return null;
 
   const rate = (question: string, rating: SelfCheckRating) => {
     const next = { ...ratings, [question]: rating };
     setRatings(next);
-    writeRatings(next);
+    writeRatings(key, next);
     setOpen(prev => new Set(prev).add(question));
   };
 
+  const due = items.filter(item => ratings[item.question] === 'unsure' || ratings[item.question] === 'missed').length;
+
   return (
     <Stack spacing={2} component="section" aria-label="学习自检" sx={{ mt: 2 }}>
+      {due > 0 && (
+        <Typography variant="caption" color="warning.main" data-testid="self-check-due">
+          还有 {due} 道题需要复习：标为“不确定”或“不会”的题已排进待复习。
+        </Typography>
+      )}
       {items.map((item, index) => {
         const visible = open.has(item.question);
         const rating = ratings[item.question];
