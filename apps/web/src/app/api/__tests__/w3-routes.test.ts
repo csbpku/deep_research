@@ -508,16 +508,22 @@ describe('research provenance input', () => {
     );
 
     expect(response.status).toBe(200);
+    const indexed = (mocks.researchUpdate.mock.calls as unknown as Array<[unknown]>)
+      .map(([arg]) => arg as { data?: { knowledgeIndexText?: string } })
+      .map(arg => arg.data?.knowledgeIndexText)
+      .filter((value): value is string => typeof value === 'string')
+      .find(value => value.includes('把私有向量排除在公共知识面之外。'));
+    expect(indexed).toContain('仅适用于团队共享的知识库');
     expect(mocks.personalKnowledgeIndexUpsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { researchId: id },
       create: expect.objectContaining({
         ownerId: authorId,
         researchId: id,
-        operation: 'delete',
+        operation: 'upsert',
         status: 'queued',
         generation: 1,
       }),
-      update: expect.objectContaining({ operation: 'delete', status: 'queued' }),
+      update: expect.objectContaining({ operation: 'upsert', status: 'queued' }),
     }));
   });
 
