@@ -37,6 +37,7 @@ import { evaluateResearchSufficiency } from '../../../../lib/research-sufficienc
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import {
   confirmedKnowledgeIndexText,
+  knowledgeCardIndexText,
   queuePersonalKnowledgeIndex,
   readingKnowledgeIndexTextFromBody,
 } from '../../../../lib/personal-knowledge-index';
@@ -393,6 +394,9 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       background: true,
       conclusion: true,
       risks: true,
+      judgement: true,
+      judgementConfidence: true,
+      judgementScope: true,
       tags: true,
       authorId: true,
       status: true,
@@ -485,6 +489,9 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       conclusion: existing.conclusion,
       risks: existing.risks,
       tags: existing.tags,
+      judgement: existing.judgement,
+      judgementConfidence: existing.judgementConfidence,
+      judgementScope: existing.judgementScope,
     };
 
     const nextSnapshot = {
@@ -494,9 +501,20 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       conclusion: body.conclusion !== undefined ? body.conclusion : existing.conclusion,
       risks: body.risks !== undefined ? body.risks : existing.risks,
       tags: body.tags ?? existing.tags,
+      judgement: existing.judgement,
+      judgementConfidence: existing.judgementConfidence,
+      judgementScope: existing.judgementScope,
     };
 
     const diff = computeDiff(prevSnapshot, nextSnapshot);
+    const publishedIndexText = existing.type === 'knowledge'
+      ? knowledgeCardIndexText({
+          ...nextSnapshot,
+          judgement: existing.judgement,
+          judgementConfidence: existing.judgementConfidence,
+          judgementScope: existing.judgementScope,
+        })
+      : undefined;
 
     // $transaction: update + audit 原子
     const result = await prisma.$transaction(async (tx) => {
@@ -522,6 +540,9 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
           conclusion: body.conclusion !== undefined ? body.conclusion : undefined,
           risks: body.risks !== undefined ? body.risks : undefined,
           ...(body.tags !== undefined ? { tags: body.tags } : {}),
+          ...(existing.type === 'knowledge'
+            ? { knowledgeIndexText: publishedIndexText }
+            : {}),
         },
         select: researchSelect,
       });
@@ -560,10 +581,13 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     conclusion: existing.conclusion,
     risks: existing.risks,
     tags: existing.tags,
+    judgement: existing.judgement,
+    judgementConfidence: existing.judgementConfidence,
+    judgementScope: existing.judgementScope,
   };
   const nextSnapshot = {
     title: body.title ?? existing.title,
-    body: revisionBody ?? existing.body,
+    body: revisionBody ?? body.body ?? existing.body,
     background: body.background !== undefined ? body.background : existing.background,
     conclusion: body.conclusion !== undefined ? body.conclusion : existing.conclusion,
     risks: body.risks !== undefined ? body.risks : existing.risks,
@@ -572,9 +596,11 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   const diff = computeDiff(prevSnapshot, nextSnapshot);
   const contentChanged = Object.keys(diff).length > 0;
   const nextKnowledgeIndexText = existing.type === 'knowledge'
-    ? existing.readingSaveKey && existing.creationMethod === 'manual'
-      ? readingKnowledgeIndexTextFromBody(nextSnapshot.body)
-      : confirmedKnowledgeIndexText(nextSnapshot)
+    ? existing.judgement
+      ? knowledgeCardIndexText(nextSnapshot)
+      : existing.readingSaveKey && existing.creationMethod === 'manual'
+        ? readingKnowledgeIndexTextFromBody(nextSnapshot.body)
+        : knowledgeCardIndexText(nextSnapshot)
     : undefined;
   const invalidatedReview = contentChanged ? {
     reviewStatus: null,

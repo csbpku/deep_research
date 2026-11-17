@@ -18,7 +18,7 @@ import { toApiErrorResponse } from '../../../../../lib/errors';
 import { log, withRequestId } from '../../../../../lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
-import { queuePersonalKnowledgeIndex } from '../../../../../lib/personal-knowledge-index';
+import { knowledgeCardIndexText, queuePersonalKnowledgeIndex } from '../../../../../lib/personal-knowledge-index';
 import { resolveCurrentReviewState } from '../../../../../lib/research-review-state';
 import {
   getReviewPublishDisposition,
@@ -476,11 +476,24 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           action: 'publish',
         },
       });
-      if (existing.type === 'knowledge' && existing.knowledgeIndexText) {
+      if (fresh.type === 'knowledge') {
+        const indexText = knowledgeCardIndexText({
+          title: fresh.title,
+          body: fresh.body,
+          conclusion: fresh.conclusion,
+          judgement: body.data.judgement ?? fresh.judgement,
+          judgementConfidence: body.data.judgementConfidence ?? fresh.judgementConfidence,
+          judgementScope: body.data.judgementScope ?? fresh.judgementScope,
+        });
+        await tx.research.update({
+          where: { id: parsed.data.id },
+          data: { knowledgeIndexText: indexText },
+          select: { id: true },
+        });
         await queuePersonalKnowledgeIndex(tx, {
-          ownerId: existing.authorId,
-          researchId: existing.id,
-          operation: 'delete',
+          ownerId: fresh.authorId,
+          researchId: parsed.data.id,
+          operation: 'upsert',
         });
       }
 
