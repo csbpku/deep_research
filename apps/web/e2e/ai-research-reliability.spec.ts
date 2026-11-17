@@ -127,7 +127,10 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
         await details.locator('summary').first().click();
       }
       await expect(details).toHaveJSProperty('open', true);
-      await expect(chat).toContainText('我会围绕');
+      // The plan brief is rendered in the thread, but the transcript can be
+      // taller than the viewport; wait for the copy rather than assuming it is
+      // already painted when the details element opens.
+      await expect(chat.getByText('我会围绕', { exact: false })).toBeVisible({ timeout: 10_000 });
     };
     const assertOrder = async () => {
       await expandThread();

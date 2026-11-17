@@ -246,6 +246,15 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   await tabTo(focus);
   await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.insertText('仅核对异常传播与取消行为');
+  // Comparison-only sits between the focus editor and the comparison options,
+  // so the next tab stop is the checkbox, not the options field.
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('checkbox', { name: /只对比，不推荐/ })).toBeFocused();
+  const comparisonOnly = page.getByRole('checkbox', { name: /只对比，不推荐/ });
+  await page.keyboard.press('Space');
+  await expect(comparisonOnly).toBeChecked();
+  await page.keyboard.press('Space');
+  await expect(comparisonOnly).not.toBeChecked();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('textbox', { name: '对比对象' })).toBeFocused();
   // Single-round is the default now, so it owns the radio group's tab stop.
