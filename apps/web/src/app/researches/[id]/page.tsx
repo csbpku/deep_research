@@ -32,6 +32,8 @@ import { EmptyState } from '@/components/EmptyState';
 import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
 import { ExportResearchMarkdownButton } from '@/components/research/ExportResearchMarkdownButton';
+import { LearningSelfCheck } from '@/components/research/LearningSelfCheck';
+import { parseSelfCheck } from '@/lib/research-self-check';
 import { ReviewClaimsPanel, type ReviewClaimRun } from '@/components/ai-research/ReviewClaimsPanel';
 import { MetaItem, MetaRow } from '@/components/domain/MetaRow';
 import { SectionCard } from '@/components/domain/SectionCard';
@@ -309,6 +311,10 @@ export default function ResearchDetailPage() {
   // artifact heading rather than researches.type, so surface it as a badge.
   const isComparisonMatrix = data.researchReportType === 'comparison_matrix';
   const isLearningPath = data.researchReportType === 'learning_path';
+  const selfCheck = isLearningPath ? parseSelfCheck(data.body) : [];
+  const bodyMarkdown = selfCheck.length > 0
+    ? data.body.replace(/^##\s+自检[\s\S]*?(?=^##\s+|\s*$)/mu, '')
+    : data.body;
   const isDecisionMemo = isLongResearch && data.body.trimStart().startsWith('# 决策备忘');
   const isKnowledge = data.type === 'knowledge';
   const isDraft = data.status === 'draft';
@@ -573,7 +579,8 @@ export default function ResearchDetailPage() {
             )}
 
             <SectionCard title="正文">
-              <MarkdownContent content={cleanResearchMarkdown(data.body)} />
+              <MarkdownContent content={cleanResearchMarkdown(bodyMarkdown)} />
+              {selfCheck.length > 0 && <LearningSelfCheck items={selfCheck} />}
             </SectionCard>
 
             {data.researchSources.length > 0 && (
@@ -608,7 +615,8 @@ export default function ResearchDetailPage() {
             )}
 
             <SectionCard title="正文">
-              <MarkdownContent content={cleanResearchMarkdown(data.body)} />
+              <MarkdownContent content={cleanResearchMarkdown(bodyMarkdown)} />
+              {selfCheck.length > 0 && <LearningSelfCheck items={selfCheck} />}
             </SectionCard>
 
             {data.sourceComment && (
