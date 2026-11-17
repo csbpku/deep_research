@@ -34,6 +34,15 @@ export function SidebarNav({ items, onNavigate, collapsed = false, horizontal = 
           '&:hover': { backgroundColor: active ? 'action.selected' : 'action.hover' },
         }}>
         <LinkPendingIcon label={item.label}><Icon size={16} aria-hidden /></LinkPendingIcon>{!collapsed ? item.label : null}
+        {item.badge && item.badge > 0 ? (
+          <Chip
+            label={item.badge > 99 ? '99+' : item.badge}
+            size="small"
+            color="warning"
+            aria-label={`${item.label}：${item.badge} 项待处理`}
+            sx={{ marginLeft: horizontal ? 0.5 : 'auto' }}
+          />
+        ) : null}
         {pill && !collapsed ? <Chip label={pill.label} size="small" sx={{ marginLeft: 'auto' }} /> : null}
       </AppButton>;
     })}

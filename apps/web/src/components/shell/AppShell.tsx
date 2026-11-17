@@ -9,6 +9,8 @@ import { LoadingState } from '@/components/StateMessage';
 // 按 ID 序列化（而不是按值），导致 `[...PRIMARY_NAV]` 在服务端拿到字符串，
 // 触发 "X is not iterable"。
 import { ADMIN_NAV, PRIMARY_NAV, type NavItem } from './sidebar-nav-config';
+import { getReviewQueueCounts } from '@/lib/review-queue-count';
+import { prisma } from '@/lib/db';
 import styles from './shell.module.css';
 
 /**
@@ -27,7 +29,10 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
   const isAdmin = user?.role === 'admin';
 
-  const navItems: NavItem[] = isAdmin ? [...PRIMARY_NAV, ADMIN_NAV] : PRIMARY_NAV;
+  const reviewCounts = user ? await getReviewQueueCounts(prisma, user.id).catch(() => null) : null;
+  const navItems: NavItem[] = (isAdmin ? [...PRIMARY_NAV, ADMIN_NAV] : PRIMARY_NAV).map(item =>
+    item.href === '/review' && reviewCounts ? { ...item, badge: reviewCounts.total } : item,
+  );
 
   // 传给 client 组件的必须是可序列化的纯数据。
   const navUser = user

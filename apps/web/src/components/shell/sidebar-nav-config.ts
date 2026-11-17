@@ -22,6 +22,8 @@ export interface NavItem {
   href: string;
   label: string;
   icon: NavItemIconKey;
+  /** Count of items waiting for this user; rendered as a compact badge. */
+  badge?: number;
 }
 
 export const PRIMARY_NAV: NavItem[] = [
