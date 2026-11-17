@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Stack from '@mui/material/Stack';
@@ -54,6 +55,7 @@ function writeRatings(key: string, ratings: Record<string, SelfCheckRating>): vo
 /** Answers stay hidden until the reader commits to an attempt and rates it. */
 export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps) {
   const key = storageKey(researchId);
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [ratings, setRatings] = useState<Record<string, SelfCheckRating>>({});
 
@@ -88,6 +90,11 @@ export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps)
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ researchId, questionKey: question, rating }),
+      }).then((response) => {
+        if (!response.ok) return;
+        void queryClient.invalidateQueries({ queryKey: ['review-queue'] });
+        void queryClient.invalidateQueries({ queryKey: ['review-queue-count'] });
+        void queryClient.invalidateQueries({ queryKey: ['researches'] });
       }).catch(() => undefined);
     }
     setOpen(prev => new Set(prev).add(question));
@@ -137,6 +144,18 @@ export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps)
                 <Typography component="p" sx={{ mt: 0.5, color: 'text.secondary' }}>
                   {item.answer}
                 </Typography>
+                <Button
+                  size="small"
+                  variant="text"
+                  sx={{ mt: 0.5, px: 0 }}
+                  onClick={() => setOpen(prev => {
+                    const next = new Set(prev);
+                    next.delete(item.question);
+                    return next;
+                  })}
+                >
+                  重新自评
+                </Button>
               </>
             )}
           </Box>
