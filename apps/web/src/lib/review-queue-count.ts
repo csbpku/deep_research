@@ -2,9 +2,9 @@ import type { PrismaClient } from '@prisma/client';
 
 /** How many items are waiting in the "待处理" queue for this user.
  *
- * Counts only what the user can actually act on. Learning items are counted
- * per question, not per article: a path with five missed prompts is five
- * reviews, and hiding that would make the badge lie about the workload.
+ * Counts articles, not individual questions: the badge links to a page that
+ * lists one row per article, and a badge that says 5 while the page shows 1
+ * row would make the user distrust both.
  */
 export interface ReviewQueueCounts {
   judgementDue: number;
@@ -15,7 +15,7 @@ export interface ReviewQueueCounts {
 type ReviewQueueDb = Pick<PrismaClient, 'research' | 'learningSelfCheck'>;
 
 export async function getReviewQueueCounts(db: ReviewQueueDb, userId: string, now = new Date()): Promise<ReviewQueueCounts> {
-  const [judgementDue, learningReview] = await Promise.all([
+  const [judgementDue, learningArticles] = await Promise.all([
     db.research.count({
       where: {
         authorId: userId,
@@ -25,9 +25,11 @@ export async function getReviewQueueCounts(db: ReviewQueueDb, userId: string, no
         judgementReviewAt: { lte: now },
       },
     }),
-    db.learningSelfCheck.count({
+    db.learningSelfCheck.findMany({
       where: { userId, rating: { in: ['unsure', 'missed'] } },
+      distinct: ['researchId'],
+      select: { researchId: true },
     }),
   ]);
-  return { judgementDue, learningReview, total: judgementDue + learningReview };
+  return { judgementDue, learningReview: learningArticles.length, total: judgementDue + learningArticles.length };
 }

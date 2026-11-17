@@ -2,26 +2,28 @@ import { describe, expect, it, vi } from 'vitest';
 import { getReviewQueueCounts } from './review-queue-count';
 
 describe('review queue count', () => {
-  it('counts due judgements plus every unsure/missed question', async () => {
-    const count = vi.fn()
-      .mockResolvedValueOnce(2)
-      .mockResolvedValueOnce(5);
-    const db = { research: { count }, learningSelfCheck: { count } } as never;
+  it('counts articles, not questions, so the badge matches the queue page', async () => {
+    const count = vi.fn().mockResolvedValue(2);
+    const findMany = vi.fn().mockResolvedValue([{ researchId: 'a' }, { researchId: 'b' }]);
+    const db = { research: { count }, learningSelfCheck: { findMany } } as never;
 
-    const result = await getReviewQueueCounts(db, 'user-1', new Date('2026-11-17T00:00:00Z'));
+    const now = new Date('2026-11-17T00:00:00Z');
+    const result = await getReviewQueueCounts(db, 'user-1', now);
 
-    expect(count).toHaveBeenNthCalledWith(1, {
+    expect(result).toEqual({ judgementDue: 2, learningReview: 2, total: 4 });
+    expect(count).toHaveBeenCalledWith({
       where: {
         authorId: 'user-1',
         type: 'knowledge',
         status: 'published',
         judgement: { not: null },
-        judgementReviewAt: { lte: new Date('2026-11-17T00:00:00Z') },
+        judgementReviewAt: { lte: now },
       },
     });
-    expect(count).toHaveBeenNthCalledWith(2, {
+    expect(findMany).toHaveBeenCalledWith({
       where: { userId: 'user-1', rating: { in: ['unsure', 'missed'] } },
+      distinct: ['researchId'],
+      select: { researchId: true },
     });
-    expect(result).toEqual({ judgementDue: 2, learningReview: 5, total: 7 });
   });
 });

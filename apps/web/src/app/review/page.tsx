@@ -50,7 +50,14 @@ function QueueSection({ title, description, href, query, icon, render }: {
     <Paper variant="outlined" sx={{ p: 3 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         {icon}
-        <h2 style={{ margin: 0, fontSize: 18 }}>{title}</h2>
+        <h2 style={{ margin: 0, fontSize: 18 }}>
+          {title}
+          {typeof data?.total === 'number' && data.total > 0 ? (
+            <span style={{ marginLeft: 8, fontSize: 14, fontWeight: 500, color: 'var(--dr-color-text-secondary)' }}>
+              {data.total} 条
+            </span>
+          ) : null}
+        </h2>
       </div>
       <p style={{ margin: '0 0 16px', color: 'var(--dr-color-text-secondary)', fontSize: 14 }}>{description}</p>
       {isLoading ? <Skeleton variant="rounded" height={72} /> : null}
@@ -117,6 +124,7 @@ export default function ReviewQueuePage() {
         />
       </div>
       <p style={{ marginTop: 24, color: 'var(--dr-color-text-secondary)', fontSize: 13 }}>
+        只统计你能处理的条目：自己发布的知识卡判断、自己标记的学习自评。团队共享的判断不在这里。
         处理动作在内容详情页完成；这里只负责把“该处理什么”收拢到一个入口。
       </p>
     </div>
