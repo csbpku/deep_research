@@ -138,37 +138,84 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   });
 
   const needsReviewQuery = needsReview === true;
-  const [itemsRaw, total] = await Promise.all([
-    prisma.research.findMany({
-      where,
-      orderBy: researchListOrderBy(sort),
-      skip: (page - 1) * limit,
-      take: limit,
+  type ListRow = {
+    id: string; type: string; status: string; title: string; body: string;
+    background: string | null; conclusion: string | null; risks: string | null;
+    tags: string[]; authorId: string; creationMethod: string; aiAssisted: boolean;
+    publishedAt: Date | null; featuredAt: Date | null; createdAt: Date; updatedAt: Date;
+    author: { id: string; name: string; email: string };
+    learningSelfChecks?: { rating: string; updatedAt: Date }[];
+  };
+  let items: ListRow[];
+  let total: number;
+  if (needsReviewQuery) {
+    // Rank every matching article in the database, not just the current page.
+    // Ratings are per user, so a column on Research would be wrong; group the
+    // small rating table first and rank the candidate ids in memory.
+    const [grouped, candidates] = await Promise.all([
+      prisma.learningSelfCheck.groupBy({
+        by: ['researchId', 'rating'],
+        where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
+        _count: { _all: true },
+        _min: { updatedAt: true },
+      }),
+      prisma.research.findMany({
+        where,
+        select: { id: true, updatedAt: true },
+      }),
+    ]);
+    const stats = new Map<string, { rating: string; updatedAt: Date }[]>();
+    for (const row of grouped) {
+      const list = stats.get(row.researchId) ?? [];
+      for (let index = 0; index < row._count._all; index++) {
+        list.push({ rating: row.rating, updatedAt: row._min.updatedAt ?? new Date(0) });
+      }
+      stats.set(row.researchId, list);
+    }
+    const ranked = rankResearchForReview(
+      candidates.map(candidate => ({
+        id: candidate.id,
+        updatedAt: candidate.updatedAt,
+        learningSelfChecks: stats.get(candidate.id) ?? [],
+      })),
+    );
+    total = ranked.length;
+    const pageIds = ranked.slice((page - 1) * limit, page * limit).map(item => item.id);
+    const rows = await prisma.research.findMany({
+      where: { id: { in: pageIds } },
       select: {
-        id: true,
-        type: true,
-        status: true,
-        title: true,
-        body: true,
-        background: true,
-        conclusion: true,
-        risks: true,
-        tags: true,
-        authorId: true,
-        creationMethod: true,
-        aiAssisted: true,
-        publishedAt: true,
-        featuredAt: true,
-        createdAt: true,
-        updatedAt: true,
+        id: true, type: true, status: true, title: true, body: true, background: true,
+        conclusion: true, risks: true, tags: true, authorId: true, creationMethod: true,
+        aiAssisted: true, publishedAt: true, featuredAt: true, createdAt: true, updatedAt: true,
         author: { select: { id: true, name: true, email: true } },
-        ...(needsReviewQuery ? { learningSelfChecks: { where: { userId: u.id, rating: { in: ['unsure', 'missed'] } }, select: { rating: true, updatedAt: true } } } : {}),
+        learningSelfChecks: {
+          where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
+          select: { rating: true, updatedAt: true },
+        },
       },
-    }),
-    prisma.research.count({ where }),
-  ]);
+    });
+    const byId = new Map(rows.map(row => [row.id, row]));
+    items = pageIds.map(id => byId.get(id)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  } else {
+    const [rows, count] = await Promise.all([
+      prisma.research.findMany({
+        where,
+        orderBy: researchListOrderBy(sort),
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true, type: true, status: true, title: true, body: true, background: true,
+          conclusion: true, risks: true, tags: true, authorId: true, creationMethod: true,
+          aiAssisted: true, publishedAt: true, featuredAt: true, createdAt: true, updatedAt: true,
+          author: { select: { id: true, name: true, email: true } },
+        },
+      }),
+      prisma.research.count({ where }),
+    ]);
+    items = rows;
+    total = count;
+  }
 
-  const items = needsReviewQuery ? rankResearchForReview(itemsRaw) : itemsRaw;
   return NextResponse.json({
     items: items.map((item) => ({
       id: item.id,
