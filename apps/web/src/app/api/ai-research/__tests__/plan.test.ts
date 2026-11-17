@@ -390,3 +390,14 @@ describe('comparison-only plans', () => {
     expect(body.plan.summary).toContain('不给出唯一推荐');
   });
 });
+
+describe('comparison option inference keeps SQL identifiers intact', () => {
+  it('does not cut SELECT FOR UPDATE at the English preposition', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 pg_advisory_xact_lock 和 SELECT FOR UPDATE 在库存扣减场景的适用边界',
+      comparisonOnly: true,
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOptions).toEqual(['pg_advisory_xact_lock', 'SELECT FOR UPDATE']);
+  });
+});

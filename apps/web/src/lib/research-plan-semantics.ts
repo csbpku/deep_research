@@ -7,7 +7,10 @@ function cleanOption(value: string): string {
   return value
     .replace(/^\s*and\s+/iu, '')
     // Scenario and requested comparison dimensions are not part of a name.
-    .replace(/\s+(?:在|针对|面向|用于|for\b|in\b)\s*.+$/iu, '')
+    // English markers stay case-sensitive so SQL names such as "SELECT FOR
+    // UPDATE" keep their keywords instead of being cut at "FOR".
+    .replace(/\s+(?:在|针对|面向|用于)\s*.+$/u, '')
+    .replace(/\s+(?:for|in)\s+.+$/u, '')
     .replace(/\s*的(?:工程取舍|研究过程|研究能力|产品能力|适用|异常|取消|优劣|区别|差异|选择|机制|行为|成本|性能).*/u, '')
     .replace(/\s*(?:工程取舍|研究过程(?:设计)?|研究能力|产品能力|优劣|区别|差异|对比|比较)$/iu, '')
     .replace(/^[“"'「『]|[”"'」』。！？!?\.]+$/gu, '')
@@ -64,7 +67,8 @@ export function inferComparisonOptions(question: string): string[] {
   const namedPart = comparison.split(/，|,/u)
     .filter((part) => !INSTRUCTION.test(part.trim()))
     .join('、')
-    .replace(/\s+(?:在|针对|面向|用于|for\b|in\b)\s*.+$/iu, '')
+    .replace(/\s+(?:在|针对|面向|用于)\s*.+$/u, '')
+    .replace(/\s+(?:for|in)\s+.+$/u, '')
     .replace(/\s*的(?:工程取舍|研究过程|研究能力|产品能力|适用|异常|取消|优劣|区别|差异|选择|机制|行为|成本|性能).*/u, '');
   const options = Array.from(new Set(splitNamedItems(namedPart)
     .map(cleanOption)
