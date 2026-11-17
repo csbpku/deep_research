@@ -21,13 +21,14 @@ from ai_engine.contracts.states import AI_JOB_STEP
 from ai_engine.reviewer import ReviewResult
 
 
-def _make_job(report_length: str | None, max_urls: int | None = None):
+def _make_job(report_length: str | None, max_urls: int | None = None, report_type: str = "research_report"):
     """Build a minimal _Job stub with just enough state for the ceiling."""
 
     class _StubRequest:
         def __init__(self, report_length: str | None, max_urls: int | None) -> None:
             self.report_length = report_length
             self.max_urls_to_scrape = max_urls
+            self.report_type = report_type
 
     class _StubJob:
         def __init__(self, request: _StubRequest) -> None:
@@ -321,3 +322,16 @@ def test_slides_contract_respects_requested_total_page_count() -> None:
     contract = _report_output_contract("比较 asyncio.gather 和 TaskGroup，用5页提纲说明", report_type="slides")
     assert "总共 5 页" in contract
     assert "封面和收尾页计入总页数" in contract
+
+
+def test_learning_path_caps_scrape_at_standard_envelope() -> None:
+    job = _make_job(report_length="deep", report_type="learning_path")
+    ceiling = _resolve_run_ceiling(job)
+    assert ceiling["total_words"] == _REPORT_LENGTH_PRESETS["deep"]["total_words"]
+    assert ceiling["max_urls"] == _REPORT_LENGTH_PRESETS["standard"]["max_urls"]
+    assert ceiling["max_search_results"] == _REPORT_LENGTH_PRESETS["standard"]["max_search_results"]
+
+
+def test_learning_path_keeps_an_explicit_user_override() -> None:
+    job = _make_job(report_length="deep", max_urls=6, report_type="learning_path")
+    assert _resolve_run_ceiling(job)["max_urls"] == 6

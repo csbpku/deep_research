@@ -33,9 +33,10 @@ const LABELS: Record<PublicationSummaryField, string> = {
 };
 
 export function publicationSummaryRequirement(input: PublicationSummaryInput): PublicationSummaryRequirement {
+  const isAiReport = input.creationMethod === 'ai_research';
   const kind = input.type === 'knowledge'
     ? 'knowledge'
-    : input.creationMethod === 'ai_research' && input.reportType === 'learning_path'
+    : isAiReport && input.reportType === 'learning_path'
       ? 'learning_path'
       : 'research';
   const required: PublicationSummaryField[] = kind === 'research'

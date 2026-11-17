@@ -3346,6 +3346,16 @@ def _resolve_run_ceiling(job: _Job) -> dict[str, int]:
     preset_key = str(raw).strip().lower()
     preset = _REPORT_LENGTH_PRESETS.get(preset_key, _REPORT_LENGTH_PRESETS["standard"])
     ceiling = dict(preset)
+    if str(getattr(job.request, "report_type", "")).strip().lower() == "learning_path":
+        # A learning path is a teaching artifact, not a survey: it needs
+        # canonical sources (docs, source code, one worked example), not
+        # breadth. Keep the user's depth for the writing contract, but cap
+        # scraping at the "standard" envelope so a lesson does not pay for a
+        # 48-URL research sweep.
+        ceiling["max_urls"] = min(ceiling["max_urls"], _REPORT_LENGTH_PRESETS["standard"]["max_urls"])
+        ceiling["max_search_results"] = min(
+            ceiling["max_search_results"], _REPORT_LENGTH_PRESETS["standard"]["max_search_results"]
+        )
     explicit = getattr(job.request, "max_urls_to_scrape", None)
     if isinstance(explicit, int) and 5 <= explicit <= 48:
         ceiling["max_urls"] = explicit

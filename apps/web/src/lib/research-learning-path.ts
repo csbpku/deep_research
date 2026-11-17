@@ -38,8 +38,15 @@ export function checkLearningPath(body: string): LearningPathCheck {
   const data = table.slice(1);
   const issues: string[] = [];
   if (data.length < 4 || data.length > 6) issues.push(`概念图需要 4–6 个概念，当前 ${data.length} 个`);
+  const seen = new Set<string>();
   for (const row of data) {
-    if (!row[0]) issues.push('概念图存在空概念名');
+    if (!row[0]) {
+      issues.push('概念图存在空概念名');
+    } else {
+      const key = row[0].replace(/[`*\s]/gu, '').toLowerCase();
+      if (seen.has(key)) issues.push(`概念「${row[0]}」在概念图里重复出现`);
+      seen.add(key);
+    }
     if (!row[2] || /^[-—/]$/u.test(row[2])) {
       issues.push(`概念「${row[0] || '未命名'}」缺少与其他概念的关系`);
       continue;
