@@ -17,3 +17,7 @@
 .snippet mark { padding-inline: 2px; border-radius: var(--dr-radius-xs); background: var(--dr-color-warning-container); color: var(--dr-color-warning); }
 .date { color: var(--dr-color-text-muted); font-size: var(--dr-type-caption); line-height: var(--dr-line-height-body); font-variant-numeric: tabular-nums; }
 @media (min-width: 640px) { .submitLabel { display: inline; } }
+.judgementLabel {
+  color: var(--dr-color-warning);
+  font-weight: 600;
+}

@@ -38,6 +38,7 @@ interface SearchRow {
   title: string;
   snippet: string;
   highlighted: string;
+  judgementMatch?: string | null;
   publishedAt: string;
   rank: number;
   isPrivate: boolean;
@@ -53,6 +54,21 @@ interface SearchResponse {
 
 // Preserve the existing URL/API contract: all is omitted from requests.
 const ALL = 'all';
+
+/** Highlight the user's query in the judgement without trusting model text as HTML. */
+function highlightQuery(text: string, query: string): React.ReactNode {
+  const needle = query.trim();
+  if (!needle) return text;
+  const index = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (index < 0) return text;
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark>{text.slice(index, index + needle.length)}</mark>
+      {text.slice(index + needle.length)}
+    </>
+  );
+}
 
 const TYPE_TABS: Array<{ key: string; label: string }> = [
   { key: ALL, label: '全部' },
@@ -282,10 +298,17 @@ function SearchContent() {
                         </h2>
                         {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
                             并在返回前转义来源文本，只保留高亮标签。 */}
-                        <p
-                          className={styles.snippet}
-                          dangerouslySetInnerHTML={{ __html: row.highlighted }}
-                        />
+                        {row.type === 'knowledge' && row.judgementMatch ? (
+                          <p className={styles.snippet}>
+                            <span className={styles.judgementLabel}>判断命中：</span>
+                            <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
+                          </p>
+                        ) : (
+                          <p
+                            className={styles.snippet}
+                            dangerouslySetInnerHTML={{ __html: row.highlighted }}
+                          />
+                        )}
                         <time className={styles.date} dateTime={row.publishedAt}>
                           {new Date(row.publishedAt).toLocaleString('zh-CN')}
                         </time>

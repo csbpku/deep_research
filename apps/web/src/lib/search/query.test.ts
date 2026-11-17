@@ -32,3 +32,12 @@ describe('buildSearchSql judgement ranking', () => {
     expect(rowsSql).toContain('ORDER BY (rank + boost) DESC');
   });
 });
+
+describe('buildSearchSql judgement highlight', () => {
+  it('selects a judgement headline for knowledge matches', () => {
+    const { rowsSql } = buildSearchSql({ q: '调用关系', page: 1, perPage: 20 });
+    expect(rowsSql).toContain('"judgementMatch"');
+    expect(rowsSql).toContain('left(r2.judgement');
+    expect(rowsSql).toContain('r2.judgement');
+  });
+});

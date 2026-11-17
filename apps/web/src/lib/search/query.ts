@@ -246,7 +246,18 @@ export function buildSearchSql(args: BuildSearchArgs): {
   `;
 
   const rowsSql = `${matchesSql}
-    SELECT id, type, "refId", title, snippet, highlighted, "publishedAt", "isPrivate", rank
+    SELECT
+      id, type, "refId", title, snippet, highlighted, "publishedAt", "isPrivate", rank,
+      CASE WHEN type = 'knowledge' THEN (
+        SELECT left(r2.judgement, 240)
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+          AND r2.judgement IS NOT NULL
+          AND (
+            strpos(lower(r2.judgement), lower($1)) > 0
+            OR similarity(lower(r2.judgement), lower($1)) >= 0.35
+          )
+      ) END AS "judgementMatch"
     FROM (
       SELECT
         id, type, "refId", title, snippet, highlighted, "publishedAt", "isPrivate", rank,
@@ -296,6 +307,7 @@ export function shapeSearchRow(row: {
   publishedAt: Date;
   rank: number;
   isPrivate?: boolean;
+  judgementMatch?: string | null;
 }) {
   return {
     id: row.id,
@@ -304,6 +316,7 @@ export function shapeSearchRow(row: {
     title: cleanResearchLabel(row.title),
     snippet: row.snippet,
     highlighted: sanitizeSearchHighlight(row.highlighted),
+    judgementMatch: row.judgementMatch ? row.judgementMatch : null,
     publishedAt: row.publishedAt.toISOString(),
     rank: Number(row.rank.toFixed(4)),
     isPrivate: row.isPrivate === true,
