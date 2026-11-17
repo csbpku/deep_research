@@ -9,13 +9,19 @@ import { AppDialog } from '@/components/material/AppDialog';
 
 /** A due judgement is a decision, not a badge: reaffirm it (with a new
  *  expiry), revise the wording, or archive the card. */
+function addDays(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 export function JudgementReviewActions({ researchId }: { researchId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reviewAt, setReviewAt] = useState('');
+  const [reviewAt, setReviewAt] = useState(() => addDays(90));
 
   async function post(action: 'reaffirm' | 'revise' | 'archive', body: Record<string, unknown> = {}) {
     setBusy(true);
@@ -74,6 +80,19 @@ export function JudgementReviewActions({ researchId }: { researchId: string }) {
           <Typography variant="body2" color="text.secondary">
             确认这条判断仍然成立，并选择下一次复查时间。修改记录会写入审计。
           </Typography>
+          <Stack direction="row" spacing={1}>
+            {[30, 90, 180].map((days) => (
+              <AppButton
+                key={days}
+                type="button"
+                size="small"
+                variant={reviewAt === addDays(days) ? 'contained' : 'outlined'}
+                onClick={() => setReviewAt(addDays(days))}
+              >
+                {days} 天
+              </AppButton>
+            ))}
+          </Stack>
           <TextField
             type="date"
             label="下一次复查"
