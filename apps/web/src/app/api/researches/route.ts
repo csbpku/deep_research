@@ -152,18 +152,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     // Rank every matching article in the database, not just the current page.
     // Ratings are per user, so a column on Research would be wrong; group the
     // small rating table first and rank the candidate ids in memory.
-    const [grouped, candidates] = await Promise.all([
-      prisma.learningSelfCheck.groupBy({
-        by: ['researchId', 'rating'],
-        where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
-        _count: { _all: true },
-        _min: { updatedAt: true },
-      }),
-      prisma.research.findMany({
-        where,
-        select: { id: true, updatedAt: true },
-      }),
-    ]);
+    const grouped = await prisma.learningSelfCheck.groupBy({
+      by: ['researchId', 'rating'],
+      where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
+      _count: { _all: true },
+      _min: { updatedAt: true },
+    });
     const stats = new Map<string, { rating: string; updatedAt: Date }[]>();
     for (const row of grouped) {
       const list = stats.get(row.researchId) ?? [];
@@ -172,6 +166,14 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       }
       stats.set(row.researchId, list);
     }
+    // Only articles this user has actually rated can be "needs review".
+    // Fetching the whole research table just to sort it was the old cost.
+    const candidates = stats.size === 0
+      ? []
+      : await prisma.research.findMany({
+        where: { AND: [where, { id: { in: [...stats.keys()] } }] },
+        select: { id: true, updatedAt: true },
+      });
     const ranked = rankResearchForReview(
       candidates.map(candidate => ({
         id: candidate.id,

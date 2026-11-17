@@ -229,3 +229,11 @@
 现在两处都调用 `publicationSummaryRequirement()`，返回 `kind / required /
 missing / missingLabels / complete`；新增类型只改这一个函数。测试覆盖研究稿、
 知识卡片、学习路径、AI 研究稿四种组合。
+
+### 待复习列表的候选集
+
+`needsReview` 以前先 `research.findMany({ where })` 拉全部匹配文章，再在内存里
+排序切页。实际上只有存在当前用户 `unsure/missed` 自评的文章才可能进入结果，
+所以先 groupBy 自评，再用这些 `researchId` 作为候选集；空集合直接返回 0。
+
+这把候选集从“整个研究库”降到“用户实际评过的文章”，分页语义和排序规则不变。
