@@ -43,3 +43,18 @@ export function parseSelfCheck(body: string): SelfCheckItem[] {
   flush();
   return items.filter(item => item.question && item.answer);
 }
+
+/** Remove the self-check section so the interactive component owns it. */
+export function stripSelfCheckSection(body: string): string {
+  const lines = String(body ?? '').split(/\r?\n/u);
+  const start = lines.findIndex(line => SECTION.test(line.trim()));
+  if (start < 0) return body;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index++) {
+    if (/^##\s+/u.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return [...lines.slice(0, start), ...lines.slice(end)].join('\n');
+}

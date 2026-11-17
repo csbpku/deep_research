@@ -33,7 +33,7 @@ import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
 import { ExportResearchMarkdownButton } from '@/components/research/ExportResearchMarkdownButton';
 import { LearningSelfCheck } from '@/components/research/LearningSelfCheck';
-import { parseSelfCheck } from '@/lib/research-self-check';
+import { parseSelfCheck, stripSelfCheckSection } from '@/lib/research-self-check';
 import { ReviewClaimsPanel, type ReviewClaimRun } from '@/components/ai-research/ReviewClaimsPanel';
 import { MetaItem, MetaRow } from '@/components/domain/MetaRow';
 import { SectionCard } from '@/components/domain/SectionCard';
@@ -312,9 +312,7 @@ export default function ResearchDetailPage() {
   const isComparisonMatrix = data.researchReportType === 'comparison_matrix';
   const isLearningPath = data.researchReportType === 'learning_path';
   const selfCheck = isLearningPath ? parseSelfCheck(data.body) : [];
-  const bodyMarkdown = selfCheck.length > 0
-    ? data.body.replace(/^##\s+自检[\s\S]*?(?=^##\s+|\s*$)/mu, '')
-    : data.body;
+  const bodyMarkdown = selfCheck.length > 0 ? stripSelfCheckSection(data.body) : data.body;
   const isDecisionMemo = isLongResearch && data.body.trimStart().startsWith('# 决策备忘');
   const isKnowledge = data.type === 'knowledge';
   const isDraft = data.status === 'draft';

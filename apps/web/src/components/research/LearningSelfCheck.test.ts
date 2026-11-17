@@ -10,6 +10,7 @@ describe('LearningSelfCheck', () => {
     );
     expect(html).toContain('问题？');
     expect(html).not.toContain('答案。');
-    expect(html).toContain('先想一想');
+    expect(html).toContain('你的把握是');
+    expect(html).toContain('不确定');
   });
 });

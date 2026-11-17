@@ -160,3 +160,10 @@
 控制台无报错，`scrollWidth - clientWidth = 0`。
 
 ![学习自检](../shots/2026-11-learning-self-check.png)
+
+### 自评闭环
+
+自检题现在先让读者选“会 / 不确定 / 不会”，再展开答案，并显示自己的自评。
+选择写入 `localStorage` key `deep-research.self-check.v1`，刷新后保留；同题再次
+进入时直接显示上次自评与答案。正文渲染改用 `stripSelfCheckSection` 精确移除
+`## 自检` 段，避免答案在正文与组件里重复出现。

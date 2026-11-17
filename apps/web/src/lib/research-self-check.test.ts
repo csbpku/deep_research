@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSelfCheck } from './research-self-check';
+import { parseSelfCheck, stripSelfCheckSection } from './research-self-check';
 
 const body = `# 学习
 
@@ -24,5 +24,12 @@ describe('parseSelfCheck', () => {
 
   it('returns nothing outside a learning path', () => {
     expect(parseSelfCheck('## 结论\n\n1. 不是自检')).toEqual([]);
+  });
+});
+
+describe('stripSelfCheckSection', () => {
+  it('removes only the self-check section', () => {
+    expect(stripSelfCheckSection(body)).toContain('## 参考文献');
+    expect(stripSelfCheckSection(body)).not.toContain('答案要点');
   });
 });
