@@ -246,19 +246,26 @@ export function buildSearchSql(args: BuildSearchArgs): {
   `;
 
   const rowsSql = `${matchesSql}
-    SELECT
-      id,
-      type,
-      "refId",
-      title,
-      snippet,
-      highlighted,
-      "publishedAt",
-      "isPrivate",
-      rank
-    FROM matches
-    WHERE ($2::text IS NULL OR type = $2)
-    ORDER BY rank DESC, "publishedAt" DESC
+    SELECT id, type, "refId", title, snippet, highlighted, "publishedAt", "isPrivate", rank
+    FROM (
+      SELECT
+        id, type, "refId", title, snippet, highlighted, "publishedAt", "isPrivate", rank,
+        CASE
+          WHEN type = 'knowledge' AND EXISTS (
+            SELECT 1 FROM researches r2
+            WHERE r2.id = matches."refId"::uuid
+              AND r2.judgement IS NOT NULL
+              AND (
+                strpos(lower(r2.judgement), lower($1)) > 0
+                OR similarity(lower(r2.judgement), lower($1)) >= 0.35
+              )
+          ) THEN 3.0
+          ELSE 0.0
+        END AS boost
+      FROM matches
+      WHERE ($2::text IS NULL OR type = $2)
+    ) ranked
+    ORDER BY (rank + boost) DESC, "publishedAt" DESC
     LIMIT $4 OFFSET $5
   `;
 

@@ -22,3 +22,13 @@ describe('buildSearchSql', () => {
     expect(countSql).toContain(RADAR_PUBLIC_SCORE_SQL);
   });
 });
+
+describe('buildSearchSql judgement ranking', () => {
+  it('adds a judgement boost for knowledge results only', () => {
+    const { rowsSql } = buildSearchSql({ q: '调用关系', page: 1, perPage: 20 });
+    expect(rowsSql).toContain('AS boost');
+    expect(rowsSql).toContain("type = 'knowledge'");
+    expect(rowsSql).toContain("r2.judgement IS NOT NULL");
+    expect(rowsSql).toContain('ORDER BY (rank + boost) DESC');
+  });
+});

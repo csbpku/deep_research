@@ -245,3 +245,15 @@ missing / missingLabels / complete`；新增类型只改这一个函数。测试
 - 真实 API：`comparisonOnly:true` 返回 `brief.comparisonOnly=true`，必答问题不含“推荐什么”，计划摘要写明“不给出唯一推荐”。
 - 真实任务 `923f11c1…`：对比矩阵 6,618 字、审核 42 条声明、coverage `complete`、15 条未核验、0 反证，发布为 `comparison_matrix`。
 - 发现并修复：比较对象推断把 `SELECT FOR UPDATE` 在英文介词处截成 `SELECT`；现在只对中文场景词和大小写敏感的英文 `for/in` 生效，SQL 关键字保持完整。
+
+
+## 判断可检索
+
+知识卡判断现在进入两个检索面：
+
+- 个人知识库索引（`knowledgeIndexText`）：判断、置信度、适用边界在笔记之前；`> 原文摘录` 不进入索引。
+- 团队全文搜索（`search_docs.snippet`）：判断 + 适用边界 + 背景 + 正文；对判断命中额外加 3.0 排序权重。
+
+回填脚本：`scripts/backfill_knowledge_judgement_index.py`、`scripts/backfill_knowledge_search_docs.py`，都支持 dry-run。
+
+验证：判断命中卡（判断包含查询词）与正文命中卡（仅笔记包含）同时返回时，前者排在前面；删除测试卡。
