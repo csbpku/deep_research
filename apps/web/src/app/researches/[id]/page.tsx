@@ -48,6 +48,7 @@ import { useCurrentUser } from '@/lib/auth/client';
 import { BackToSearchButton } from '@/components/domain/BackToSearchButton';
 import { AppButton } from '@/components/material/AppButton';
 import { AppDialog } from '@/components/material/AppDialog';
+import { JudgementReviewActions } from '@/components/research/JudgementReviewActions';
 import { space } from '@deep-research/design-system';
 import {
   cleanResearchLabel,
@@ -694,6 +695,9 @@ export default function ResearchDetailPage() {
                     <span>{isJudgementDue(data.judgementReviewAt) ? '已到复查时间' : '复查时间'}：{new Date(data.judgementReviewAt).toLocaleDateString('zh-CN')}</span>
                   ) : null}
                 </div>
+                {isJudgementDue(data.judgementReviewAt) && data.canEdit ? (
+                  <JudgementReviewActions researchId={data.id} />
+                ) : null}
               </SectionCard>
             )}
 
