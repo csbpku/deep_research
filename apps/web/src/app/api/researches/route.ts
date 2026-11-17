@@ -23,6 +23,7 @@ import { CreateResearchInput, ResearchListQuery } from '../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { researchListOrderBy, researchListWhere } from '../../../lib/research-list-where';
+import { rankResearchForReview } from '../../../lib/research-review-priority';
 import { confirmedKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../lib/personal-knowledge-index';
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
@@ -136,7 +137,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     topicId, objective, reviewStatus, hasOpenClaims, needsReview,
   });
 
-  const [items, total] = await Promise.all([
+  const needsReviewQuery = needsReview === true;
+  const [itemsRaw, total] = await Promise.all([
     prisma.research.findMany({
       where,
       orderBy: researchListOrderBy(sort),
@@ -160,11 +162,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         createdAt: true,
         updatedAt: true,
         author: { select: { id: true, name: true, email: true } },
+        ...(needsReviewQuery ? { learningSelfChecks: { where: { userId: u.id, rating: { in: ['unsure', 'missed'] } }, select: { rating: true, updatedAt: true } } } : {}),
       },
     }),
     prisma.research.count({ where }),
   ]);
 
+  const items = needsReviewQuery ? rankResearchForReview(itemsRaw) : itemsRaw;
   return NextResponse.json({
     items: items.map((item) => ({
       id: item.id,
@@ -186,6 +190,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         (u.role === 'admin' && item.status === RESEARCH_STATUS.PUBLISHED),
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
+      ...(needsReviewQuery ? { reviewDue: { missed: (item as typeof item & { learningSelfChecks: { rating: string }[] }).learningSelfChecks.filter(check => check.rating === 'missed').length, unsure: (item as typeof item & { learningSelfChecks: { rating: string }[] }).learningSelfChecks.filter(check => check.rating === 'unsure').length } } : {}),
       author: { id: item.author.id, name: item.author.name },
     })),
     page,

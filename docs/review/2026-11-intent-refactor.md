@@ -188,3 +188,9 @@
 `researchListWhere` 只保留当前用户在该文章下有 `unsure`/`missed` 自评的记录，
 按文章聚合，不展开到题目。draft 视图下实测命中 1 篇（MVCC 学习稿），
 列表数从 20 降到 1，`scrollWidth - clientWidth = 0`。
+
+### 复习优先级
+
+“只看待复习”不再只按最新排序：`rankResearchForReview` 先看 `missed` 数量，
+再看 `unsure`，最后看最老一条自评的时间。卡片显示“N 题未掌握 · M 题待确认”。
+排序在服务端做，只取当前页不够，后续若文章数量上来需要改成游标分页。

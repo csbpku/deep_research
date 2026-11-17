@@ -77,6 +77,7 @@ interface ResearchItem {
   updatedAt: string;
   author: { id: string; name: string };
   canEdit?: boolean;
+  reviewDue?: { missed: number; unsure: number };
 }
 
 interface ListResponse {
@@ -435,6 +436,14 @@ function ResearchesContent() {
                   <p className={styles.excerpt}>
                     {excerpt(item.body, 200)}
                   </p>
+
+                  {needsReview && item.reviewDue && item.reviewDue.missed + item.reviewDue.unsure > 0 && (
+                    <p className={styles.reviewDue}>
+                      {item.reviewDue.missed > 0 ? `${item.reviewDue.missed} 题未掌握` : ''}
+                      {item.reviewDue.missed > 0 && item.reviewDue.unsure > 0 ? ' · ' : ''}
+                      {item.reviewDue.unsure > 0 ? `${item.reviewDue.unsure} 题待确认` : ''}
+                    </p>
+                  )}
 
                   {item.tags.length > 0 && (
                     <TagList className={styles.tags}>
