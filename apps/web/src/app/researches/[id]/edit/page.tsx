@@ -17,6 +17,7 @@ import { researchReviewDisclosureMessages, type ResearchReviewReaderItem, type R
 
 import { forwardRef, useState, useEffect, useCallback, useMemo, useRef, type ButtonHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import { publicationSummaryRequirement } from '@/lib/research-publish-requirements';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -826,17 +827,17 @@ export default function EditorPage() {
   const isKnowledgeCard = existing?.type === 'knowledge';
   // A knowledge card is source + note, so it publishes without the research
   // report's background/risk sections; only the body is required.
-  const isLearningPath = existing?.creationMethod === 'ai_research' && existing?.researchReportType === 'learning_path';
-  const summaryComplete = isKnowledgeCard || isLearningPath
-    ? body.trim().length > 0
-    : background.trim().length > 0 && conclusion.trim().length > 0 && risks.trim().length > 0;
-  const missingSummaryFields = isKnowledgeCard || isLearningPath
-    ? (!body.trim() ? ['学习路径正文'] : [])
-    : [
-      !background.trim() ? '背景' : null,
-      !conclusion.trim() ? '结论' : null,
-      !risks.trim() ? '风险或待验证项' : null,
-    ].filter((field): field is string => Boolean(field));
+  const summaryRequirement = publicationSummaryRequirement({
+    type: existing?.type,
+    creationMethod: existing?.creationMethod,
+    reportType: existing?.researchReportType,
+    body,
+    background,
+    conclusion,
+    risks,
+  });
+  const summaryComplete = summaryRequirement.complete;
+  const missingSummaryFields = summaryRequirement.missingLabels;
   const reviewRequired = existing?.creationMethod === 'ai_research';
   // The API marks the run that covers the exact current snapshot. Historical
   // runs remain useful in the audit trail, but must never drive the publish

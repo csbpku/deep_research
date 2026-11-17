@@ -31,6 +31,7 @@ import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import { hasBlockingIntentCoverage, parseIntCoverage } from '../../../../../lib/research-intent-coverage';
 import { checkComparisonMatrix } from '../../../../../lib/research-comparison-matrix';
 import { checkLearningPath } from '../../../../../lib/research-learning-path';
+import { publicationSummaryRequirement } from '../../../../../lib/research-publish-requirements';
 
 const IdParam = z.object({ id: z.string().uuid() });
 const PublishBody = z.object({
@@ -296,23 +297,25 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
 
-  // Knowledge cards are a pointer plus a short judgment, not a research
-  // report: background/risk sections are optional, so their own gate only
-  // requires a non-empty body.
-  const isKnowledgeCard = existing.type === 'knowledge';
-  const missingSummaryFields = isKnowledgeCard || isLearningPath
-    ? (!existing.body.trim() ? (isKnowledgeCard ? ['正文'] : ['学习路径正文']) : [])
-    : [
-      !existing.background?.trim() ? '背景' : null,
-      !existing.conclusion?.trim() ? '结论' : null,
-      !existing.risks?.trim() ? '风险或待验证项' : null,
-    ].filter((field): field is string => Boolean(field));
-  if (missingSummaryFields.length > 0) {
+  // The same requirement drives the editor button and this gate.
+  const summaryRequirement = publicationSummaryRequirement({
+    type: existing.type,
+    creationMethod: existing.creationMethod,
+    reportType: existing.sourceAiJob?.reportType ?? null,
+    body: existing.body,
+    background: existing.background,
+    conclusion: existing.conclusion,
+    risks: existing.risks,
+  });
+  const reportSummaryRequired = summaryRequirement.kind === 'research';
+  if (!summaryRequirement.complete) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: `发布前必须填写研究摘要：${missingSummaryFields.join('、')}`,
+      message: reportSummaryRequired
+        ? `发布前必须填写研究摘要：${summaryRequirement.missingLabels.join('、')}`
+        : `发布前必须填写${summaryRequirement.missingLabels[0]}`,
       requestId,
-      details: { missing: missingSummaryFields },
+      details: { missing: summaryRequirement.missingLabels },
     });
   }
 

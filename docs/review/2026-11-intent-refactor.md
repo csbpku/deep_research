@@ -219,3 +219,13 @@
 
 真实发布：`acknowledgeDisclosure=true` + 当前 `publicationVersion` → 200
 `status=published`。
+
+### 发布摘要规则收敛
+
+研究稿要“背景/结论/风险”，知识卡片和学习路径只要正文。这条规则此前在
+`publish/route.ts` 和 `edit/page.tsx` 各写一遍，新增学习路径时只改了 API 的
+第一段，编辑页仍按研究稿判断，导致按钮禁用。
+
+现在两处都调用 `publicationSummaryRequirement()`，返回 `kind / required /
+missing / missingLabels / complete`；新增类型只改这一个函数。测试覆盖研究稿、
+知识卡片、学习路径、AI 研究稿四种组合。
