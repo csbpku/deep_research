@@ -79,3 +79,14 @@ def test_a_single_oversized_paragraph_stops_on_a_sentence() -> None:
     bounded = enforce_learning_budget(text)
     assert "已压缩到字数上限" not in bounded
     assert "这是一个完整句子。" in bounded
+
+
+def test_the_opening_answer_keeps_only_three_sentences() -> None:
+    text = _doc().replace(
+        "## 90 秒回答\n" + LONG,
+        "## 90 秒回答\n\n它是什么。什么时候用！什么时候不要用？这是第四句。\n",
+    )
+    bounded = enforce_learning_budget(text)
+    opening = bounded.split("## 概念图")[0]
+    assert opening.count("。") + opening.count("！") + opening.count("？") == 3
+    assert "第四句" not in opening

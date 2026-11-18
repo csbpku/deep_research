@@ -10,7 +10,7 @@ MAX_CHARS = 3_200
 # Caps keep every section present when the writer overshoots. A section is cut
 # at a paragraph/newline boundary so the result never ends mid-sentence.
 SECTION_CAPS = {
-    "90 秒回答": 300,
+    "90 秒回答": 360,
     "概念图": 450,
     "分层解释": 850,
     "可运行示例": 550,
@@ -94,6 +94,28 @@ def _trim_section(content: str, cap: int) -> str:
     return cut.rstrip() + "\n"
 
 
+def enforce_answer_shape(text: str) -> str:
+    """Keep the opening answer to its three promised sentences.
+
+    The 90-second section is the first thing a reader sees. When the writer
+    turns it into four paragraphs of mechanism, the page opens with prose the
+    reader did not ask for and pushes the actual answer below the fold. Trim it
+    back to at most three sentences, never inventing one that is missing.
+    """
+    parts = re.split(r"^(##[ \t]+90 秒回答)[ \t]*$", text, flags=re.MULTILINE)
+    if len(parts) < 3:
+        return text
+    body = parts[2]
+    end = body.find("\n## ")
+    section, rest = (body, "") if end == -1 else (body[:end], body[end:])
+    sentences = re.findall(r"[^。！？!?]+[。！？!?]?", section)
+    kept = "".join(sentences[:3]).strip()
+    if not kept:
+        return text
+    parts[2] = f"\n\n{kept}\n{rest}" if rest else f"\n\n{kept}\n"
+    return "".join(parts)
+
+
 def _trim_concept_map(content: str) -> str:
     """Never cut a concept table by character count: that leaves 2 concepts."""
     lines = content.splitlines()
@@ -111,6 +133,7 @@ def enforce_learning_budget(text: str) -> str:
     text = strip_budget_notes(normalize_learning_headings(text))
     if not is_valid_learning_path(text):
         return text
+    text = enforce_answer_shape(text)
     parts = re.split(r"^(##\s+.+)$", text, flags=re.MULTILINE)
     # parts: [intro, heading, body, heading, body, ...]
     out = [parts[0]]
