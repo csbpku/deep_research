@@ -2226,6 +2226,7 @@ def _install_standard_intent_questions(
         return 0
     original = conductor.plan_research
     used = False
+    print("INTENT_HOOK_INSTALLED", len(questions), flush=True)
     logger.warning(
         "intent question hook installed count=%s conductor=%s",
         len(questions),
