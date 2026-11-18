@@ -7,7 +7,7 @@
 export interface ReviewPriorityItem {
   id: string;
   updatedAt: Date | string;
-  learningSelfChecks: { rating: string; updatedAt: Date | string }[];
+  learningSelfChecks: { rating: string; updatedAt: Date | string; masteredAt?: Date | string | null }[];
 }
 
 function time(value: Date | string): number {
@@ -19,11 +19,10 @@ export function rankResearchForReview<T extends ReviewPriorityItem>(items: T[]):
   const weight = (item: T): [number, number, number, string] => {
     const missed = item.learningSelfChecks.filter(check => check.rating === 'missed').length;
     const unsure = item.learningSelfChecks.filter(check => check.rating === 'unsure').length;
-    const oldest = Math.min(
-      ...item.learningSelfChecks
-        .filter(check => check.rating === 'missed' || check.rating === 'unsure')
-        .map(check => time(check.updatedAt)),
-    );
+    const due = item.learningSelfChecks.filter(check => check.rating !== 'got_it' || check.masteredAt !== undefined);
+    const oldest = due.length > 0
+      ? Math.min(...due.map(check => time(check.updatedAt)))
+      : time(item.updatedAt);
     return [-missed, -unsure, Number.isFinite(oldest) ? oldest : time(item.updatedAt), item.id];
   };
   return [...items].sort((left, right) => {
