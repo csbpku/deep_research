@@ -75,3 +75,14 @@ describe('shapeSearchRow multiple match reasons', () => {
     expect(shaped.matchReason).toBeNull();
   });
 });
+
+describe('shapeSearchRow judgement preview', () => {
+  it('returns a trimmed body preview next to the judgement match', () => {
+    const shaped = shapeSearchRow({
+      id: 'private:1', type: 'knowledge', refId: 'r1', title: 'Card',
+      snippet: 'j', highlighted: '', publishedAt: new Date(), rank: 1,
+      judgementMatch: 'j', bodyPreview: '  正文  ',
+    });
+    expect(shaped.bodyPreview).toBe('正文');
+  });
+});

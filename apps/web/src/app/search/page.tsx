@@ -39,6 +39,7 @@ interface SearchRow {
   snippet: string;
   highlighted: string;
   judgementMatch?: string | null;
+  bodyPreview?: string | null;
   matchReasons?: Array<'judgement' | 'title' | 'tag'>;
   matchReason?: 'judgement' | 'title' | 'tag' | null;
   publishedAt: string;
@@ -56,6 +57,16 @@ interface SearchResponse {
 
 // Preserve the existing URL/API contract: all is omitted from requests.
 const ALL = 'all';
+
+/** Keep the preview short enough to stay a preview, not a second result body. */
+function previewText(text: string, limit = 160): string {
+  const flat = text
+    .replace(/^\s*>\s?/gmu, '')
+    .replace(/^\s*#{1,6}\s+/gmu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+}
 
 /** Highlight the user's query in the judgement without trusting model text as HTML. */
 function highlightQuery(text: string, query: string): React.ReactNode {
@@ -300,10 +311,15 @@ function SearchContent() {
                         </h2>
                         {/* 先解释为什么命中，再给出高亮片段；正文命中是默认情况。 */}
                         {row.matchReasons?.includes('judgement') && row.judgementMatch ? (
-                          <p className={styles.snippet}>
-                            <span className={styles.judgementLabel}>判断命中：</span>
-                            <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
-                          </p>
+                          <>
+                            <p className={styles.snippet}>
+                              <span className={styles.judgementLabel}>判断命中：</span>
+                              <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
+                            </p>
+                            {row.bodyPreview ? (
+                              <div className={styles.preview}>{previewText(row.bodyPreview)}</div>
+                            ) : null}
+                          </>
                         ) : (
                           <>
                             {row.matchReasons?.includes('title') ? (
