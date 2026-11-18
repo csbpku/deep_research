@@ -2226,6 +2226,10 @@ def _install_standard_intent_questions(
         return 0
     original = conductor.plan_research
     used = False
+    logger.info(
+        "ai-engine.research.intent_question_hook",
+        extra={"count": len(questions), "has_conductor": True},
+    )
 
     async def first_plan(query: Any, query_domains: Any = None) -> list[str]:
         nonlocal used
