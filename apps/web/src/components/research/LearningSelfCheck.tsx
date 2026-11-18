@@ -64,7 +64,7 @@ export function LearningSelfCheck({
 }: LearningSelfCheckProps) {
   const key = storageKey(researchId);
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState<Set<string>>(() => new Set(Object.keys(initialRatings)));
+  const [open, setOpen] = useState<Set<string>>(new Set());
   const [ratings, setRatings] = useState<Record<string, SelfCheckRating>>(initialRatings);
   // Correct answers in a row; one is a guess, two retires the weak mark.
   const [streaks, setStreaks] = useState<Record<string, number>>(initialStreaks);
@@ -72,8 +72,8 @@ export function LearningSelfCheck({
   useEffect(() => {
     const stored = readRatings(key);
     setRatings(stored);
-    // A rated question already had its attempt; restore its answer on return.
-    setOpen(new Set(Object.keys(stored)));
+    // Keep answers closed on return: the reader may want to retry before
+    // re-reading, and the streak hint now lives next to the rating buttons.
     if (!researchId) return;
     let cancelled = false;
     fetch(`/api/learning/self-check?researchId=${encodeURIComponent(researchId)}`, { cache: 'no-store' })
@@ -83,7 +83,6 @@ export function LearningSelfCheck({
         // The server is the cross-device source of truth; merge it over the local cache.
         setRatings(payload.ratings);
         setStreaks(payload.streaks ?? {});
-        setOpen(new Set(Object.keys(payload.ratings)));
         writeRatings(key, payload.ratings);
       })
       .catch(() => undefined);
@@ -149,6 +148,11 @@ export function LearningSelfCheck({
                     {option.label}
                   </Button>
                 ))}
+                {(rating === 'unsure' || rating === 'missed') && streaks[item.question] === 1 && (
+                  <Typography variant="caption" color="warning.main" data-testid="self-check-streak-hint">
+                    再答对 1 次就移出待复习
+                  </Typography>
+                )}
               </Stack>
             )}
             {visible && (

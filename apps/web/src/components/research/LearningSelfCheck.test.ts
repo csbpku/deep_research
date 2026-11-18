@@ -40,5 +40,6 @@ describe('LearningSelfCheck streak hint', () => {
       }),
     );
     expect(html).toContain('再答对 1 次就移出待复习');
+    expect(html).toContain('data-testid="self-check-streak-hint"');
   });
 });
