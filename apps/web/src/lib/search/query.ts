@@ -320,13 +320,10 @@ export function shapeSearchRow(row: {
   tagMatch?: boolean;
 }) {
   const judgementMatch = row.judgementMatch?.trim() || null;
-  const matchReason = judgementMatch
-    ? ('judgement' as const)
-    : row.titleMatch
-      ? ('title' as const)
-      : row.tagMatch
-        ? ('tag' as const)
-        : null;
+  const matchReasons: Array<'judgement' | 'title' | 'tag'> = [];
+  if (judgementMatch) matchReasons.push('judgement');
+  if (row.titleMatch) matchReasons.push('title');
+  if (row.tagMatch) matchReasons.push('tag');
   return {
     id: row.id,
     type: row.type,
@@ -335,7 +332,8 @@ export function shapeSearchRow(row: {
     snippet: row.snippet,
     highlighted: sanitizeSearchHighlight(row.highlighted),
     judgementMatch,
-    matchReason,
+    matchReasons,
+    matchReason: matchReasons[0] ?? null,
     publishedAt: row.publishedAt.toISOString(),
     rank: Number(row.rank.toFixed(4)),
     isPrivate: row.isPrivate === true,

@@ -39,6 +39,7 @@ interface SearchRow {
   snippet: string;
   highlighted: string;
   judgementMatch?: string | null;
+  matchReasons?: Array<'judgement' | 'title' | 'tag'>;
   matchReason?: 'judgement' | 'title' | 'tag' | null;
   publishedAt: string;
   rank: number;
@@ -298,24 +299,26 @@ function SearchContent() {
                           </Link>
                         </h2>
                         {/* 先解释为什么命中，再给出高亮片段；正文命中是默认情况。 */}
-                        {row.matchReason === 'judgement' && row.judgementMatch ? (
+                        {row.matchReasons?.includes('judgement') && row.judgementMatch ? (
                           <p className={styles.snippet}>
                             <span className={styles.judgementLabel}>判断命中：</span>
                             <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
                           </p>
                         ) : (
                           <>
-                            {row.matchReason === 'title' ? (
+                            {row.matchReasons?.includes('title') ? (
                               <p className={styles.reason}>
                                 <span className={styles.judgementLabel}>标题命中：</span>
                                 标题包含「{submittedQ}」
                               </p>
-                            ) : row.matchReason === 'tag' ? (
+                            ) : null}
+                            {row.matchReasons?.includes('tag') ? (
                               <p className={styles.reason}>
                                 <span className={styles.judgementLabel}>标签命中：</span>
                                 标签包含「{submittedQ}」
                               </p>
-                            ) : row.highlighted.includes('<mark>') ? (
+                            ) : null}
+                            {!row.matchReasons?.length && row.highlighted.includes('<mark>') ? (
                               <p className={styles.reason}>
                                 <span className={styles.judgementLabel}>正文命中：</span>
                                 摘录包含「{submittedQ}」

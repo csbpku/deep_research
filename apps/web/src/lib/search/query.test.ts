@@ -54,3 +54,24 @@ describe('shapeSearchRow match reasons', () => {
     expect(shapeSearchRow(base).matchReason).toBeNull();
   });
 });
+
+describe('shapeSearchRow multiple match reasons', () => {
+  it('keeps every reason in priority order', () => {
+    const shaped = shapeSearchRow({
+      id: 'radar:1', type: 'radar', refId: 'r1', title: 'PostgreSQL',
+      snippet: 's', highlighted: '', publishedAt: new Date(), rank: 1,
+      judgementMatch: 'j', titleMatch: true, tagMatch: true,
+    });
+    expect(shaped.matchReasons).toEqual(['judgement', 'title', 'tag']);
+    expect(shaped.matchReason).toBe('judgement');
+  });
+
+  it('returns an empty reason list for a body-only match', () => {
+    const shaped = shapeSearchRow({
+      id: 'radar:1', type: 'radar', refId: 'r1', title: 'x',
+      snippet: 's', highlighted: '<mark>s</mark>', publishedAt: new Date(), rank: 1,
+    });
+    expect(shaped.matchReasons).toEqual([]);
+    expect(shaped.matchReason).toBeNull();
+  });
+});
