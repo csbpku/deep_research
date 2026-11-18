@@ -2219,6 +2219,8 @@ def _install_standard_intent_questions(
     sub-queries on the conductor. Hook that planner once so a brief learning
     task searches its questions instead of only the topic.
     """
+    if conductor is None or not hasattr(conductor, "plan_research"):
+        return 0
     questions = _must_answer_questions(context)[: _INTENT_QUESTION_LIMIT]
     if not questions:
         return 0
@@ -2229,6 +2231,10 @@ def _install_standard_intent_questions(
         nonlocal used
         if not used:
             used = True
+            logger.info(
+                "ai-engine.research.intent_question_lanes",
+                extra={"count": len(questions), "topic": topic},
+            )
             return [f"{topic} {question}" for question in questions]
         result = await original(query, query_domains)
         return list(result)
@@ -4679,7 +4685,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 )
                 if not is_deep:
                     _install_standard_intent_questions(
-                        candidate.research_conductor,
+                        getattr(candidate, "research_conductor", None),
                         job.request.topic,
                         job.request.context,
                     )
