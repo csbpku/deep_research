@@ -335,3 +335,26 @@ def test_learning_path_caps_scrape_at_standard_envelope() -> None:
 def test_learning_path_keeps_an_explicit_user_override() -> None:
     job = _make_job(report_length="deep", max_urls=6, report_type="learning_path")
     assert _resolve_run_ceiling(job)["max_urls"] == 6
+
+
+def test_must_answer_questions_only_reads_that_block() -> None:
+    from ai_engine.adapters.gpt_researcher import _must_answer_questions
+
+    assert _must_answer_questions(
+        "必须回答的问题：\n- 概念是什么？\n- 什么时候不该用？\n- 用户定义的完成标准：\n- 能解释\n"
+    ) == ["概念是什么？", "什么时候不该用？"]
+
+
+def test_intent_question_lanes_become_the_first_query_pass() -> None:
+    import asyncio
+
+    from ai_engine.adapters.gpt_researcher import _install_intent_question_queries
+
+    class Deep:
+        async def generate_search_queries(self, query: str, num_queries: int = 3):
+            return [{"query": "vendor"}]
+
+    deep = Deep()
+    assert _install_intent_question_queries(deep, "VACUUM", "必须回答的问题：\n- 什么情况下不该用？\n") == 1
+    lanes = asyncio.run(deep.generate_search_queries("ignored", 3))
+    assert lanes[0]["query"] == "VACUUM 什么情况下不该用？"

@@ -2174,6 +2174,75 @@ def _bound_research_sources(job: _Job, sources: Iterable[AdapterSource]) -> list
     )
 
 
+_INTENT_QUESTION_LIMIT = 4
+
+
+def _must_answer_questions(context: str | None) -> list[str]:
+    """Read the plan's must-answer questions from the confirmed brief.
+
+    The writer receives these questions, but the retrieval layer used to ignore
+    them and search only the topic. That is why an artifact could honestly say
+    "not confirmed" for a question the plan itself required: nobody searched
+    for it. Extract them here so the first pass can open one lane per question.
+    """
+    if not context:
+        return []
+    match = re.search(
+        r"必须回答的问题[:：]\s*\n(?P<body>(?:\s*-\s*.+\n?)+)",
+        context,
+    )
+    if not match:
+        return []
+    questions: list[str] = []
+    for line in match.group("body").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("-"):
+            continue
+        item = stripped.lstrip("-").strip()
+        # A following section header such as "- 用户定义的完成标准：" is not a
+        # question; it starts the next block of the plan.
+        if item.endswith("：") or item.endswith(":"):
+            break
+        if item:
+            questions.append(item)
+    return questions
+
+
+def _install_intent_question_queries(
+    deep_researcher: Any,
+    topic: str,
+    context: str | None = None,
+) -> int:
+    """Make the first deep pass explicitly search every must-answer question.
+
+    One lane per question, capped so the breadth budget is not consumed by the
+    plan alone. Later recursive passes stay adaptive.
+    """
+    questions = _must_answer_questions(context)[: _INTENT_QUESTION_LIMIT]
+    if not questions:
+        return 0
+    lanes = [
+        {
+            "query": f"{topic} {question}",
+            "researchGoal": f"直接回答计划中的必答问题：{question}",
+        }
+        for question in questions
+    ]
+    original = deep_researcher.generate_search_queries
+    used = False
+
+    async def first_pass_queries(query: str, num_queries: int = 3) -> list[dict[str, str]]:
+        nonlocal used
+        if not used:
+            used = True
+            return lanes[: max(1, num_queries)]
+        result = await original(query, num_queries=num_queries)
+        return cast(list[dict[str, str]], result)
+
+    deep_researcher.generate_search_queries = first_pass_queries
+    return len(lanes)
+
+
 def _install_official_lane_queries(
     deep_researcher: Any,
     topic: str,
@@ -4592,11 +4661,16 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     deep.breadth = _DEEP_RESEARCH_SETTINGS["breadth"]
                     deep.depth = _DEEP_RESEARCH_SETTINGS["depth"]
                     deep.concurrency_limit = _DEEP_RESEARCH_SETTINGS["concurrency"]
-                    _install_official_lane_queries(
+                    if not _install_official_lane_queries(
                         deep,
                         job.request.topic,
                         job.request.context,
-                    )
+                    ):
+                        _install_intent_question_queries(
+                            deep,
+                            job.request.topic,
+                            job.request.context,
+                        )
                     _install_adaptive_deep_research(
                         deep,
                         job,
