@@ -109,7 +109,7 @@ def enforce_answer_shape(text: str) -> str:
     end = body.find("\n## ")
     section, rest = (body, "") if end == -1 else (body[:end], body[end:])
     bullets = [line.strip() for line in section.splitlines() if line.strip().startswith("-")]
-    if len(bullets) >= 2:
+    if bullets:
         kept = "\n".join(bullets[:3])
         for label in ("- 是什么：", "- 什么时候用：", "- 什么时候不要用："):
             if not any(line.startswith(label) for line in bullets):
