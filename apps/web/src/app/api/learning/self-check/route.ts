@@ -30,7 +30,7 @@ export const POST = apiHandler(async (request: NextRequest) => {
   }
   const existing = await prisma.learningSelfCheck.findUnique({
     where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
-    select: { correctStreak: true, firstMissedAt: true, rating: true },
+    select: { correctStreak: true, firstMissedAt: true, rating: true, masteredAt: true },
   });
   // One correct answer is often a lucky guess. Retire the weak mark only on
   // the second consecutive "got it"; a wrong answer resets the streak.
@@ -52,21 +52,23 @@ export const POST = apiHandler(async (request: NextRequest) => {
       rating: nextRating,
       correctStreak,
       ...(parsed.rating === 'got_it' ? {} : { firstMissedAt: new Date() }),
+      ...(retired ? { masteredAt: new Date() } : {}),
     },
     update: {
       rating: nextRating,
       correctStreak,
       ...(retired
-        ? { firstMissedAt: null }
+        ? { firstMissedAt: null, masteredAt: new Date() }
         : parsed.rating === 'got_it'
-          ? {}
-          : { firstMissedAt: existing?.firstMissedAt ?? new Date() }),
+          ? { masteredAt: null }
+          : { firstMissedAt: existing?.firstMissedAt ?? new Date(), masteredAt: null }),
     },
   });
   return NextResponse.json({
     id: row.id,
     rating: row.rating,
     correctStreak: row.correctStreak,
+    masteredAt: row.masteredAt,
     updatedAt: row.updatedAt,
     firstMissedAt: row.firstMissedAt,
   });
@@ -82,10 +84,11 @@ export const GET = apiHandler(async (request: NextRequest) => {
   }
   const rows = await prisma.learningSelfCheck.findMany({
     where: { userId: user.id, researchId: parsed.data.researchId },
-    select: { questionKey: true, rating: true, correctStreak: true },
+    select: { questionKey: true, rating: true, correctStreak: true, masteredAt: true },
   });
   return NextResponse.json({
     ratings: Object.fromEntries(rows.map(row => [row.questionKey, row.rating])),
     streaks: Object.fromEntries(rows.map(row => [row.questionKey, row.correctStreak])),
+    masteredAt: Object.fromEntries(rows.filter(row => row.masteredAt).map(row => [row.questionKey, row.masteredAt])),
   });
 });

@@ -467,6 +467,9 @@ model LearningSelfCheck {
   firstMissedAt DateTime? @db.Timestamptz(3)
   // A single "I know it" is a guess; two in a row retires the weak mark.
   correctStreak Int      @default(0)
+  // When the weak mark was retired. Kept so "learned" is auditable, not just
+  // inferred from a missing firstMissedAt.
+  masteredAt  DateTime? @db.Timestamptz(3)
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
