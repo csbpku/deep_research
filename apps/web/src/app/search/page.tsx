@@ -39,7 +39,7 @@ interface SearchRow {
   snippet: string;
   highlighted: string;
   judgementMatch?: string | null;
-  matchReason?: 'judgement' | null;
+  matchReason?: 'judgement' | 'title' | 'tag' | null;
   publishedAt: string;
   rank: number;
   isPrivate: boolean;
@@ -299,7 +299,11 @@ function SearchContent() {
                         </h2>
                         {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
                             并在返回前转义来源文本，只保留高亮标签。 */}
-                        {row.matchReason === 'judgement' && row.judgementMatch ? (
+                        {row.matchReason === 'title' ? (
+                          <p className={styles.snippet}><span className={styles.judgementLabel}>标题命中：</span>标题包含「{submittedQ}」，正文摘录如下。</p>
+                        ) : row.matchReason === 'tag' ? (
+                          <p className={styles.snippet}><span className={styles.judgementLabel}>标签命中：</span>标签包含「{submittedQ}」，正文摘录如下。</p>
+                        ) : row.matchReason === 'judgement' && row.judgementMatch ? (
                           <p className={styles.snippet}>
                             <span className={styles.judgementLabel}>判断命中：</span>
                             <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>

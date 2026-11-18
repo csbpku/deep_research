@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSearchSql } from './query';
+import { buildSearchSql, shapeSearchRow } from './query';
 import { RADAR_PUBLIC_SCORE_SQL } from '../radar/score-validity';
 
 describe('buildSearchSql', () => {
@@ -39,5 +39,18 @@ describe('buildSearchSql judgement highlight', () => {
     expect(rowsSql).toContain('"judgementMatch"');
     expect(rowsSql).toContain('left(r2.judgement');
     expect(rowsSql).toContain('r2.judgement');
+  });
+});
+
+describe('shapeSearchRow match reasons', () => {
+  const base = {
+    id: 'a', type: 'knowledge', refId: 'r1', title: 't', snippet: 's',
+    highlighted: '', publishedAt: new Date(), rank: 1,
+  };
+  it('prefers judgement, then title, then tag', () => {
+    expect(shapeSearchRow({ ...base, judgementMatch: 'j' }).matchReason).toBe('judgement');
+    expect(shapeSearchRow({ ...base, titleMatch: true }).matchReason).toBe('title');
+    expect(shapeSearchRow({ ...base, tagMatch: true }).matchReason).toBe('tag');
+    expect(shapeSearchRow(base).matchReason).toBeNull();
   });
 });

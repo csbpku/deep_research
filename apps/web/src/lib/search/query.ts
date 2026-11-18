@@ -247,8 +247,9 @@ export function buildSearchSql(args: BuildSearchArgs): {
 
   const rowsSql = `${matchesSql}
     SELECT
-      id, type, "refId", title, snippet, highlighted, "publishedAt", "isPrivate", rank,
-      CASE WHEN type = 'knowledge' THEN (
+      ranked.id, ranked.type, ranked."refId", ranked.title, ranked.snippet,
+      ranked.highlighted, ranked."publishedAt", ranked."isPrivate", ranked.rank,
+      CASE WHEN ranked.type = 'knowledge' THEN (
         SELECT left(r2.judgement, 240)
         FROM researches r2
         WHERE r2.id = ranked."refId"::uuid
@@ -257,7 +258,14 @@ export function buildSearchSql(args: BuildSearchArgs): {
             strpos(lower(r2.judgement), lower($1)) > 0
             OR similarity(lower(r2.judgement), lower($1)) >= 0.35
           )
-      ) END AS "judgementMatch"
+      ) END AS "judgementMatch",
+      CASE WHEN strpos(lower(ranked.title), lower($1)) > 0 OR lower(ranked.title) = lower($1)
+        THEN true ELSE false END AS "titleMatch",
+      CASE WHEN ranked.type = 'radar' AND EXISTS (
+        SELECT 1 FROM summaries s2
+        WHERE s2.id = ranked."refId"::uuid
+          AND EXISTS (SELECT 1 FROM unnest(s2.tags) tag WHERE strpos(lower(tag), lower($1)) > 0)
+      ) THEN true ELSE false END AS "tagMatch"
     FROM (
       SELECT
         id, type, "refId", title, snippet, highlighted, "publishedAt", "isPrivate", rank,
@@ -308,9 +316,17 @@ export function shapeSearchRow(row: {
   rank: number;
   isPrivate?: boolean;
   judgementMatch?: string | null;
+  titleMatch?: boolean;
+  tagMatch?: boolean;
 }) {
   const judgementMatch = row.judgementMatch?.trim() || null;
-  const matchReason = judgementMatch ? ('judgement' as const) : null;
+  const matchReason = judgementMatch
+    ? ('judgement' as const)
+    : row.titleMatch
+      ? ('title' as const)
+      : row.tagMatch
+        ? ('tag' as const)
+        : null;
   return {
     id: row.id,
     type: row.type,
