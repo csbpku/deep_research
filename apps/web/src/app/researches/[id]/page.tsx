@@ -34,7 +34,6 @@ import { ResearchStatusActionButton } from '@/components/research/ResearchStatus
 import { ExportResearchMarkdownButton } from '@/components/research/ExportResearchMarkdownButton';
 import { ComparisonMatrixView } from '@/components/research/ComparisonMatrixView';
 import { LearningSelfCheck } from '@/components/research/LearningSelfCheck';
-import { cleanLearningArtifact } from '@/lib/research-artifact-cleanup';
 import { parseSelfCheck, stripSelfCheckSection } from '@/lib/research-self-check';
 import { shouldRenderResearchSummary } from '@/lib/research-artifact-shape';
 import { KnowledgeJudgementForm, EMPTY_JUDGEMENT, type KnowledgeJudgementDraft } from '@/components/research/KnowledgeJudgementForm';
@@ -338,7 +337,7 @@ export default function ResearchDetailPage() {
   const isComparisonMatrix = data.researchReportType === 'comparison_matrix';
   const comparisonMatrix = isComparisonMatrix ? parseComparisonMatrix(data.body) : null;
   const isLearningPath = data.researchReportType === 'learning_path';
-  const learningBody = isLearningPath ? cleanLearningArtifact(data.body) : data.body;
+  const learningBody = data.body;
   const selfCheck = isLearningPath ? parseSelfCheck(learningBody) : [];
   const comparisonParts = comparisonMatrix ? splitMarkdownSection(data.body, '对比矩阵') : null;
   const bodyMarkdown = selfCheck.length > 0 ? stripSelfCheckSection(learningBody) : learningBody;
