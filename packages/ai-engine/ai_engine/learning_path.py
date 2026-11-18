@@ -140,7 +140,6 @@ def enforce_learning_budget(text: str) -> str:
     text = strip_budget_notes(normalize_learning_headings(text))
     if not is_valid_learning_path(text):
         return text
-    text = enforce_answer_shape(text)
     parts = re.split(r"^(##\s+.+)$", text, flags=re.MULTILINE)
     # parts: [intro, heading, body, heading, body, ...]
     out = [parts[0]]
@@ -170,4 +169,4 @@ def enforce_learning_budget(text: str) -> str:
         keep = max(120, int(len(body) * 0.75))
         chunks[index + 1] = _trim_section(body, keep)
         bounded = "".join(chunks)
-    return bounded
+    return enforce_answer_shape(bounded)
