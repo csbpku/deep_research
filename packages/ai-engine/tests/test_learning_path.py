@@ -90,3 +90,27 @@ def test_the_opening_answer_keeps_only_three_sentences() -> None:
     opening = bounded.split("## 概念图")[0]
     assert opening.count("。") + opening.count("！") + opening.count("？") == 3
     assert "第四句" not in opening
+
+
+def test_the_opening_answer_keeps_three_labelled_lines() -> None:
+    text = _doc().replace(
+        "## 90 秒回答\n" + LONG,
+        "## 90 秒回答\n\n- 是什么：清理旧版本。\n- 什么时候用：更新频繁时。\n"
+        "- 什么时候不要用：只读表。\n- 多余的一句：应被删除。\n",
+    )
+    bounded = enforce_learning_budget(text)
+    opening = bounded.split("## 概念图")[0]
+    assert opening.count("- 是什么：") == 1
+    assert opening.count("- 什么时候用：") == 1
+    assert opening.count("- 什么时候不要用：") == 1
+    assert "多余的一句" not in opening
+
+
+def test_a_missing_opening_label_is_filled_as_an_evidence_gap() -> None:
+    text = _doc().replace(
+        "## 90 秒回答\n" + LONG,
+        "## 90 秒回答\n\n- 是什么：清理旧版本。\n- 什么时候用：更新频繁时。\n",
+    )
+    bounded = enforce_learning_budget(text)
+    opening = bounded.split("## 概念图")[0]
+    assert "- 什么时候不要用：本轮未确认（证据缺口）。" in opening

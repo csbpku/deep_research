@@ -108,8 +108,15 @@ def enforce_answer_shape(text: str) -> str:
     body = parts[2]
     end = body.find("\n## ")
     section, rest = (body, "") if end == -1 else (body[:end], body[end:])
-    sentences = re.findall(r"[^。！？!?]+[。！？!?]?", section)
-    kept = "".join(sentences[:3]).strip()
+    bullets = [line.strip() for line in section.splitlines() if line.strip().startswith("-")]
+    if len(bullets) >= 2:
+        kept = "\n".join(bullets[:3])
+        for label in ("- 是什么：", "- 什么时候用：", "- 什么时候不要用："):
+            if not any(line.startswith(label) for line in bullets):
+                kept += f"\n{label}本轮未确认（证据缺口）。"
+    else:
+        sentences = re.findall(r"[^。！？!?]+[。！？!?]?", section)
+        kept = "".join(sentences[:3]).strip()
     if not kept:
         return text
     parts[2] = f"\n\n{kept}\n{rest}" if rest else f"\n\n{kept}\n"
