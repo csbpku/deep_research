@@ -166,10 +166,9 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         _count: { _all: true },
         _min: { firstMissedAt: true, updatedAt: true },
       }),
-      prisma.learningSelfCheck.groupBy({
-        by: ['researchId'],
-        where: { userId: u.id, rating: 'got_it', masteredAt: { lte: masteryCutoff } },
-        _count: { _all: true },
+      prisma.learningSelfCheck.findMany({
+        where: { userId: u.id, rating: 'got_it', masteredAt: { not: null } },
+        select: { researchId: true, masteredAt: true, masteryCount: true },
       }),
     ]);
     const stats = new Map<string, { rating: string; updatedAt: Date }[]>();
@@ -181,10 +180,11 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       stats.set(row.researchId, list);
     }
     for (const row of mastered) {
+      // The SQL gate above can only use the shortest interval; the real due
+      // date depends on how many times this question has been retired.
+      if (!isLearningReviewDue(row.masteredAt, new Date(), LEARNING_MASTERY_INTERVAL_DAYS, row.masteryCount)) continue;
       const list = stats.get(row.researchId) ?? [];
-      for (let index = 0; index < row._count._all; index++) {
-        list.push({ rating: 'got_it', updatedAt: masteryCutoff });
-      }
+      list.push({ rating: 'got_it', updatedAt: row.masteredAt ?? masteryCutoff });
       stats.set(row.researchId, list);
     }
     // Only articles this user has actually rated can be "needs review".
@@ -216,8 +216,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             userId: u.id,
             OR: [
               { rating: { in: ['unsure', 'missed'] } },
-              // Mastered answers come back once the interval has passed.
-              { masteredAt: { lte: new Date(Date.now() - 30 * 86_400_000) } },
+              { masteredAt: { not: null } },
             ],
           },
           select: { rating: true, updatedAt: true, firstMissedAt: true, masteredAt: true },

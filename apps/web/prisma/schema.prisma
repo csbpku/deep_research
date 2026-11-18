@@ -470,6 +470,8 @@ model LearningSelfCheck {
   // When the weak mark was retired. Kept so "learned" is auditable, not just
   // inferred from a missing firstMissedAt.
   masteredAt  DateTime? @db.Timestamptz(3)
+  // How many times this question has been retired; drives the review interval.
+  masteryCount Int      @default(0)
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)

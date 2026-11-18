@@ -1,6 +1,5 @@
 import { Prisma } from '@prisma/client';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
-import { LEARNING_MASTERY_INTERVAL_DAYS } from './learning-review-policy';
 
 export interface ResearchListWhereInput {
   scope: 'published' | 'draft' | 'mine';
@@ -77,9 +76,9 @@ export function researchListWhere(input: ResearchListWhereInput): Prisma.Researc
           userId,
           OR: [
             { rating: { in: ['unsure', 'missed'] } },
-            // A mastered answer returns after the interval; otherwise "learned"
-            // would mean "never look at it again".
-            { masteredAt: { lte: new Date(Date.now() - LEARNING_MASTERY_INTERVAL_DAYS * 86_400_000) } },
+            // Mastered answers return on their own schedule; the exact due
+            // check runs in the API where masteryCount is available.
+            { masteredAt: { not: null } },
           ],
         },
       },

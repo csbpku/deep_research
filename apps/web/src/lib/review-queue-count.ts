@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { STALENESS_THRESHOLDS } from './search/staleness-policy';
-import { LEARNING_REVIEW_STALE_DAYS } from './learning-review-policy';
+import { LEARNING_REVIEW_STALE_DAYS, isLearningReviewDue } from './learning-review-policy';
 
 /** How many items are waiting in the "待处理" queue for this user.
  *
@@ -24,7 +24,7 @@ type ReviewQueueDb = Pick<PrismaClient, 'research' | 'learningSelfCheck'>;
 export async function getReviewQueueCounts(db: ReviewQueueDb, userId: string, now = new Date()): Promise<ReviewQueueCounts> {
   const abandonedBefore = new Date(now.getTime() - STALENESS_THRESHOLDS.abandoned * 86_400_000);
   const learningStaleBefore = new Date(now.getTime() - LEARNING_REVIEW_STALE_DAYS * 86_400_000);
-  const [judgementDue, judgementOverdue, weakChecks] = await Promise.all([
+  const [judgementDue, judgementOverdue, weakChecks, mastered] = await Promise.all([
     db.research.count({
       where: {
         authorId: userId,
@@ -48,15 +48,24 @@ export async function getReviewQueueCounts(db: ReviewQueueDb, userId: string, no
       where: { userId, rating: { in: ['unsure', 'missed'] } },
       _min: { firstMissedAt: true, updatedAt: true },
     }),
+    db.learningSelfCheck.findMany({
+      where: { userId, rating: 'got_it', masteredAt: { not: null } },
+      select: { researchId: true, masteredAt: true, masteryCount: true },
+    }),
   ]);
   const learningStale = weakChecks.filter(
     (check) => ((check._min.firstMissedAt ?? check._min.updatedAt)?.getTime() ?? now.getTime()) <= learningStaleBefore.getTime(),
   ).length;
+  const masteryDue = new Set(
+    mastered
+      .filter((row) => isLearningReviewDue(row.masteredAt, now, undefined, row.masteryCount))
+      .map((row) => row.researchId),
+  ).size;
   return {
     judgementDue,
     judgementOverdue,
-    learningReview: weakChecks.length,
+    learningReview: weakChecks.length + masteryDue,
     learningStale,
-    total: judgementDue + weakChecks.length,
+    total: judgementDue + weakChecks.length + masteryDue,
   };
 }

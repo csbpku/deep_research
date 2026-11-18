@@ -9,7 +9,13 @@ describe('review queue count', () => {
       { researchId: 'a', _min: { firstMissedAt: new Date('2026-09-28T00:00:00Z'), updatedAt: new Date('2026-11-16T00:00:00Z') } },
       { researchId: 'b', _min: { firstMissedAt: new Date('2026-11-10T00:00:00Z'), updatedAt: new Date('2026-11-10T00:00:00Z') } },
     ]);
-    const db = { research: { count }, learningSelfCheck: { groupBy } } as never;
+    const findMany = vi.fn().mockResolvedValue([
+      // Mastered 40 days ago, first retirement: 30-day interval, so due.
+      { researchId: 'c', masteredAt: new Date('2026-10-08T00:00:00Z'), masteryCount: 1 },
+      // Mastered 40 days ago, second retirement: 60-day interval, not due.
+      { researchId: 'd', masteredAt: new Date('2026-10-08T00:00:00Z'), masteryCount: 2 },
+    ]);
+    const db = { research: { count }, learningSelfCheck: { groupBy, findMany } } as never;
 
     const now = new Date('2026-11-17T00:00:00Z');
     const result = await getReviewQueueCounts(db, 'user-1', now);
@@ -17,9 +23,9 @@ describe('review queue count', () => {
     expect(result).toEqual({
       judgementDue: 4,
       judgementOverdue: 1,
-      learningReview: 2,
+      learningReview: 3,
       learningStale: 1,
-      total: 6,
+      total: 7,
     });
     expect(groupBy).toHaveBeenCalledWith({
       by: ['researchId'],
