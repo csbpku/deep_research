@@ -149,7 +149,7 @@ test.describe('MUI search contracts (read-only requests, no database writes)', (
         await expect(title).toBeVisible();
         await expect(page.locator('html')).toHaveClass(new RegExp(theme));
         expect(await title.evaluate(element => getComputedStyle(element).fontSize)).toBe('16px');
-        expect(await page.getByRole('article').locator('p').evaluate(element => getComputedStyle(element).fontSize)).toBe('14px');
+        expect(await page.getByRole('article').locator('p').last().evaluate(element => getComputedStyle(element).fontSize)).toBe('14px');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await page.getByRole('tab', { name: '知识卡片', exact: true }).press('Home');
         await expect(page.getByRole('tab', { name: '全部', exact: true })).toHaveAttribute('aria-selected', 'true');
