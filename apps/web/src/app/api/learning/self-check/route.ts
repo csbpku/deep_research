@@ -28,21 +28,41 @@ export const POST = apiHandler(async (request: NextRequest) => {
   if (!research) {
     return toApiErrorResponse({ code: ERROR_CODES.NOT_FOUND, message: '调研不存在', requestId: request.headers.get('x-request-id') || 'unknown' });
   }
+  const existing = await prisma.learningSelfCheck.findUnique({
+    where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
+    select: { correctStreak: true, firstMissedAt: true },
+  });
+  // One correct answer is often a lucky guess. Retire the weak mark only on
+  // the second consecutive "got it"; a wrong answer resets the streak.
+  const correctStreak = parsed.rating === 'got_it' ? (existing?.correctStreak ?? 0) + 1 : 0;
+  const retired = correctStreak >= 2;
   const row = await prisma.learningSelfCheck.upsert({
     where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
     create: {
       userId: user.id,
       researchId: parsed.researchId,
       questionKey: parsed.questionKey,
-      rating: parsed.rating,
+      rating: retired ? 'got_it' : parsed.rating,
+      correctStreak,
       ...(parsed.rating === 'got_it' ? {} : { firstMissedAt: new Date() }),
     },
     update: {
-      rating: parsed.rating,
-      ...(parsed.rating === 'got_it' ? { firstMissedAt: null } : {}),
+      rating: retired ? 'got_it' : parsed.rating,
+      correctStreak,
+      ...(retired
+        ? { firstMissedAt: null }
+        : parsed.rating === 'got_it'
+          ? {}
+          : { firstMissedAt: existing?.firstMissedAt ?? new Date() }),
     },
   });
-  return NextResponse.json({ id: row.id, rating: row.rating, updatedAt: row.updatedAt, firstMissedAt: row.firstMissedAt });
+  return NextResponse.json({
+    id: row.id,
+    rating: row.rating,
+    correctStreak: row.correctStreak,
+    updatedAt: row.updatedAt,
+    firstMissedAt: row.firstMissedAt,
+  });
 });
 
 export const GET = apiHandler(async (request: NextRequest) => {
