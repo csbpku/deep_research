@@ -2226,18 +2226,20 @@ def _install_standard_intent_questions(
         return 0
     original = conductor.plan_research
     used = False
-    logger.info(
-        "ai-engine.research.intent_question_hook",
-        extra={"count": len(questions), "has_conductor": True},
+    logger.warning(
+        "intent question hook installed count=%s conductor=%s",
+        len(questions),
+        type(conductor).__name__,
     )
 
     async def first_plan(query: Any, query_domains: Any = None) -> list[str]:
         nonlocal used
         if not used:
             used = True
-            logger.info(
-                "ai-engine.research.intent_question_lanes",
-                extra={"count": len(questions), "topic": topic},
+            logger.warning(
+                "intent question lanes active count=%s topic=%s",
+                len(questions),
+                topic,
             )
             return [f"{topic} {question}" for question in questions]
         result = await original(query, query_domains)
