@@ -94,6 +94,33 @@ def _trim_section(content: str, cap: int) -> str:
     return cut.rstrip() + "\n"
 
 
+_ANSWER_LABELS = ("- 是什么：", "- 什么时候用：", "- 什么时候不要用：")
+
+
+def normalize_answer_lines(section: str) -> str:
+    """Remove writer artefacts from the three opening bullets.
+
+    A rewritten bullet occasionally starts with "实际情况：**" because the
+    model copied the misconception template into the opening. That reads as a
+    broken sentence, so peel the template prefixes until the claim starts.
+    """
+    out = []
+    for line in section.splitlines():
+        if not line.startswith(_ANSWER_LABELS):
+            out.append(line)
+            continue
+        label, _, claim = line.partition("：")
+        previous = None
+        while claim != previous:
+            previous = claim
+            claim = re.sub(r"^[\s*_`]+", "", claim)
+            claim = re.sub(r"^实际情况[:：]\s*", "", claim)
+            claim = re.sub(r"^误区[:：]\s*", "", claim)
+            claim = re.sub(r"^[\s*_`]+", "", claim)
+        out.append(f"{label}：{claim.strip()}")
+    return "\n".join(out)
+
+
 def enforce_answer_shape(text: str) -> str:
     """Keep the opening answer to its three promised sentences.
 
@@ -119,7 +146,107 @@ def enforce_answer_shape(text: str) -> str:
         kept = "".join(sentences[:3]).strip()
     if not kept:
         return text
+    kept = normalize_answer_lines(kept)
     parts[2] = f"\n\n{kept}\n{rest}" if rest else f"\n\n{kept}\n"
+    return "".join(parts)
+
+
+_GAP_MARKERS = ("未确认", "证据缺口", "暂无", "无直接证据")
+_COUNTEREXAMPLE = re.compile(r"不要|不应|不适合|不宜|避免|反例|失败|禁用|不建议|无原因|根治|全库|全量|并不|不会|不能|仅|只需|不必")
+
+# A misconception line that only contrasts behaviour is weaker than one that
+# names a prohibited action. Score the second group higher so the opening
+# bullet gets the actionable prohibition, not a general trade-off.
+_STRONG_COUNTEREXAMPLE = re.compile(r"不要|不应|不适合|不宜|避免|禁用|不建议|并不|不会|不能")
+
+# A usable "when not to use" either forbids an action or marks a case as
+# unsuitable. "学习 X 前应先理解 Y" is a prerequisite, not a boundary.
+_PROHIBITION = re.compile(r"不要|不应|不适合|不宜|避免|禁用|不建议|不能|无法|仅适合|只适合")
+
+
+def reconcile_answer_shape(text: str) -> str:
+    """Use a cited counterexample from the body to fill a gap in the opening.
+
+    Writers often explain when *not* to use something in 常见误区 and still
+    leave the opening bullet at "本轮未确认". The evidence is already in the
+    document, only in a later section. When that happens, move the cited
+    sentence up instead of asking the reader to reconcile two contradictory
+    statements.
+    """
+    parts = re.split(r"^(##[ \t]+90 秒回答)[ \t]*$", text, flags=re.MULTILINE)
+    if len(parts) < 3:
+        return text
+    body = parts[2]
+    end = body.find("\n## ")
+    section, rest = (body, "") if end == -1 else (body[:end], body[end:])
+    lines = section.splitlines()
+    # The third bullet is only correct when it bounds use. Writers sometimes
+    # fill it with a prerequisite ("learn MVCC first"), which reads as an
+    # answer but actually says nothing about abstaining. Treat both a gap and
+    # a non-prohibition as "needs evidence".
+    gap_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("- 什么时候不要用：")
+            and (
+                any(marker in line for marker in _GAP_MARKERS)
+                or not _PROHIBITION.search(line.split("：", 1)[-1])
+            )
+        ),
+        None,
+    )
+    if gap_index is None or not rest:
+        return text
+    source = ""
+    prohibited = re.compile(r"不要|不应|不适合|不宜|避免|禁用|不建议")
+    # Only the misconception section answers "when not to use it"; scanning
+    # the whole body picks up prerequisites ("learn X before VACUUM"), which
+    # is about ordering, not about abstaining.
+    sections = rest.split("## 常见误区", 1)
+    if len(sections) != 2:
+        return text
+    for line in sections[1].splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("|") or stripped.startswith("```"):
+            continue
+        if "[S" in stripped and prohibited.search(stripped):
+            source = stripped.lstrip("-*· ").strip()
+            break
+    if not source:
+        # Fall back to an uncited misconception only when it names a concrete
+        # prohibition; otherwise the opening would lift a neutral comparison.
+        best = 0
+        for line in sections[1].splitlines():
+            if "→" not in line or "|" in line:
+                continue
+            score = len(_STRONG_COUNTEREXAMPLE.findall(line)) * 2 + len(
+                _COUNTEREXAMPLE.findall(line)
+            )
+            if score > best:
+                source = line.strip().lstrip("-*· ").strip()
+                best = score
+    if not source:
+        lines[gap_index] = "- 什么时候不要用：本轮未确认（证据缺口）。"
+        parts[2] = "\n".join(lines) + ("\n\n" + rest.lstrip("\n") if rest else "\n")
+        return "".join(parts)
+    claim = re.sub(r"^(误区|反例|注意)[:：]\s*", "", source)
+    if "→" in claim:
+        claim = claim.split("→", 1)[1]
+    claim = re.sub(r"^[\s*_`]+", "", claim)
+    claim = re.sub(r"^\s*实际情况[:：]\s*", "", claim)
+    claim = re.sub(r"^[\s*_`]+", "", claim)
+    if "→" in claim:
+        # "误区 → 实际情况：错误说法 → 正确说法" leaves the misconception in
+        # front. The sentence after the last arrow is the actual claim.
+        claim = claim.rsplit("→", 1)[1]
+    claim = re.sub(r"^[\s\-*·]+", "", claim)
+    if len(claim) > 140:
+        boundary = max(claim.rfind("，", 0, 120), claim.rfind("；", 0, 120))
+        claim = claim[: boundary + 1] if boundary > 60 else claim[:140]
+        claim = claim.rstrip("，；") + "。"
+    lines[gap_index] = f"- 什么时候不要用：{claim}"
+    parts[2] = "\n".join(lines) + ("\n\n" + rest.lstrip("\n") if rest else "\n")
     return "".join(parts)
 
 
@@ -169,4 +296,4 @@ def enforce_learning_budget(text: str) -> str:
         keep = max(120, int(len(body) * 0.75))
         chunks[index + 1] = _trim_section(body, keep)
         bounded = "".join(chunks)
-    return enforce_answer_shape(bounded)
+    return reconcile_answer_shape(enforce_answer_shape(bounded))

@@ -1,6 +1,11 @@
 """A learning path must stay a path: six sections, bounded length."""
 
-from ai_engine.learning_path import enforce_learning_budget, is_valid_learning_path
+from ai_engine.learning_path import (
+    enforce_answer_shape,
+    enforce_learning_budget,
+    is_valid_learning_path,
+    reconcile_answer_shape,
+)
 
 LONG = "这是一段很长的解释。" * 200
 
@@ -114,3 +119,84 @@ def test_a_missing_opening_label_is_filled_as_an_evidence_gap() -> None:
     bounded = enforce_learning_budget(text)
     opening = bounded.split("## 概念图")[0]
     assert "- 什么时候不要用：本轮未确认（证据缺口）。" in opening
+
+
+def test_opening_gap_is_filled_from_a_cited_misconception() -> None:
+    text = """## 90 秒回答
+
+- 是什么：VACUUM 清理死元组。
+- 什么时候用：死元组堆积时。
+- 什么时候不要用：本轮未确认（证据缺口）。
+
+## 概念图
+
+| 概念 | 含义 |
+
+## 常见误区
+
+- 误区：死元组增长就全库 VACUUM → 实际情况：不要无原因地全库手动清理，可能制造额外 I/O。[S4](https://pg)
+"""
+    result = reconcile_answer_shape(text)
+    assert "本轮未确认" not in result.split("## 概念图")[0]
+    assert "不要无原因地全库手动清理" in result
+    assert "[S4]" in result.split("## 概念图")[0]
+
+
+def test_opening_gap_stays_when_the_body_has_no_counterexample() -> None:
+    text = """## 90 秒回答
+
+- 是什么：VACUUM 清理死元组。
+- 什么时候不要用：本轮未确认（证据缺口）。
+
+## 概念图
+
+| 概念 | 含义 |
+"""
+    assert reconcile_answer_shape(text) == text
+
+
+def test_opening_bullet_drops_the_misconception_template() -> None:
+    text = """## 90 秒回答
+
+- 是什么：VACUUM 清理死元组。
+- 什么时候用：死元组堆积时。
+- 什么时候不要用：实际情况：** 固定计划无法适应峰值；官方不建议完全禁用 autovacuum。[S4](https://pg)
+
+## 概念图
+
+| 概念 | 含义 |
+"""
+    opening = enforce_answer_shape(text).split("## 概念图")[0]
+    assert "实际情况" not in opening
+    assert "固定计划无法适应峰值" in opening
+
+
+def test_prerequisite_in_the_third_bullet_is_replaced_by_a_real_boundary() -> None:
+    text = """## 90 秒回答
+
+- 是什么：VACUUM 清理死元组。
+- 什么时候用：死元组堆积时。
+- 什么时候不要用：学习 VACUUM 前应先理解 MVCC 和事务快照。
+
+## 常见误区
+
+1. **误区：VACUUM FULL 能及时解决所有膨胀。 → 实际情况：它会重写整表，需要 ACCESS EXCLUSIVE 锁，运行时表不能并行读写；常规维护应优先使用标准 VACUUM。** [S3](https://pg)
+"""
+    opening = reconcile_answer_shape(text).split("## 常见误区")[0]
+    assert "学习 VACUUM 前" not in opening
+    assert "ACCESS EXCLUSIVE" in opening
+    assert "[S3]" in opening
+
+
+def test_prerequisite_without_a_counterexample_becomes_an_explicit_gap() -> None:
+    text = """## 90 秒回答
+
+- 是什么：VACUUM 清理死元组。
+- 什么时候不要用：学习 VACUUM 前应先理解 MVCC。
+
+## 常见误区
+
+- 误区：VACUUM 会归还磁盘空间 → 实际情况：普通 VACUUM 只复用空间。[S1](https://pg)
+"""
+    opening = reconcile_answer_shape(text).split("## 常见误区")[0]
+    assert "本轮未确认" in opening
