@@ -77,7 +77,7 @@ interface ResearchItem {
   updatedAt: string;
   author: { id: string; name: string };
   canEdit?: boolean;
-  reviewDue?: { missed: number; unsure: number };
+  reviewDue?: { missed: number; unsure: number; stale?: boolean };
   judgementDue?: { due: boolean; daysOverdue: number | null };
 }
 
@@ -139,8 +139,8 @@ function ResearchesContent() {
   const [type, setType] = useState<ResearchTypeFilter>(() => (
     hasExplicitTab ? researchTypeForTab(tab) : 'all'
   ));
-  const [needsReview, setNeedsReview] = useState(false);
-  const [judgementDue, setJudgementDue] = useState(false);
+  const [needsReview, setNeedsReview] = useState(() => searchParams.get('needsReview') === 'true');
+  const [judgementDue, setJudgementDue] = useState(() => searchParams.get('judgementDue') === 'true');
   const [loadingElapsed, setLoadingElapsed] = useState(0);
   const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
 
@@ -449,6 +449,7 @@ function ResearchesContent() {
                       {item.reviewDue.missed > 0 ? `${item.reviewDue.missed} 题未掌握` : ''}
                       {item.reviewDue.missed > 0 && item.reviewDue.unsure > 0 ? ' · ' : ''}
                       {item.reviewDue.unsure > 0 ? `${item.reviewDue.unsure} 题待确认` : ''}
+                      {item.reviewDue.stale ? ' · 长期未复习' : ''}
                     </p>
                   )}
 

@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { STALENESS_THRESHOLDS } from './search/staleness-policy';
+import { LEARNING_REVIEW_STALE_DAYS } from './learning-review-policy';
 
 /** How many items are waiting in the "待处理" queue for this user.
  *
@@ -17,9 +18,6 @@ export interface ReviewQueueCounts {
   learningStale: number;
   total: number;
 }
-
-/** A weak self-check left alone this long is no longer a fresh reminder. */
-export const LEARNING_REVIEW_STALE_DAYS = STALENESS_THRESHOLDS.aged;
 
 type ReviewQueueDb = Pick<PrismaClient, 'research' | 'learningSelfCheck'>;
 

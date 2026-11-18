@@ -25,6 +25,7 @@ import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { researchListOrderBy, researchListWhere } from '../../../lib/research-list-where';
 import { rankResearchForReview } from '../../../lib/research-review-priority';
 import { judgementDueSummary } from '../../../lib/research-judgement-due';
+import { isLearningReviewStale } from '../../../lib/learning-review-policy';
 import { confirmedKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../lib/personal-knowledge-index';
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
@@ -244,7 +245,17 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         (u.role === 'admin' && item.status === RESEARCH_STATUS.PUBLISHED),
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
-      ...(needsReviewQuery ? { reviewDue: { missed: (item as typeof item & { learningSelfChecks: { rating: string }[] }).learningSelfChecks.filter(check => check.rating === 'missed').length, unsure: (item as typeof item & { learningSelfChecks: { rating: string }[] }).learningSelfChecks.filter(check => check.rating === 'unsure').length } } : {}),
+      ...(needsReviewQuery ? (() => {
+        const checks = (item as typeof item & { learningSelfChecks: { rating: string; updatedAt: Date }[] }).learningSelfChecks;
+        const oldest = checks.reduce<Date | null>((acc, check) => (!acc || check.updatedAt < acc ? check.updatedAt : acc), null);
+        return {
+          reviewDue: {
+            missed: checks.filter(check => check.rating === 'missed').length,
+            unsure: checks.filter(check => check.rating === 'unsure').length,
+            stale: isLearningReviewStale(oldest),
+          },
+        };
+      })() : {}),
       ...('judgementReviewAt' in item && item.judgementReviewAt ? { judgementDue: judgementDueSummary(item) } : {}),
       author: { id: item.author.id, name: item.author.name },
     })),
