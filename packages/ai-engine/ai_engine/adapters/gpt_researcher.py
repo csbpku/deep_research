@@ -2874,7 +2874,9 @@ def _append_references(
     *,
     report_type: str | None = None,
 ) -> str:
-    if report_type == "web_brief":
+    if report_type in {"web_brief", "learning_path", "comparison_matrix"}:
+        # These artifacts bind every claim inline with [S#]; a trailing
+        # bibliography duplicates that evidence and breaks the page contract.
         return _strip_reference_section(report)
     captured_sources = _captured_sources(sources)
     if not captured_sources:

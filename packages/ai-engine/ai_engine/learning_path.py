@@ -56,6 +56,17 @@ _BUDGET_NOTE = re.compile(
 )
 
 
+_BIBLIOGRAPHY = re.compile(r"^##\s*(参考文献|参考资料|References)\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def strip_bibliography(text: str) -> str:
+    """Remove a trailing bibliography; every claim already carries [S#]."""
+    match = _BIBLIOGRAPHY.search(text)
+    if match is None:
+        return text
+    return text[: match.start()].rstrip()
+
+
 def strip_budget_notes(text: str) -> str:
     """Remove truncation notes left by older budget passes.
 
@@ -264,7 +275,7 @@ def _trim_concept_map(content: str) -> str:
 
 def enforce_learning_budget(text: str) -> str:
     """Trim overlong sections, keeping the six-section order and all headings."""
-    text = strip_budget_notes(normalize_learning_headings(text))
+    text = strip_bibliography(strip_budget_notes(normalize_learning_headings(text)))
     if not is_valid_learning_path(text):
         return text
     parts = re.split(r"^(##\s+.+)$", text, flags=re.MULTILINE)

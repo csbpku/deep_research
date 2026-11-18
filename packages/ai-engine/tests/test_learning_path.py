@@ -200,3 +200,44 @@ def test_prerequisite_without_a_counterexample_becomes_an_explicit_gap() -> None
 """
     opening = reconcile_answer_shape(text).split("## 常见误区")[0]
     assert "本轮未确认" in opening
+
+
+def test_the_budget_drops_a_trailing_bibliography() -> None:
+    text = """## 90 秒回答
+
+- 是什么：VACUUM 清理死元组。[S1](https://pg)
+- 什么时候用：死元组堆积时。
+- 什么时候不要用：标准 VACUUM 已能清理；FULL 需要排他锁。
+
+## 概念图
+
+| 核心概念 | 含义 | 关系 |
+|---|---|---|
+| MVCC | 多版本 | 决定死元组 |
+| VACUUM | 清理 | 清理死元组 |
+| autovacuum | 自动清理 | 执行 VACUUM |
+| ANALYZE | 统计 | 更新统计 |
+
+## 分层解释
+
+一
+
+## 可运行示例
+
+二
+
+## 常见误区
+
+- 误区：FULL 解决一切 → 实际情况：FULL 需要排他锁。[S1](https://pg)
+
+## 自检
+
+1. 三
+
+## 参考文献
+
+1. [PostgreSQL](https://pg)
+"""
+    bounded = enforce_learning_budget(text)
+    assert "## 参考文献" not in bounded
+    assert "## 自检" in bounded
