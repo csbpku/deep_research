@@ -1,5 +1,6 @@
 'use client';
 
+import { DEFAULT_JUDGEMENT_REVIEW_DAYS, JUDGEMENT_REVIEW_PRESETS, reviewDateFromNow } from '@/lib/research-review-policy';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
@@ -9,11 +10,6 @@ import { AppDialog } from '@/components/material/AppDialog';
 
 /** A due judgement is a decision, not a badge: reaffirm it (with a new
  *  expiry), revise the wording, or archive the card. */
-function addDays(days: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
 
 export function JudgementReviewActions({ researchId }: { researchId: string }) {
   const router = useRouter();
@@ -21,7 +17,7 @@ export function JudgementReviewActions({ researchId }: { researchId: string }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reviewAt, setReviewAt] = useState(() => addDays(90));
+  const [reviewAt, setReviewAt] = useState(() => reviewDateFromNow(DEFAULT_JUDGEMENT_REVIEW_DAYS));
 
   async function post(action: 'reaffirm' | 'revise' | 'archive', body: Record<string, unknown> = {}) {
     setBusy(true);
@@ -83,13 +79,13 @@ export function JudgementReviewActions({ researchId }: { researchId: string }) {
             确认这条判断仍然成立，并选择下一次复查时间。修改记录会写入审计。
           </Typography>
           <Stack direction="row" spacing={1}>
-            {[30, 90, 180].map((days) => (
+            {JUDGEMENT_REVIEW_PRESETS.map((days) => (
               <AppButton
                 key={days}
                 type="button"
                 size="small"
-                variant={reviewAt === addDays(days) ? 'contained' : 'outlined'}
-                onClick={() => setReviewAt(addDays(days))}
+                variant={reviewAt === reviewDateFromNow(days) ? 'contained' : 'outlined'}
+                onClick={() => setReviewAt(reviewDateFromNow(days))}
               >
                 {days} 天
               </AppButton>

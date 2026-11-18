@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography';
 import TextField from '@mui/material/TextField';
 import MenuItem from '@mui/material/MenuItem';
 import { JUDGEMENT_CONFIDENCES, JUDGEMENT_CONFIDENCE_LABELS, type JudgementConfidence } from '@/lib/research-knowledge-judgement';
+import { DEFAULT_JUDGEMENT_REVIEW_DAYS, reviewDateFromNow } from '@/lib/research-review-policy';
 
 export interface KnowledgeJudgementDraft {
   judgement: string;
@@ -15,7 +16,8 @@ export interface KnowledgeJudgementDraft {
 }
 
 export const EMPTY_JUDGEMENT: KnowledgeJudgementDraft = {
-  judgement: '', judgementConfidence: 'medium', judgementScope: '', judgementReviewAt: '',
+  judgement: '', judgementConfidence: 'medium', judgementScope: '',
+  judgementReviewAt: reviewDateFromNow(DEFAULT_JUDGEMENT_REVIEW_DAYS),
 };
 
 export function KnowledgeJudgementForm({ value, onChange, disabled }: {
