@@ -30,24 +30,31 @@ export const POST = apiHandler(async (request: NextRequest) => {
   }
   const existing = await prisma.learningSelfCheck.findUnique({
     where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
-    select: { correctStreak: true, firstMissedAt: true },
+    select: { correctStreak: true, firstMissedAt: true, rating: true },
   });
   // One correct answer is often a lucky guess. Retire the weak mark only on
   // the second consecutive "got it"; a wrong answer resets the streak.
   const correctStreak = parsed.rating === 'got_it' ? (existing?.correctStreak ?? 0) + 1 : 0;
   const retired = correctStreak >= 2;
+  // A weak question stays weak until the second correct answer; otherwise one
+  // lucky guess would silently empty the review queue.
+  const nextRating = retired
+    ? 'got_it'
+    : existing && existing.rating !== 'got_it'
+      ? existing.rating
+      : parsed.rating;
   const row = await prisma.learningSelfCheck.upsert({
     where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
     create: {
       userId: user.id,
       researchId: parsed.researchId,
       questionKey: parsed.questionKey,
-      rating: retired ? 'got_it' : parsed.rating,
+      rating: nextRating,
       correctStreak,
       ...(parsed.rating === 'got_it' ? {} : { firstMissedAt: new Date() }),
     },
     update: {
-      rating: retired ? 'got_it' : parsed.rating,
+      rating: nextRating,
       correctStreak,
       ...(retired
         ? { firstMissedAt: null }
@@ -75,7 +82,10 @@ export const GET = apiHandler(async (request: NextRequest) => {
   }
   const rows = await prisma.learningSelfCheck.findMany({
     where: { userId: user.id, researchId: parsed.data.researchId },
-    select: { questionKey: true, rating: true },
+    select: { questionKey: true, rating: true, correctStreak: true },
   });
-  return NextResponse.json({ ratings: Object.fromEntries(rows.map(row => [row.questionKey, row.rating])) });
+  return NextResponse.json({
+    ratings: Object.fromEntries(rows.map(row => [row.questionKey, row.rating])),
+    streaks: Object.fromEntries(rows.map(row => [row.questionKey, row.correctStreak])),
+  });
 });
