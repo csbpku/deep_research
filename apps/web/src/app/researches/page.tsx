@@ -77,7 +77,7 @@ interface ResearchItem {
   updatedAt: string;
   author: { id: string; name: string };
   canEdit?: boolean;
-  reviewDue?: { missed: number; unsure: number; masteryDue?: number; stale?: boolean };
+  reviewDue?: { missed: number; unsure: number; stale?: boolean };
   judgementDue?: { due: boolean; daysOverdue: number | null };
 }
 
@@ -444,15 +444,11 @@ function ResearchesContent() {
                     {excerpt(item.body, 200)}
                   </p>
 
-                  {needsReview && item.reviewDue
-                    && item.reviewDue.missed + item.reviewDue.unsure + (item.reviewDue.masteryDue ?? 0) > 0 && (
+                  {needsReview && item.reviewDue && item.reviewDue.missed + item.reviewDue.unsure > 0 && (
                     <p className={styles.reviewDue}>
                       {item.reviewDue.missed > 0 ? `${item.reviewDue.missed} 题未掌握` : ''}
                       {item.reviewDue.missed > 0 && item.reviewDue.unsure > 0 ? ' · ' : ''}
                       {item.reviewDue.unsure > 0 ? `${item.reviewDue.unsure} 题待确认` : ''}
-                      {(item.reviewDue.masteryDue ?? 0) > 0
-                        ? `${item.reviewDue.missed + item.reviewDue.unsure > 0 ? ' · ' : ''}${item.reviewDue.masteryDue} 题该复习了`
-                        : ''}
                       {item.reviewDue.stale ? ' · 长期未复习' : ''}
                     </p>
                   )}

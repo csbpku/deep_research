@@ -25,7 +25,7 @@ import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { researchListOrderBy, researchListWhere } from '../../../lib/research-list-where';
 import { rankResearchForReview } from '../../../lib/research-review-priority';
 import { judgementDueSummary } from '../../../lib/research-judgement-due';
-import { isLearningReviewDue, isLearningReviewStale, LEARNING_MASTERY_INTERVAL_DAYS } from '../../../lib/learning-review-policy';
+import { isLearningReviewStale } from '../../../lib/learning-review-policy';
 import { confirmedKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../lib/personal-knowledge-index';
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
@@ -157,34 +157,18 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     // Rank every matching article in the database, not just the current page.
     // Ratings are per user, so a column on Research would be wrong; group the
     // small rating table first and rank the candidate ids in memory.
-    // Weak answers are due now; mastered answers come back after the interval.
-    const masteryCutoff = new Date(Date.now() - LEARNING_MASTERY_INTERVAL_DAYS * 86_400_000);
-    const [grouped, mastered] = await Promise.all([
-      prisma.learningSelfCheck.groupBy({
-        by: ['researchId', 'rating'],
-        where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
-        _count: { _all: true },
-        _min: { firstMissedAt: true, updatedAt: true },
-      }),
-      prisma.learningSelfCheck.findMany({
-        where: { userId: u.id, rating: 'got_it', masteredAt: { not: null } },
-        select: { researchId: true, masteredAt: true, masteryCount: true },
-      }),
-    ]);
+    const grouped = await prisma.learningSelfCheck.groupBy({
+      by: ['researchId', 'rating'],
+      where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
+      _count: { _all: true },
+      _min: { firstMissedAt: true, updatedAt: true },
+    });
     const stats = new Map<string, { rating: string; updatedAt: Date }[]>();
     for (const row of grouped) {
       const list = stats.get(row.researchId) ?? [];
       for (let index = 0; index < row._count._all; index++) {
         list.push({ rating: row.rating, updatedAt: row._min.firstMissedAt ?? row._min.updatedAt ?? new Date(0) });
       }
-      stats.set(row.researchId, list);
-    }
-    for (const row of mastered) {
-      // The SQL gate above can only use the shortest interval; the real due
-      // date depends on how many times this question has been retired.
-      if (!isLearningReviewDue(row.masteredAt, new Date(), LEARNING_MASTERY_INTERVAL_DAYS, row.masteryCount)) continue;
-      const list = stats.get(row.researchId) ?? [];
-      list.push({ rating: 'got_it', updatedAt: row.masteredAt ?? masteryCutoff });
       stats.set(row.researchId, list);
     }
     // Only articles this user has actually rated can be "needs review".
@@ -212,14 +196,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         aiAssisted: true, publishedAt: true, featuredAt: true, createdAt: true, updatedAt: true,
         author: { select: { id: true, name: true, email: true } },
         learningSelfChecks: {
-          where: {
-            userId: u.id,
-            OR: [
-              { rating: { in: ['unsure', 'missed'] } },
-              { masteredAt: { not: null } },
-            ],
-          },
-          select: { rating: true, updatedAt: true, firstMissedAt: true, masteredAt: true },
+          where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
+          select: { rating: true, updatedAt: true, firstMissedAt: true },
         },
       },
     });
@@ -268,14 +246,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
       ...(needsReviewQuery ? (() => {
-        const checks = (item as { learningSelfChecks?: { rating: string; updatedAt: Date; firstMissedAt: Date | null; masteredAt: Date | null }[] }).learningSelfChecks ?? [];
+        const checks = (item as { learningSelfChecks?: { rating: string; updatedAt: Date; firstMissedAt: Date | null }[] }).learningSelfChecks ?? [];
         const oldest = checks.reduce<Date | null>((acc, check) => { const at = check.firstMissedAt ?? check.updatedAt; return !acc || at < acc ? at : acc; }, null);
-        const masteryDue = checks.filter(check => check.rating === 'got_it' && isLearningReviewDue(check.masteredAt)).length;
         return {
           reviewDue: {
             missed: checks.filter(check => check.rating === 'missed').length,
             unsure: checks.filter(check => check.rating === 'unsure').length,
-            masteryDue,
             stale: isLearningReviewStale(oldest),
           },
         };

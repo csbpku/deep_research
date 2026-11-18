@@ -72,15 +72,7 @@ export function researchListWhere(input: ResearchListWhereInput): Prisma.Researc
   if (needsReview === true) {
     clauses.push({
       learningSelfChecks: {
-        some: {
-          userId,
-          OR: [
-            { rating: { in: ['unsure', 'missed'] } },
-            // Mastered answers return on their own schedule; the exact due
-            // check runs in the API where masteryCount is available.
-            { masteredAt: { not: null } },
-          ],
-        },
+        some: { userId, rating: { in: ['unsure', 'missed'] } },
       },
     });
   }

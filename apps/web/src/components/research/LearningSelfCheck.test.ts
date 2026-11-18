@@ -28,18 +28,3 @@ describe('LearningSelfCheck', () => {
     expect(render(createElement(LearningSelfCheck, { items: [] }))).toBe('');
   });
 });
-
-describe('LearningSelfCheck streak hint', () => {
-  it('tells the reader one more correct answer retires the weak mark', () => {
-    const html = render(
-      createElement(LearningSelfCheck, {
-        items: [{ question: 'q1', answer: 'a1' }],
-        researchId: 'r1',
-        initialStreaks: { q1: 1 },
-        initialRatings: { q1: 'unsure' },
-      }),
-    );
-    expect(html).toContain('再答对 1 次就移出待复习');
-    expect(html).toContain('data-testid="self-check-streak-hint"');
-  });
-});

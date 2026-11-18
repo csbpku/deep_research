@@ -4,8 +4,9 @@ import { researchListWhere } from './research-list-where';
 describe('researchListWhere needsReview', () => {
   it('only includes reports with an unsure or missed rating for this user', () => {
     const where = researchListWhere({ scope: 'published', userId: 'u1', needsReview: true });
-    expect(JSON.stringify(where.AND)).toContain('learningSelfChecks');
-    expect(JSON.stringify(where.AND)).toContain('masteredAt');
+    expect(where.AND).toEqual(expect.arrayContaining([
+      { learningSelfChecks: { some: { userId: 'u1', rating: { in: ['unsure', 'missed'] } } } },
+    ]));
   });
 
   it('leaves the query unchanged when the filter is off', () => {
@@ -25,14 +26,5 @@ describe('researchListWhere judgementDue', () => {
   it('leaves the query unchanged when judgementDue is off', () => {
     const where = researchListWhere({ scope: 'published', userId: 'u1' });
     expect(JSON.stringify(where)).not.toContain('judgementReviewAt');
-  });
-});
-
-describe('needsReview mastery interval', () => {
-  it('brings mastered answers back after the interval', async () => {
-    const where = researchListWhere({ scope: 'published', userId: 'u1', needsReview: true });
-    const json = JSON.stringify(where);
-    expect(json).toContain('masteredAt');
-    expect(json).toContain('learningSelfChecks');
   });
 });

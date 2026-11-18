@@ -13,9 +13,6 @@ export interface LearningSelfCheckProps {
   items: SelfCheckItem[];
   /** Research id keeps one article's review queue from leaking into another. */
   researchId?: string;
-  /** Seeds used by server rendering and tests; the API still wins on mount. */
-  initialRatings?: Record<string, SelfCheckRating>;
-  initialStreaks?: Record<string, number>;
 }
 
 export type SelfCheckRating = 'got_it' | 'unsure' | 'missed';
@@ -56,33 +53,26 @@ function writeRatings(key: string, ratings: Record<string, SelfCheckRating>): vo
 }
 
 /** Answers stay hidden until the reader commits to an attempt and rates it. */
-export function LearningSelfCheck({
-  items,
-  researchId,
-  initialRatings = {},
-  initialStreaks = {},
-}: LearningSelfCheckProps) {
+export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps) {
   const key = storageKey(researchId);
   const queryClient = useQueryClient();
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const [ratings, setRatings] = useState<Record<string, SelfCheckRating>>(initialRatings);
-  // Correct answers in a row; one is a guess, two retires the weak mark.
-  const [streaks, setStreaks] = useState<Record<string, number>>(initialStreaks);
+  const [ratings, setRatings] = useState<Record<string, SelfCheckRating>>({});
 
   useEffect(() => {
     const stored = readRatings(key);
     setRatings(stored);
-    // Keep answers closed on return: the reader may want to retry before
-    // re-reading, and the streak hint now lives next to the rating buttons.
+    // A rated question already had its attempt; restore its answer on return.
+    setOpen(new Set(Object.keys(stored)));
     if (!researchId) return;
     let cancelled = false;
     fetch(`/api/learning/self-check?researchId=${encodeURIComponent(researchId)}`, { cache: 'no-store' })
       .then(response => (response.ok ? response.json() : null))
-      .then((payload: { ratings?: Record<string, SelfCheckRating>; streaks?: Record<string, number> } | null) => {
+      .then((payload: { ratings?: Record<string, SelfCheckRating> } | null) => {
         if (cancelled || !payload?.ratings) return;
         // The server is the cross-device source of truth; merge it over the local cache.
         setRatings(payload.ratings);
-        setStreaks(payload.streaks ?? {});
+        setOpen(new Set(Object.keys(payload.ratings)));
         writeRatings(key, payload.ratings);
       })
       .catch(() => undefined);
@@ -100,14 +90,8 @@ export function LearningSelfCheck({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ researchId, questionKey: question, rating }),
-      }).then(async (response) => {
+      }).then((response) => {
         if (!response.ok) return;
-        const payload = await response.json() as { rating?: SelfCheckRating; correctStreak?: number };
-        // The server may keep the weak rating on the first correct answer.
-        if (payload.rating) setRatings(prev => ({ ...prev, [question]: payload.rating as SelfCheckRating }));
-        if (typeof payload.correctStreak === 'number') {
-          setStreaks(prev => ({ ...prev, [question]: payload.correctStreak as number }));
-        }
         void queryClient.invalidateQueries({ queryKey: ['review-queue'] });
         void queryClient.invalidateQueries({ queryKey: ['review-queue-count'] });
         void queryClient.invalidateQueries({ queryKey: ['researches'] });
@@ -148,11 +132,6 @@ export function LearningSelfCheck({
                     {option.label}
                   </Button>
                 ))}
-                {(rating === 'unsure' || rating === 'missed') && streaks[item.question] === 1 && (
-                  <Typography variant="caption" color="warning.main" data-testid="self-check-streak-hint">
-                    再答对 1 次就移出待复习
-                  </Typography>
-                )}
               </Stack>
             )}
             {visible && (
@@ -160,11 +139,6 @@ export function LearningSelfCheck({
                 {rating && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
                     你的自评：{RATING_LABELS[rating]}
-                  </Typography>
-                )}
-                {(rating === 'unsure' || rating === 'missed') && streaks[item.question] === 1 && (
-                  <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.25 }}>
-                    再答对 1 次就移出待复习。
                   </Typography>
                 )}
                 <Typography component="p" sx={{ mt: 0.5, color: 'text.secondary' }}>

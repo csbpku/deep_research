@@ -28,50 +28,21 @@ export const POST = apiHandler(async (request: NextRequest) => {
   if (!research) {
     return toApiErrorResponse({ code: ERROR_CODES.NOT_FOUND, message: '调研不存在', requestId: request.headers.get('x-request-id') || 'unknown' });
   }
-  const existing = await prisma.learningSelfCheck.findUnique({
-    where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
-    select: { correctStreak: true, firstMissedAt: true, rating: true, masteredAt: true, masteryCount: true },
-  });
-  // One correct answer is often a lucky guess. Retire the weak mark only on
-  // the second consecutive "got it"; a wrong answer resets the streak.
-  const correctStreak = parsed.rating === 'got_it' ? (existing?.correctStreak ?? 0) + 1 : 0;
-  const retired = correctStreak >= 2;
-  // A weak question stays weak until the second correct answer; otherwise one
-  // lucky guess would silently empty the review queue.
-  const nextRating = retired
-    ? 'got_it'
-    : existing && existing.rating !== 'got_it'
-      ? existing.rating
-      : parsed.rating;
   const row = await prisma.learningSelfCheck.upsert({
     where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
     create: {
       userId: user.id,
       researchId: parsed.researchId,
       questionKey: parsed.questionKey,
-      rating: nextRating,
-      correctStreak,
+      rating: parsed.rating,
       ...(parsed.rating === 'got_it' ? {} : { firstMissedAt: new Date() }),
-      ...(retired ? { masteredAt: new Date(), masteryCount: 1 } : {}),
     },
     update: {
-      rating: nextRating,
-      correctStreak,
-      ...(retired
-        ? { firstMissedAt: null, masteredAt: new Date(), masteryCount: (existing?.masteryCount ?? 0) + 1 }
-        : parsed.rating === 'got_it'
-          ? { masteredAt: null }
-          : { firstMissedAt: existing?.firstMissedAt ?? new Date(), masteredAt: null, masteryCount: 0 }),
+      rating: parsed.rating,
+      ...(parsed.rating === 'got_it' ? { firstMissedAt: null } : {}),
     },
   });
-  return NextResponse.json({
-    id: row.id,
-    rating: row.rating,
-    correctStreak: row.correctStreak,
-    masteredAt: row.masteredAt,
-    updatedAt: row.updatedAt,
-    firstMissedAt: row.firstMissedAt,
-  });
+  return NextResponse.json({ id: row.id, rating: row.rating, updatedAt: row.updatedAt, firstMissedAt: row.firstMissedAt });
 });
 
 export const GET = apiHandler(async (request: NextRequest) => {
@@ -84,12 +55,7 @@ export const GET = apiHandler(async (request: NextRequest) => {
   }
   const rows = await prisma.learningSelfCheck.findMany({
     where: { userId: user.id, researchId: parsed.data.researchId },
-    select: { questionKey: true, rating: true, correctStreak: true, masteredAt: true, masteryCount: true },
+    select: { questionKey: true, rating: true },
   });
-  return NextResponse.json({
-    ratings: Object.fromEntries(rows.map(row => [row.questionKey, row.rating])),
-    streaks: Object.fromEntries(rows.map(row => [row.questionKey, row.correctStreak])),
-    masteredAt: Object.fromEntries(rows.filter(row => row.masteredAt).map(row => [row.questionKey, row.masteredAt])),
-    masteryCount: Object.fromEntries(rows.map(row => [row.questionKey, row.masteryCount])),
-  });
+  return NextResponse.json({ ratings: Object.fromEntries(rows.map(row => [row.questionKey, row.rating])) });
 });
