@@ -452,7 +452,7 @@ function ResearchesContent() {
                     </p>
                   )}
 
-                  {judgementDue && item.judgementDue?.due && (
+                  {item.judgementDue?.due && (
                     <p className={styles.reviewDue}>
                       判断已过期 {item.judgementDue.daysOverdue} 天
                     </p>

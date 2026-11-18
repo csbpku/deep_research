@@ -245,7 +245,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
       ...(needsReviewQuery ? { reviewDue: { missed: (item as typeof item & { learningSelfChecks: { rating: string }[] }).learningSelfChecks.filter(check => check.rating === 'missed').length, unsure: (item as typeof item & { learningSelfChecks: { rating: string }[] }).learningSelfChecks.filter(check => check.rating === 'unsure').length } } : {}),
-      ...(judgementDue === true ? { judgementDue: judgementDueSummary(item) } : {}),
+      ...('judgementReviewAt' in item && item.judgementReviewAt ? { judgementDue: judgementDueSummary(item) } : {}),
       author: { id: item.author.id, name: item.author.name },
     })),
     page,
