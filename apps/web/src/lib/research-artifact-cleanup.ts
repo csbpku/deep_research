@@ -7,7 +7,14 @@
  */
 const BUDGET_NOTE = /\n*（这一节已压缩到字数上限[^）]*）\n*/g;
 const FULL_CITATION = /\[S(\d+)\]\((https?:\/\/[^)\s]+)\)/g;
+const BIBLIOGRAPHY = /^##\s*(参考文献|参考资料|References)\s*$/m;
 
 export function cleanLearningArtifact(body: string): string {
-  return body.replace(BUDGET_NOTE, '\n\n').replace(FULL_CITATION, '[S$1]').trim();
+  const cleaned = body.replace(BUDGET_NOTE, '\n\n').replace(FULL_CITATION, '[S$1]');
+  const bibliography = BIBLIOGRAPHY.exec(cleaned);
+  // Older artifacts appended a bibliography after 自检; the contract is that
+  // every claim is already cited inline, so the trailing list is machinery.
+  const withoutBibliography =
+    bibliography === null ? cleaned : cleaned.slice(0, bibliography.index);
+  return withoutBibliography.trim();
 }
