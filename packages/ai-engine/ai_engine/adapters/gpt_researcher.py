@@ -2226,7 +2226,6 @@ def _install_standard_intent_questions(
         return 0
     original = conductor.plan_research
     used = False
-    print("INTENT_HOOK_INSTALLED", len(questions), flush=True)
     logger.warning(
         "intent question hook installed count=%s conductor=%s",
         len(questions),
@@ -2237,12 +2236,14 @@ def _install_standard_intent_questions(
         nonlocal used
         if not used:
             used = True
-            logger.warning(
-                "intent question lanes active count=%s topic=%s",
-                len(questions),
-                topic,
-            )
-            return [f"{topic} {question}" for question in questions]
+            # The vendor's own first search is still needed: it seeds the
+            # outline prompt with real results. Run it, then append one lane
+            # per must-answer question so both happen exactly once.
+            try:
+                base = list(await original(query, query_domains))
+            except Exception:  # noqa: BLE001 - planning must degrade, not fail
+                base = []
+            return base + [f"{topic} {question}" for question in questions]
         result = await original(query, query_domains)
         return list(result)
 

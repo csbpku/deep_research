@@ -374,4 +374,7 @@ def test_standard_path_uses_the_questions_as_first_sub_queries() -> None:
         conductor, "VACUUM", "必须回答的问题：\n- 什么情况下不该用？\n"
     )
     assert n == 1
-    assert asyncio.run(conductor.plan_research("ignored")) == ["VACUUM 什么情况下不该用？"]
+    assert asyncio.run(conductor.plan_research("ignored")) == [
+        "vendor query",
+        "VACUUM 什么情况下不该用？",
+    ]
