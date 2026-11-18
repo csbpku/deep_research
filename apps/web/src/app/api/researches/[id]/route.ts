@@ -32,7 +32,7 @@ import { resolveCurrentReviewState } from '../../../../lib/research-review-state
 import { resolveResearchReviewInventory } from '../../../../lib/research-review-inventory';
 import { hasCompletedReviewInventory, projectResearchReviewForReader } from '../../../../lib/research-review-reader';
 import { coerceIntentCoverage, parseIntCoverage } from '../../../../lib/research-intent-coverage';
-import { cleanLearningArtifact } from '../../../../lib/research-artifact-cleanup';
+import { cleanResearchArtifact } from '../../../../lib/research-artifact-cleanup';
 import { researchPublicationVersion } from '../../../../lib/research-publication-version';
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
@@ -928,7 +928,10 @@ function shapeResearchDetail(r: {
     type: r.type,
     status: r.status,
     title: r.title,
-    body: cleanLearningArtifact(r.body),
+    body: cleanResearchArtifact({
+      reportType: r.sourceAiJob?.reportType ?? null,
+      body: r.body,
+    }),
     background: r.background,
     conclusion: r.conclusion,
     risks: r.risks,
@@ -958,7 +961,7 @@ function shapeResearchDetail(r: {
     aiJobId: r.sourceAiJob?.id ?? null,
     researchReportType: r.sourceAiJob?.reportType ?? null,
     researchObjective: parsedBrief.success ? parsedBrief.data.objective : null,
-    intentCoverage: coerceIntentCoverage(r.publishedIntentCoverage) ?? parseIntCoverage(cleanLearningArtifact(r.body)),
+    intentCoverage: coerceIntentCoverage(r.publishedIntentCoverage) ?? parseIntCoverage(cleanResearchArtifact({ reportType: r.sourceAiJob?.reportType ?? null, body: r.body })),
     intentCoverageSnapshot: Boolean(r.publishedIntentCoverage),
     publishedReviewAcknowledgedAt: r.publishedReviewAcknowledgedAt?.toISOString() ?? null,
     publishedReviewDisclosure: r.publishedReviewDisclosure,
