@@ -275,6 +275,11 @@ export function buildSearchSql(args: BuildSearchArgs): {
         WHERE r2.id = ranked."refId"::uuid
       ) END AS "judgementScope",
       CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT r2."judgementReviewAt"
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+      ) END AS "judgementReviewAt",
+      CASE WHEN ranked.type = 'knowledge' THEN (
         SELECT r2."judgementReviewAt" < now()
         FROM researches r2
         WHERE r2.id = ranked."refId"::uuid
@@ -340,6 +345,7 @@ export function shapeSearchRow(row: {
   judgementConfidence?: string | null;
   judgementScope?: string | null;
   judgementStale?: boolean;
+  judgementReviewAt?: Date | string | null;
   titleMatch?: boolean;
   tagMatch?: boolean;
 }) {
@@ -360,6 +366,7 @@ export function shapeSearchRow(row: {
     judgementConfidence: row.judgementConfidence ?? null,
     judgementScope: row.judgementScope?.trim() || null,
     judgementStale: row.judgementStale === true,
+    judgementReviewAt: row.judgementReviewAt ?? null,
     matchReasons,
     matchReason: matchReasons[0] ?? null,
     publishedAt: row.publishedAt.toISOString(),

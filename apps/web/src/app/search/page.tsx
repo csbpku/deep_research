@@ -16,6 +16,7 @@
 import React, { useCallback, useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { staleDays } from '@/lib/search/judgement-age';
 import { Search as SearchIcon } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
@@ -43,6 +44,7 @@ interface SearchRow {
   judgementConfidence?: 'low' | 'medium' | 'high' | null;
   judgementScope?: string | null;
   judgementStale?: boolean;
+  judgementReviewAt?: string | null;
   matchReasons?: Array<'judgement' | 'title' | 'tag'>;
   matchReason?: 'judgement' | 'title' | 'tag' | null;
   publishedAt: string;
@@ -323,7 +325,7 @@ function SearchContent() {
                             </p>
                             {row.judgementStale ? (
                               <p className={styles.stale}>
-                                判断已过期，仅供历史参考；使用前请先复核。
+                                判断已过期{staleDays(row.judgementReviewAt) > 0 ? ` ${staleDays(row.judgementReviewAt)} 天` : ''}，仅供历史参考；使用前请先复核。
                                 {' '}
                                 <Link href={`${detailHref(row)}#knowledge-judgement`} className={styles.staleAction}>
                                   去复查
