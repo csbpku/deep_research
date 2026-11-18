@@ -16,7 +16,7 @@
 import React, { useCallback, useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { staleDays } from '@/lib/search/judgement-age';
+import { staleDays, staleness } from '@/lib/search/judgement-age';
 import { Search as SearchIcon } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
@@ -324,8 +324,9 @@ function SearchContent() {
                               <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
                             </p>
                             {row.judgementStale ? (
-                              <p className={styles.stale}>
-                                判断已过期{staleDays(row.judgementReviewAt) > 0 ? ` ${staleDays(row.judgementReviewAt)} 天` : ''}，仅供历史参考；使用前请先复核。
+                              <p className={staleness(row.judgementReviewAt) === 'abandoned' ? styles.abandoned : styles.stale}>
+                                {staleness(row.judgementReviewAt) === 'abandoned' ? '已长期未复核' : '判断已过期'}
+                                {staleDays(row.judgementReviewAt) > 0 ? ` ${staleDays(row.judgementReviewAt)} 天` : ''}，仅供历史参考；使用前请先复核。
                                 {' '}
                                 <Link href={`${detailHref(row)}#knowledge-judgement`} className={styles.staleAction}>
                                   去复查

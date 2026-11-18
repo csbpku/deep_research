@@ -6,3 +6,14 @@ export function staleDays(reviewAt: Date | string | null | undefined, now: Date 
   const diff = now.getTime() - review.getTime();
   return diff <= 0 ? 0 : Math.floor(diff / 86_400_000);
 }
+
+export type Staleness = 'fresh' | 'aged' | 'stale' | 'abandoned';
+
+/** Grade a judgement by how far past its review date it is. */
+export function staleness(reviewAt: Date | string | null | undefined, now: Date = new Date()): Staleness {
+  const days = staleDays(reviewAt, now);
+  if (days === 0) return 'fresh';
+  if (days < 30) return 'aged';
+  if (days < 180) return 'stale';
+  return 'abandoned';
+}
