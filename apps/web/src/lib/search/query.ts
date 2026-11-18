@@ -264,6 +264,16 @@ export function buildSearchSql(args: BuildSearchArgs): {
         FROM researches r2
         WHERE r2.id = ranked."refId"::uuid
       ) END AS "bodyPreview",
+      CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT r2."judgementConfidence"
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+      ) END AS "judgementConfidence",
+      CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT left(r2."judgementScope", 120)
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+      ) END AS "judgementScope",
       CASE WHEN strpos(lower(ranked.title), lower($1)) > 0 OR lower(ranked.title) = lower($1)
         THEN true ELSE false END AS "titleMatch",
       CASE WHEN ranked.type = 'radar' AND EXISTS (
@@ -322,6 +332,8 @@ export function shapeSearchRow(row: {
   isPrivate?: boolean;
   judgementMatch?: string | null;
   bodyPreview?: string | null;
+  judgementConfidence?: string | null;
+  judgementScope?: string | null;
   titleMatch?: boolean;
   tagMatch?: boolean;
 }) {
@@ -339,6 +351,8 @@ export function shapeSearchRow(row: {
     highlighted: sanitizeSearchHighlight(row.highlighted),
     judgementMatch,
     bodyPreview: row.bodyPreview?.trim() || null,
+    judgementConfidence: row.judgementConfidence ?? null,
+    judgementScope: row.judgementScope?.trim() || null,
     matchReasons,
     matchReason: matchReasons[0] ?? null,
     publishedAt: row.publishedAt.toISOString(),

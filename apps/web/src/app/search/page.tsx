@@ -40,6 +40,8 @@ interface SearchRow {
   highlighted: string;
   judgementMatch?: string | null;
   bodyPreview?: string | null;
+  judgementConfidence?: 'low' | 'medium' | 'high' | null;
+  judgementScope?: string | null;
   matchReasons?: Array<'judgement' | 'title' | 'tag'>;
   matchReason?: 'judgement' | 'title' | 'tag' | null;
   publishedAt: string;
@@ -82,6 +84,8 @@ function highlightQuery(text: string, query: string): React.ReactNode {
     </>
   );
 }
+
+const CONFIDENCE_LABELS: Record<string, string> = { low: '低', medium: '中', high: '高' };
 
 const TYPE_TABS: Array<{ key: string; label: string }> = [
   { key: ALL, label: '全部' },
@@ -315,6 +319,11 @@ function SearchContent() {
                             <p className={styles.snippet}>
                               <span className={styles.judgementLabel}>判断命中：</span>
                               <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
+                            </p>
+                            <p className={styles.reason}>
+                              <span className={styles.judgementLabel}>判断可信度：</span>
+                              {CONFIDENCE_LABELS[row.judgementConfidence ?? 'medium'] ?? '中'}
+                              {row.judgementScope ? ` · 适用边界：${row.judgementScope}` : ''}
                             </p>
                             {row.bodyPreview ? (
                               <div className={styles.preview}>{previewText(row.bodyPreview)}</div>

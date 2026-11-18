@@ -86,3 +86,15 @@ describe('shapeSearchRow judgement preview', () => {
     expect(shaped.bodyPreview).toBe('正文');
   });
 });
+
+describe('shapeSearchRow judgement context', () => {
+  it('returns the confidence and scope beside a judgement match', () => {
+    const shaped = shapeSearchRow({
+      id: 'private:1', type: 'knowledge', refId: 'r1', title: 'Card',
+      snippet: 'j', highlighted: '', publishedAt: new Date(), rank: 1,
+      judgementMatch: 'j', judgementConfidence: 'high', judgementScope: ' 单库 ',
+    });
+    expect(shaped.judgementConfidence).toBe('high');
+    expect(shaped.judgementScope).toBe('单库');
+  });
+});
