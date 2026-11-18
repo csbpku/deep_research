@@ -7,21 +7,26 @@ import { STALENESS_THRESHOLDS } from './search/staleness-policy';
  * lists one row per article, and a badge that says 5 while the page shows 1
  * row would make the user distrust both.
  *
- * `judgementOverdue` is a subset of `judgementDue`: an expired judgement is
- * already waiting, but one left untouched for months deserves its own number.
+ * The `*Overdue` fields are subsets of their parent counts: they answer
+ * "what has been waiting too long", not "what is waiting".
  */
 export interface ReviewQueueCounts {
   judgementDue: number;
   judgementOverdue: number;
   learningReview: number;
+  learningStale: number;
   total: number;
 }
+
+/** A weak self-check left alone this long is no longer a fresh reminder. */
+export const LEARNING_REVIEW_STALE_DAYS = STALENESS_THRESHOLDS.aged;
 
 type ReviewQueueDb = Pick<PrismaClient, 'research' | 'learningSelfCheck'>;
 
 export async function getReviewQueueCounts(db: ReviewQueueDb, userId: string, now = new Date()): Promise<ReviewQueueCounts> {
   const abandonedBefore = new Date(now.getTime() - STALENESS_THRESHOLDS.abandoned * 86_400_000);
-  const [judgementDue, judgementOverdue, learningArticles] = await Promise.all([
+  const learningStaleBefore = new Date(now.getTime() - LEARNING_REVIEW_STALE_DAYS * 86_400_000);
+  const [judgementDue, judgementOverdue, weakChecks] = await Promise.all([
     db.research.count({
       where: {
         authorId: userId,
@@ -40,16 +45,20 @@ export async function getReviewQueueCounts(db: ReviewQueueDb, userId: string, no
         judgementReviewAt: { lte: abandonedBefore },
       },
     }),
-    db.learningSelfCheck.findMany({
+    db.learningSelfCheck.groupBy({
+      by: ['researchId'],
       where: { userId, rating: { in: ['unsure', 'missed'] } },
-      distinct: ['researchId'],
-      select: { researchId: true },
+      _min: { updatedAt: true },
     }),
   ]);
+  const learningStale = weakChecks.filter(
+    (check) => (check._min.updatedAt?.getTime() ?? now.getTime()) <= learningStaleBefore.getTime(),
+  ).length;
   return {
     judgementDue,
     judgementOverdue,
-    learningReview: learningArticles.length,
-    total: judgementDue + learningArticles.length,
+    learningReview: weakChecks.length,
+    learningStale,
+    total: judgementDue + weakChecks.length,
   };
 }

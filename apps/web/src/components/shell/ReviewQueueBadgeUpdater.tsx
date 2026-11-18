@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 interface Counts {
   total: number;
   judgementOverdue?: number;
+  learningStale?: number;
 }
 
 /** Keeps the static shell badge in sync without forcing a full RSC refresh.
@@ -15,6 +16,7 @@ interface Counts {
 export function ReviewQueueBadgeUpdater({ initial }: { initial: number }) {
   const [count, setCount] = useState(initial);
   const [overdue, setOverdue] = useState(0);
+  const [learningStale, setLearningStale] = useState(0);
   const { data } = useQuery<Counts>({
     queryKey: ['review-queue-count'],
     queryFn: async () => {
@@ -28,18 +30,22 @@ export function ReviewQueueBadgeUpdater({ initial }: { initial: number }) {
   useEffect(() => {
     if (typeof data?.total === 'number') setCount(data.total);
     if (typeof data?.judgementOverdue === 'number') setOverdue(data.judgementOverdue);
-  }, [data?.total, data?.judgementOverdue]);
+    if (typeof data?.learningStale === 'number') setLearningStale(data.learningStale);
+  }, [data?.total, data?.judgementOverdue, data?.learningStale]);
 
   useEffect(() => {
     document.querySelectorAll('[data-review-queue-badge]').forEach(node => {
       node.textContent = count > 99 ? '99+' : String(count);
-      node.setAttribute('aria-label', overdue > 0
-        ? `待处理：${count} 项，其中 ${overdue} 条判断长期未复核`
+      const hints: string[] = [];
+      if (overdue > 0) hints.push(`${overdue} 条判断长期未复核`);
+      if (learningStale > 0) hints.push(`${learningStale} 篇学习长期未复习`);
+      node.setAttribute('aria-label', hints.length > 0
+        ? `待处理：${count} 项，其中 ${hints.join('、')}`
         : `待处理：${count} 项待处理`);
-      if (overdue > 0) node.setAttribute('title', `${overdue} 条判断长期未复核`);
+      if (hints.length > 0) node.setAttribute('title', hints.join('、'));
       else node.removeAttribute('title');
     });
-  }, [count, overdue]);
+  }, [count, overdue, learningStale]);
 
   return null;
 }
