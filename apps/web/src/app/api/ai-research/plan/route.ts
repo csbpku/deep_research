@@ -82,6 +82,7 @@ function defaultQuestionsToAnswer(objective: ResearchObjective, comparisonOnly =
     return [
       '核心概念、工作机制和必要前置知识是什么？',
       '怎样用最小实践验证理解，官方资料推荐的路径是什么？',
+      '什么情况下不应该使用它？有哪些反例、失败案例或不适用场景？',
       '常见误区、限制和失败信号有哪些？',
     ];
   }
@@ -170,6 +171,7 @@ function buildPlanSteps(objective: ResearchObjective, question: string, dimensio
       steps: [
         { title: '核心概念与术语', detail: '梳理关键名词与适用边界' },
         { title: '入门示例与最小实践', detail: '可复制的最小可运行例子' },
+        { title: '反例与不适用场景', detail: '专门查找失败案例、禁用条件与替代方案' },
         { title: '深入阅读清单', detail: '官方文档与权威案例链接' },
         { title: '常见误区', detail: '总结上手期常见坑' },
       ],

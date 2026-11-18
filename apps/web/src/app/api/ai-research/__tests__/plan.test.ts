@@ -401,3 +401,15 @@ describe('comparison option inference keeps SQL identifiers intact', () => {
     expect(body.brief.comparisonOptions).toEqual(['pg_advisory_xact_lock', 'SELECT FOR UPDATE']);
   });
 });
+
+describe('learning plan covers counterexamples', () => {
+  it('asks when the technique should not be used', async () => {
+    const res = await planPost(
+      buildReq({ question: '我想系统学习 PostgreSQL 的 VACUUM' }) as never,
+      ctx(),
+    );
+    const body = await res.json();
+    expect(body.brief.questionsToAnswer.join('\n')).toContain('不应该使用');
+    expect(body.plan.steps.map((s: { title: string }) => s.title)).toContain('反例与不适用场景');
+  });
+});
