@@ -408,7 +408,7 @@ export default function ResearchDetailPage() {
                   background: data.background,
                   conclusion: data.conclusion,
                   risks: data.risks,
-                  body: data.body,
+                  body: learningBody,
                   tags: data.tags,
                   publishedAt: data.publishedAt,
                   reviewDisclosure: data.reviewDisclosure,
