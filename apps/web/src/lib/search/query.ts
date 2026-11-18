@@ -8,6 +8,7 @@
 //   - 全部结果中，已发布雷达只保留 radar 形态，避免与 summary 重复
 
 import type { Prisma } from '@prisma/client';
+import { SEARCH_STALENESS_BOOST, STALENESS_THRESHOLDS } from './staleness-policy';
 import { cleanResearchLabel } from '@/lib/research-markdown-cleanup';
 import { RADAR_PUBLIC_SCORE_SQL } from '@/lib/radar/score-validity';
 
@@ -309,15 +310,15 @@ export function buildSearchSql(args: BuildSearchArgs): {
                 SELECT 1 FROM researches r2
                 WHERE r2.id = matches."refId"::uuid
                   AND r2."judgementReviewAt" IS NOT NULL
-                  AND r2."judgementReviewAt" < now() - interval '180 days'
-              ) THEN 0.0
+                  AND r2."judgementReviewAt" < now() - interval '${STALENESS_THRESHOLDS.abandoned} days'
+              ) THEN ${SEARCH_STALENESS_BOOST.abandoned}
               WHEN EXISTS (
                 SELECT 1 FROM researches r2
                 WHERE r2.id = matches."refId"::uuid
                   AND r2."judgementReviewAt" IS NOT NULL
-                  AND r2."judgementReviewAt" < now() - interval '30 days'
-              ) THEN 1.0
-              ELSE 3.0
+                  AND r2."judgementReviewAt" < now() - interval '${STALENESS_THRESHOLDS.aged} days'
+              ) THEN ${SEARCH_STALENESS_BOOST.aged}
+              ELSE ${SEARCH_STALENESS_BOOST.fresh}
             END
           ELSE 0.0
         END AS boost

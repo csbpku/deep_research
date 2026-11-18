@@ -1,3 +1,5 @@
+import { STALENESS_THRESHOLDS } from './staleness-policy';
+
 /** Whole days a judgement has been past its review date; 0 when not due. */
 export function staleDays(reviewAt: Date | string | null | undefined, now: Date = new Date()): number {
   if (!reviewAt) return 0;
@@ -13,7 +15,7 @@ export type Staleness = 'fresh' | 'aged' | 'stale' | 'abandoned';
 export function staleness(reviewAt: Date | string | null | undefined, now: Date = new Date()): Staleness {
   const days = staleDays(reviewAt, now);
   if (days === 0) return 'fresh';
-  if (days < 30) return 'aged';
-  if (days < 180) return 'stale';
+  if (days < STALENESS_THRESHOLDS.aged) return 'aged';
+  if (days < STALENESS_THRESHOLDS.abandoned) return 'stale';
   return 'abandoned';
 }

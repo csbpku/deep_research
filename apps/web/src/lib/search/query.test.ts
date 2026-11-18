@@ -1,3 +1,4 @@
+import { SEARCH_STALENESS_BOOST, STALENESS_THRESHOLDS } from './staleness-policy';
 import { describe, expect, it } from 'vitest';
 
 import { buildSearchSql, shapeSearchRow } from './query';
@@ -30,6 +31,13 @@ describe('buildSearchSql judgement ranking', () => {
     expect(rowsSql).toContain("type = 'knowledge'");
     expect(rowsSql).toContain("r2.judgement IS NOT NULL");
     expect(rowsSql).toContain('ORDER BY (rank + boost) DESC');
+  });
+
+  it('derives the judgement boost from the shared staleness policy', () => {
+    const { rowsSql } = buildSearchSql({ q: 'pg', page: 1, perPage: 20 });
+    expect(rowsSql).toContain(`interval '${STALENESS_THRESHOLDS.aged} days'`);
+    expect(rowsSql).toContain(`interval '${STALENESS_THRESHOLDS.abandoned} days'`);
+    expect(rowsSql).toContain(`ELSE ${SEARCH_STALENESS_BOOST.fresh}`);
   });
 });
 
