@@ -18,6 +18,7 @@ interface QueueItem {
   id: string;
   title: string;
   judgementDue?: { due: boolean; daysOverdue: number };
+  judgementOverdue?: boolean;
   reviewDue?: { missed: number; unsure: number };
 }
 
@@ -105,7 +106,9 @@ export default function ReviewQueuePage() {
             <>
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--dr-color-warning)' }}>已过期</span>
               <span style={{ fontSize: 13, color: 'var(--dr-color-text-secondary)' }}>
-                {item.judgementDue ? `已过期 ${item.judgementDue.daysOverdue} 天` : '待复查'}
+                {item.judgementDue
+                  ? `已过期 ${item.judgementDue.daysOverdue} 天${item.judgementDue.daysOverdue >= 180 ? '（长期未复核）' : ''}`
+                  : '待复查'}
               </span>
             </>
           )}
