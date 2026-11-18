@@ -51,14 +51,47 @@ def is_valid_learning_path(text: str) -> bool:
     return positions == sorted(positions)
 
 
+_BUDGET_NOTE = re.compile(
+    r"\n*（这一节已压缩到字数上限[^）]*）\n*",
+)
+
+
+def strip_budget_notes(text: str) -> str:
+    """Remove truncation notes left by older budget passes.
+
+    The note was an apology for cutting a section; it made finished artifacts
+    look broken. New writers no longer emit it, and re-running the budget on an
+    old draft must clean it up rather than preserve it.
+    """
+    return _BUDGET_NOTE.sub("\n\n", text).strip() + "\n"
+
+
 def _trim_section(content: str, cap: int) -> str:
+    """Drop whole paragraphs instead of leaving a truncation scar.
+
+    A learning path is read as a finished artifact. An inline note such as
+    "this section was cut at the word limit" tells the reader the document is
+    broken; it also consumes the space the note is apologising for. Remove
+    trailing paragraphs until the section fits, and only cut inside a paragraph
+    when a single paragraph is itself over budget - then stop on a sentence
+    boundary.
+    """
     if len(content) <= cap:
         return content
+    paragraphs = re.split(r"(\n\s*\n)", content)
+    # Drop from the end, preserving the separators between kept paragraphs.
+    while paragraphs and len("".join(paragraphs)) > cap:
+        paragraphs.pop()
+        if paragraphs and paragraphs[-1].strip() == "":
+            paragraphs.pop()
+    kept = "".join(paragraphs).rstrip()
+    if kept:
+        return kept + "\n"
     cut = content[:cap]
-    boundary = max(cut.rfind("\n\n"), cut.rfind("\n"))
+    boundary = max(cut.rfind("。"), cut.rfind("！"), cut.rfind("？"), cut.rfind("\n"))
     if boundary > cap // 2:
-        cut = cut[:boundary]
-    return cut.rstrip() + "\n\n（这一节已压缩到字数上限；完整依据见参考来源。）\n\n"
+        cut = cut[: boundary + 1]
+    return cut.rstrip() + "\n"
 
 
 def _trim_concept_map(content: str) -> str:
@@ -75,7 +108,7 @@ def _trim_concept_map(content: str) -> str:
 
 def enforce_learning_budget(text: str) -> str:
     """Trim overlong sections, keeping the six-section order and all headings."""
-    text = normalize_learning_headings(text)
+    text = strip_budget_notes(normalize_learning_headings(text))
     if not is_valid_learning_path(text):
         return text
     parts = re.split(r"^(##\s+.+)$", text, flags=re.MULTILINE)

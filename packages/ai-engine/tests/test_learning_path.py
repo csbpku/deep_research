@@ -59,3 +59,23 @@ def test_heading_glued_to_table_is_normalized() -> None:
     assert "## 概念图\n\n| 核心概念" in normalized
     assert "| D | d | 依赖 B |" in normalized
     assert "## 概念图|" not in normalized
+
+
+def test_budget_never_leaves_a_truncation_note() -> None:
+    bounded = enforce_learning_budget(_doc())
+    assert "已压缩到字数上限" not in bounded
+    assert bounded.count("## ") == 6
+    assert bounded.rstrip().endswith("。")
+
+
+def test_a_single_oversized_paragraph_stops_on_a_sentence() -> None:
+    long_paragraph = "这是一个完整句子。" * 400
+    text = (
+        "## 90 秒回答\n短。\n\n## 概念图\n\n| 概念 | 含义 | 关系 |\n|---|---|---|\n"
+        "| A | a | 与 B 相连 |\n| B | b | 与 A 相连 |\n\n"
+        f"## 分层解释\n{long_paragraph}\n\n## 可运行示例\n短。\n\n"
+        "## 常见误区\n短。\n\n## 自检\n短。\n"
+    )
+    bounded = enforce_learning_budget(text)
+    assert "已压缩到字数上限" not in bounded
+    assert "这是一个完整句子。" in bounded
