@@ -686,7 +686,7 @@ export default function ResearchDetailPage() {
         {isKnowledge && (
           <>
             {data.judgement && (
-              <SectionCard title="判断" tone="default" icon={CheckCircle2}>
+              <SectionCard title="判断" tone="default" icon={CheckCircle2} id="knowledge-judgement">
                 <Typography component="p" sx={{ m: 0, fontSize: 'var(--dr-type-body)', lineHeight: 1.7 }}>{data.judgement}</Typography>
                 <div className={styles.sourceMeta}>
                   <span>置信度：{data.judgementConfidence ? JUDGEMENT_CONFIDENCE_LABELS[data.judgementConfidence] : '未标注'}</span>

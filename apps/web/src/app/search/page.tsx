@@ -324,6 +324,10 @@ function SearchContent() {
                             {row.judgementStale ? (
                               <p className={styles.stale}>
                                 判断已过期，仅供历史参考；使用前请先复核。
+                                {' '}
+                                <Link href={`${detailHref(row)}#knowledge-judgement`} className={styles.staleAction}>
+                                  去复查
+                                </Link>
                               </p>
                             ) : null}
                             <p className={styles.reason}>

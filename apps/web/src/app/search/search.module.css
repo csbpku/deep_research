@@ -41,3 +41,8 @@
   font-size: 12px;
   color: var(--dr-color-warning);
 }
+.staleAction {
+  color: var(--dr-color-warning);
+  text-decoration: underline;
+  white-space: nowrap;
+}
