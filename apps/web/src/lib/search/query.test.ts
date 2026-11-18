@@ -98,3 +98,14 @@ describe('shapeSearchRow judgement context', () => {
     expect(shaped.judgementScope).toBe('单库');
   });
 });
+
+describe('shapeSearchRow judgement staleness', () => {
+  it('marks an expired judgement as stale', () => {
+    const shaped = shapeSearchRow({
+      id: 'private:1', type: 'knowledge', refId: 'r1', title: 'Card',
+      snippet: 'j', highlighted: '', publishedAt: new Date(), rank: 1,
+      judgementMatch: 'j', judgementStale: true,
+    });
+    expect(shaped.judgementStale).toBe(true);
+  });
+});

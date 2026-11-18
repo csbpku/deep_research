@@ -42,6 +42,7 @@ interface SearchRow {
   bodyPreview?: string | null;
   judgementConfidence?: 'low' | 'medium' | 'high' | null;
   judgementScope?: string | null;
+  judgementStale?: boolean;
   matchReasons?: Array<'judgement' | 'title' | 'tag'>;
   matchReason?: 'judgement' | 'title' | 'tag' | null;
   publishedAt: string;
@@ -320,6 +321,11 @@ function SearchContent() {
                               <span className={styles.judgementLabel}>判断命中：</span>
                               <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
                             </p>
+                            {row.judgementStale ? (
+                              <p className={styles.stale}>
+                                判断已过期，仅供历史参考；使用前请先复核。
+                              </p>
+                            ) : null}
                             <p className={styles.reason}>
                               <span className={styles.judgementLabel}>判断可信度：</span>
                               {CONFIDENCE_LABELS[row.judgementConfidence ?? 'medium'] ?? '中'}
