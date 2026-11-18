@@ -30,10 +30,19 @@ export const POST = apiHandler(async (request: NextRequest) => {
   }
   const row = await prisma.learningSelfCheck.upsert({
     where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
-    create: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey, rating: parsed.rating },
-    update: { rating: parsed.rating },
+    create: {
+      userId: user.id,
+      researchId: parsed.researchId,
+      questionKey: parsed.questionKey,
+      rating: parsed.rating,
+      ...(parsed.rating === 'got_it' ? {} : { firstMissedAt: new Date() }),
+    },
+    update: {
+      rating: parsed.rating,
+      ...(parsed.rating === 'got_it' ? { firstMissedAt: null } : {}),
+    },
   });
-  return NextResponse.json({ id: row.id, rating: row.rating, updatedAt: row.updatedAt });
+  return NextResponse.json({ id: row.id, rating: row.rating, updatedAt: row.updatedAt, firstMissedAt: row.firstMissedAt });
 });
 
 export const GET = apiHandler(async (request: NextRequest) => {

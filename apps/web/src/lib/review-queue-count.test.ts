@@ -5,8 +5,9 @@ describe('review queue count', () => {
   it('counts articles, and separates items waiting too long', async () => {
     const count = vi.fn().mockResolvedValueOnce(4).mockResolvedValueOnce(1);
     const groupBy = vi.fn().mockResolvedValue([
-      { researchId: 'a', _min: { updatedAt: new Date('2026-11-01T00:00:00Z') } },
-      { researchId: 'b', _min: { updatedAt: new Date('2026-10-01T00:00:00Z') } },
+      // Re-rating refreshed updatedAt, but firstMissedAt still says 50 days.
+      { researchId: 'a', _min: { firstMissedAt: new Date('2026-09-28T00:00:00Z'), updatedAt: new Date('2026-11-16T00:00:00Z') } },
+      { researchId: 'b', _min: { firstMissedAt: new Date('2026-11-10T00:00:00Z'), updatedAt: new Date('2026-11-10T00:00:00Z') } },
     ]);
     const db = { research: { count }, learningSelfCheck: { groupBy } } as never;
 
@@ -23,7 +24,7 @@ describe('review queue count', () => {
     expect(groupBy).toHaveBeenCalledWith({
       by: ['researchId'],
       where: { userId: 'user-1', rating: { in: ['unsure', 'missed'] } },
-      _min: { updatedAt: true },
+      _min: { firstMissedAt: true, updatedAt: true },
     });
   });
 });

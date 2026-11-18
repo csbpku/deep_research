@@ -46,11 +46,11 @@ export async function getReviewQueueCounts(db: ReviewQueueDb, userId: string, no
     db.learningSelfCheck.groupBy({
       by: ['researchId'],
       where: { userId, rating: { in: ['unsure', 'missed'] } },
-      _min: { updatedAt: true },
+      _min: { firstMissedAt: true, updatedAt: true },
     }),
   ]);
   const learningStale = weakChecks.filter(
-    (check) => (check._min.updatedAt?.getTime() ?? now.getTime()) <= learningStaleBefore.getTime(),
+    (check) => ((check._min.firstMissedAt ?? check._min.updatedAt)?.getTime() ?? now.getTime()) <= learningStaleBefore.getTime(),
   ).length;
   return {
     judgementDue,

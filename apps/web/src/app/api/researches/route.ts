@@ -161,13 +161,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       by: ['researchId', 'rating'],
       where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
       _count: { _all: true },
-      _min: { updatedAt: true },
+      _min: { firstMissedAt: true, updatedAt: true },
     });
     const stats = new Map<string, { rating: string; updatedAt: Date }[]>();
     for (const row of grouped) {
       const list = stats.get(row.researchId) ?? [];
       for (let index = 0; index < row._count._all; index++) {
-        list.push({ rating: row.rating, updatedAt: row._min.updatedAt ?? new Date(0) });
+        list.push({ rating: row.rating, updatedAt: row._min.firstMissedAt ?? row._min.updatedAt ?? new Date(0) });
       }
       stats.set(row.researchId, list);
     }
@@ -197,7 +197,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         author: { select: { id: true, name: true, email: true } },
         learningSelfChecks: {
           where: { userId: u.id, rating: { in: ['unsure', 'missed'] } },
-          select: { rating: true, updatedAt: true },
+          select: { rating: true, updatedAt: true, firstMissedAt: true },
         },
       },
     });
@@ -246,8 +246,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
       ...(needsReviewQuery ? (() => {
-        const checks = (item as typeof item & { learningSelfChecks: { rating: string; updatedAt: Date }[] }).learningSelfChecks;
-        const oldest = checks.reduce<Date | null>((acc, check) => (!acc || check.updatedAt < acc ? check.updatedAt : acc), null);
+        const checks = (item as { learningSelfChecks?: { rating: string; updatedAt: Date; firstMissedAt: Date | null }[] }).learningSelfChecks ?? [];
+        const oldest = checks.reduce<Date | null>((acc, check) => { const at = check.firstMissedAt ?? check.updatedAt; return !acc || at < acc ? at : acc; }, null);
         return {
           reviewDue: {
             missed: checks.filter(check => check.rating === 'missed').length,
