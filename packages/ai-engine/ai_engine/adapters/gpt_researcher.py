@@ -2208,6 +2208,35 @@ def _must_answer_questions(context: str | None) -> list[str]:
     return questions
 
 
+def _install_standard_intent_questions(
+    conductor: Any,
+    topic: str,
+    context: str | None = None,
+) -> int:
+    """Use the must-answer questions as the standard path's first sub-queries.
+
+    The deep path has ``generate_search_queries``; the standard path plans its
+    sub-queries on the conductor. Hook that planner once so a brief learning
+    task searches its questions instead of only the topic.
+    """
+    questions = _must_answer_questions(context)[: _INTENT_QUESTION_LIMIT]
+    if not questions:
+        return 0
+    original = conductor.plan_research
+    used = False
+
+    async def first_plan(query: Any, query_domains: Any = None) -> list[str]:
+        nonlocal used
+        if not used:
+            used = True
+            return [f"{topic} {question}" for question in questions]
+        result = await original(query, query_domains)
+        return list(result)
+
+    conductor.plan_research = first_plan
+    return len(questions)
+
+
 def _install_intent_question_queries(
     deep_researcher: Any,
     topic: str,
@@ -4648,6 +4677,12 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     log_handler=step_capture,
                     verbose=False,
                 )
+                if not is_deep:
+                    _install_standard_intent_questions(
+                        candidate.research_conductor,
+                        job.request.topic,
+                        job.request.context,
+                    )
                 if is_deep and getattr(candidate, "deep_researcher", None) is not None:
                     # The vendor constructor uses ``visited_urls or set()``;
                     # give the recursive branches a truthy shared set so the

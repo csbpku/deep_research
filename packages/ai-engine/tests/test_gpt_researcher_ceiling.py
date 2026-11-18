@@ -358,3 +358,20 @@ def test_intent_question_lanes_become_the_first_query_pass() -> None:
     assert _install_intent_question_queries(deep, "VACUUM", "必须回答的问题：\n- 什么情况下不该用？\n") == 1
     lanes = asyncio.run(deep.generate_search_queries("ignored", 3))
     assert lanes[0]["query"] == "VACUUM 什么情况下不该用？"
+
+
+def test_standard_path_uses_the_questions_as_first_sub_queries() -> None:
+    import asyncio
+
+    from ai_engine.adapters.gpt_researcher import _install_standard_intent_questions
+
+    class Conductor:
+        async def plan_research(self, query, query_domains=None):
+            return ["vendor query"]
+
+    conductor = Conductor()
+    n = _install_standard_intent_questions(
+        conductor, "VACUUM", "必须回答的问题：\n- 什么情况下不该用？\n"
+    )
+    assert n == 1
+    assert asyncio.run(conductor.plan_research("ignored")) == ["VACUUM 什么情况下不该用？"]
