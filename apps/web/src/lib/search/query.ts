@@ -310,13 +310,13 @@ export function buildSearchSql(args: BuildSearchArgs): {
                 WHERE r2.id = matches."refId"::uuid
                   AND r2."judgementReviewAt" IS NOT NULL
                   AND r2."judgementReviewAt" < now() - interval '180 days'
-              ) THEN 2.0
+              ) THEN 0.0
               WHEN EXISTS (
                 SELECT 1 FROM researches r2
                 WHERE r2.id = matches."refId"::uuid
                   AND r2."judgementReviewAt" IS NOT NULL
                   AND r2."judgementReviewAt" < now() - interval '30 days'
-              ) THEN 2.6
+              ) THEN 1.0
               ELSE 3.0
             END
           ELSE 0.0
