@@ -297,22 +297,35 @@ function SearchContent() {
                             {row.title}
                           </Link>
                         </h2>
-                        {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
-                            并在返回前转义来源文本，只保留高亮标签。 */}
-                        {row.matchReason === 'title' ? (
-                          <p className={styles.snippet}><span className={styles.judgementLabel}>标题命中：</span>标题包含「{submittedQ}」，正文摘录如下。</p>
-                        ) : row.matchReason === 'tag' ? (
-                          <p className={styles.snippet}><span className={styles.judgementLabel}>标签命中：</span>标签包含「{submittedQ}」，正文摘录如下。</p>
-                        ) : row.matchReason === 'judgement' && row.judgementMatch ? (
+                        {/* 先解释为什么命中，再给出高亮片段；正文命中是默认情况。 */}
+                        {row.matchReason === 'judgement' && row.judgementMatch ? (
                           <p className={styles.snippet}>
                             <span className={styles.judgementLabel}>判断命中：</span>
                             <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
                           </p>
                         ) : (
-                          <p
-                            className={styles.snippet}
-                            dangerouslySetInnerHTML={{ __html: row.highlighted }}
-                          />
+                          <>
+                            {row.matchReason === 'title' ? (
+                              <p className={styles.reason}>
+                                <span className={styles.judgementLabel}>标题命中：</span>
+                                标题包含「{submittedQ}」
+                              </p>
+                            ) : row.matchReason === 'tag' ? (
+                              <p className={styles.reason}>
+                                <span className={styles.judgementLabel}>标签命中：</span>
+                                标签包含「{submittedQ}」
+                              </p>
+                            ) : row.highlighted.includes('<mark>') ? (
+                              <p className={styles.reason}>
+                                <span className={styles.judgementLabel}>正文命中：</span>
+                                摘录包含「{submittedQ}」
+                              </p>
+                            ) : null}
+                            <p
+                              className={styles.snippet}
+                              dangerouslySetInnerHTML={{ __html: row.highlighted }}
+                            />
+                          </>
                         )}
                         <time className={styles.date} dateTime={row.publishedAt}>
                           {new Date(row.publishedAt).toLocaleString('zh-CN')}
