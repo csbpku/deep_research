@@ -391,3 +391,35 @@ describe('search highlight sanitization', () => {
     );
   });
 });
+
+describe('shapeSearchRow match reason', () => {
+  it('marks a knowledge row as a judgement match when the API supplies one', () => {
+    const shaped = shapeSearchRow({
+      id: 'private:1',
+      type: 'knowledge',
+      refId: 'r1',
+      title: 'Card',
+      snippet: 's',
+      highlighted: '',
+      judgementMatch: ' 跨仓库查调用关系时应先用 GitNexus 建索引。 ',
+      publishedAt: new Date(),
+      rank: 1,
+    });
+    expect(shaped.matchReason).toBe('judgement');
+    expect(shaped.judgementMatch).toBe('跨仓库查调用关系时应先用 GitNexus 建索引。');
+  });
+
+  it('leaves matchReason null when the row matched only its snippet', () => {
+    const shaped = shapeSearchRow({
+      id: 'private:1',
+      type: 'knowledge',
+      refId: 'r1',
+      title: 'Card',
+      snippet: 's',
+      highlighted: '',
+      publishedAt: new Date(),
+      rank: 1,
+    });
+    expect(shaped.matchReason).toBeNull();
+  });
+});

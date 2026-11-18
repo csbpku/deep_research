@@ -39,6 +39,7 @@ interface SearchRow {
   snippet: string;
   highlighted: string;
   judgementMatch?: string | null;
+  matchReason?: 'judgement' | null;
   publishedAt: string;
   rank: number;
   isPrivate: boolean;
@@ -298,7 +299,7 @@ function SearchContent() {
                         </h2>
                         {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
                             并在返回前转义来源文本，只保留高亮标签。 */}
-                        {row.type === 'knowledge' && row.judgementMatch ? (
+                        {row.matchReason === 'judgement' && row.judgementMatch ? (
                           <p className={styles.snippet}>
                             <span className={styles.judgementLabel}>判断命中：</span>
                             <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
