@@ -4690,8 +4690,14 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     verbose=False,
                 )
                 if not is_deep:
+                    conductor = getattr(candidate, "research_conductor", None)
+                    if conductor is None:
+                        from gpt_researcher.skills.researcher import ResearchConductor
+
+                        candidate.research_conductor = ResearchConductor(candidate)
+                        conductor = candidate.research_conductor
                     _install_standard_intent_questions(
-                        getattr(candidate, "research_conductor", None),
+                        conductor,
                         job.request.topic,
                         job.request.context,
                     )
