@@ -15,7 +15,7 @@ SECTION_CAPS = {
     "分层解释": 850,
     "可运行示例": 900,
     "常见误区": 380,
-    "自检": 300,
+    "自检": 550,
 }
 
 HEADINGS = tuple(SECTION_CAPS)
@@ -204,6 +204,55 @@ def _trim_section(content: str, cap: int) -> str:
     room = cap - len(fence) - 4
     kept_before = _cut_text(before, room) if before else ""
     return lead + (kept_before + "\n\n" if kept_before else "") + fence + "\n"
+
+
+_SELF_CHECK_ITEM = re.compile(r"(?m)^(\d+)\.\s+")
+
+
+def _trim_self_check(content: str, cap: int) -> str:
+    """Keep whole self-check items: half a question cannot be answered.
+
+    Character trimming used to stop inside item 2, leaving one usable question
+    and one fragment. Budget per item and drop only whole surplus items; state
+    the gap when fewer than three survive instead of pretending completeness.
+    """
+    starts = [match.start() for match in _SELF_CHECK_ITEM.finditer(content)]
+    if not starts:
+        return _trim_section(content, cap)
+    if len(starts) < 3:
+        # The writer started the list and stopped; there is nothing to trim, so
+        # state how many are missing instead of leaving a short list.
+        missing = "\n\n" + "\n\n".join(
+            f"{index}. 本轮未确认（自检题未生成）。" for index in range(len(starts) + 1, 4)
+        )
+        room = max(0, cap - len(missing) - 1)
+        base = content.rstrip()
+        if len(base) + len(missing) + 1 <= cap:
+            return base + missing + "\n"
+        # Not enough room for the stated gap: keep whole items and report only
+        # the questions that actually fit, rather than a fragment.
+        kept = content[: starts[0]].rstrip()
+        for start, end in zip(starts, starts[1:] + [len(content)]):
+            item = content[start:end].strip()
+            if len(kept) + len(item) + 2 > cap - len(missing):
+                break
+            kept += "\n\n" + item
+        return kept + missing + "\n"
+    lead = content[: starts[0]]
+    items = [content[start:end].strip() for start, end in zip(starts, starts[1:] + [len(content)])]
+    budget = max(80, (cap - len(lead)) // max(3, len(items)))
+    kept = []
+    for item in items[:3]:
+        if len(item) > budget:
+            cut = _cut_text(item, budget).rstrip()
+            if not cut.endswith(("。", "？", "！")):
+                cut += "。"
+            item = cut
+        kept.append(item)
+    text = lead + "\n\n".join(kept)
+    if len(kept) < 3:
+        text += f"\n\n{len(kept) + 1}. 本轮未确认（自检题未生成）。"
+    return text + "\n"
 
 
 def _trim_layered_section(content: str, cap: int) -> str:
@@ -543,6 +592,8 @@ def enforce_learning_budget(text: str) -> str:
         out.append(parts[index])
         if heading == "概念图":
             out.append(_trim_concept_map(body))
+        elif heading == "自检":
+            out.append(_trim_self_check(body, cap or 550))
         elif heading == "可运行示例":
             out.append(_trim_section(body, cap or 900) if cap else body)
         elif heading == "分层解释":

@@ -377,3 +377,14 @@ def test_an_example_cut_mid_statement_is_closed_at_the_last_statement() -> None:
     assert "SELECT 1;" in section
     assert "SELECT pid, datname," not in section
     assert "其余语句已省略" in section
+
+
+def test_self_check_does_not_end_mid_question() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
+        "## 自检\n" + LONG,
+        "## 自检\n\n1. 问题一？\n\n答案一。\n\n2. 问题二？\n\n答案二。\n\n3. 问题三？\n\n答案三。\n",
+    )
+    bounded = enforce_learning_budget(text)
+    section = bounded.split("## 自检")[1]
+    assert section.count("问题") >= 3
+    assert "3. 问题三？" in section
