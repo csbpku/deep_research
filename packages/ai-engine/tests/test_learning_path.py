@@ -480,3 +480,54 @@ def test_a_direct_usage_ban_is_accepted() -> None:
     line = next(line for line in out.splitlines() if line.startswith("- 什么时候不要用"))
     assert "本轮未确认" not in line
     assert "[S4]" in line
+
+def test_inline_answer_keeps_every_self_check_question():
+    from ai_engine.learning_path import enforce_learning_budget
+
+    body = """## 90 秒回答
+
+- 是什么：一个后台清理进程。[S1]
+- 什么时候用：表持续更新时。[S1]
+- 什么时候不要用：长事务阻塞视界时不要依赖它。[S1]
+
+## 概念图
+
+| 核心概念 | 机制或含义 | 关系 |
+|---|---|---|
+| 死元组 | 失效行版本 | 推动触发阈值 [S1] |
+| 视界 | 最早可见事务 | 阻止清理 [S1] |
+| 阈值 | 表规模比例 | 决定排队 [S1] |
+| 工作进程 | 并发清理 | 决定吞吐 [S1] |
+
+## 分层解释
+
+### 第一层
+内容一。[S1]
+
+### 第二层
+内容二。[S1]
+
+### 第三层
+内容三。[S1]
+
+## 可运行示例
+
+```sql
+SELECT 1;
+```
+
+预期输出：一行。
+
+## 常见误区
+
+- 不要在全库无原因执行 VACUUM FULL。[S1]
+
+## 自检
+
+1. 问题一？ 答案要点：答案一。
+2. 问题二？ 答案要点：答案二。
+3. 问题三？ 答案要点：答案三。
+"""
+    out = enforce_learning_budget(body)
+    assert "问题一？" in out and "问题二？" in out and "问题三？" in out
+    assert "缺少答案要点" not in out

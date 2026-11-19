@@ -209,7 +209,7 @@ def _trim_section(content: str, cap: int) -> str:
 _SELF_CHECK_ITEM = re.compile(r"(?m)^(\d+)\.\s+")
 
 
-_ANSWER_LINE = re.compile(r"(?m)^\s*(?:\*\*)?答案(?:要点)?[：:]")
+_ANSWER_LINE = re.compile(r"答案(?:要点)?[：:]")
 
 
 def _trim_self_check(content: str, cap: int) -> str:
