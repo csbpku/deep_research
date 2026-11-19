@@ -327,3 +327,12 @@ def test_an_uncited_condition_is_not_lifted() -> None:
     bounded = enforce_learning_budget(text)
     bullet = next(line for line in bounded.splitlines() if line.startswith("- 什么时候不要用"))
     assert "本轮未确认" in bullet
+
+
+def test_a_condition_without_a_negative_outcome_is_not_a_boundary() -> None:
+    text = _doc_with_third_bullet(
+        "autovacuum 在表内容变化足够多时更新统计信息，使规划器获得较新的数据分布。"
+    )
+    bounded = enforce_learning_budget(text)
+    bullet = next(line for line in bounded.splitlines() if line.startswith("- 什么时候不要用"))
+    assert "本轮未确认" in bullet

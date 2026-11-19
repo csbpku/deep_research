@@ -241,6 +241,9 @@ _BOUNDARY_CONDITION = re.compile(
     r"(?:阻止|阻塞|导致|造成)[^。；]{0,60}(?:无效|无法|不能|失败|回卷)"
 )
 _DIRECT_PROHIBITION = re.compile(r"不要|不应|不宜|避免|不建议|仅适合|只适合")
+# A condition ("when X") is only a boundary when it leads to a negative
+# outcome. "在表内容变化时更新统计" is normal operation, not an abstention.
+_NEGATIVE_OUTCOME = re.compile(r"无效|无法|不能|失败|回卷|不要|不应|不宜|避免|不建议|仅适合|只适合")
 
 
 def is_boundary_statement(claim: str) -> bool:
@@ -249,7 +252,7 @@ def is_boundary_statement(claim: str) -> bool:
         return False
     if _DIRECT_PROHIBITION.search(text):
         return True
-    return bool(_BOUNDARY_CONDITION.search(text))
+    return bool(_BOUNDARY_CONDITION.search(text) and _NEGATIVE_OUTCOME.search(text))
 
 
 def reconcile_answer_shape(text: str) -> str:
