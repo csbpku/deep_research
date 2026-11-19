@@ -453,3 +453,12 @@ def test_fill_survives_a_budget_pass_that_restores_the_gap() -> None:
     line = next(line for line in refilled.splitlines() if line.startswith("- 什么时候不要用"))
     assert "本轮未确认" not in line
     assert "[S2]" in line
+
+
+def test_a_benefit_is_not_an_abstention() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。")
+    sources = [
+        (2, "故障保护会在 vacuumfailsafeage 时触发，并完全绕过成本节流机制以避免停机。"),
+    ]
+    out = fill_answer_boundary_from_sources(text, sources)
+    assert "本轮未确认" in out
