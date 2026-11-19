@@ -271,3 +271,27 @@ def test_a_fence_glued_to_a_heading_is_separated() -> None:
     bounded = enforce_learning_budget(text)
     assert "## 可运行示例\n" in bounded
     assert bounded.count("```") % 2 == 0
+
+
+def _doc_with_third_bullet(third: str) -> str:
+    answer = (
+        "## 90 秒回答\n\n"
+        "- 是什么：VACUUM 回收死元组。\n"
+        "- 什么时候用：日常维护。\n"
+        f"- 什么时候不要用：{third}\n"
+    )
+    doc = _doc()
+    return doc.replace(doc[doc.index("## 90 秒回答"):doc.index("## 概念图")], answer)
+
+
+def test_a_limitation_is_not_accepted_as_a_boundary() -> None:
+    text = _doc_with_third_bullet("普通 VACUUM 通常不会立即把磁盘空间归还操作系统。")
+    bounded = enforce_learning_budget(text)
+    assert "本轮未确认（证据缺口）" in bounded
+    assert "不会立即把磁盘空间归还" not in bounded.split("## 概念图")[0]
+
+
+def test_a_conditional_boundary_survives() -> None:
+    text = _doc_with_third_bullet("当长事务阻塞 xmin 视界时，不要继续提高 autovacuum 力度。")
+    bounded = enforce_learning_budget(text)
+    assert "当长事务阻塞 xmin 视界时" in bounded

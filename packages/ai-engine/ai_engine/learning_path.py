@@ -233,6 +233,20 @@ _STRONG_COUNTEREXAMPLE = re.compile(r"不要|不应|不适合|不宜|避免|禁�
 # A usable "when not to use" either forbids an action or marks a case as
 # unsuitable. "学习 X 前应先理解 Y" is a prerequisite, not a boundary.
 _PROHIBITION = re.compile(r"不要|不应|不适合|不宜|避免|禁用|不建议|不能|无法|仅适合|只适合")
+# A boundary answers "when should I not use it", so it needs a condition
+# ("when X") or a direct prohibition ("do not do Y"). A bare limitation
+# ("VACUUM does not return space to the OS") is a trade-off, not a boundary.
+_BOUNDARY_CONDITION = re.compile(r"当|如果|若|一旦|在[^，。]{0,30}(?:时|情况下)|只在")
+_DIRECT_PROHIBITION = re.compile(r"不要|不应|不宜|避免|禁用|不建议|仅适合|只适合")
+
+
+def is_boundary_statement(claim: str) -> bool:
+    text = claim.strip()
+    if not text or any(marker in text for marker in _GAP_MARKERS):
+        return False
+    if _DIRECT_PROHIBITION.search(text):
+        return True
+    return bool(_BOUNDARY_CONDITION.search(text) and _PROHIBITION.search(text))
 
 
 def reconcile_answer_shape(text: str) -> str:
@@ -260,10 +274,7 @@ def reconcile_answer_shape(text: str) -> str:
             index
             for index, line in enumerate(lines)
             if line.startswith("- 什么时候不要用：")
-            and (
-                any(marker in line for marker in _GAP_MARKERS)
-                or not _PROHIBITION.search(line.split("：", 1)[-1])
-            )
+            and not is_boundary_statement(line.split("：", 1)[-1])
         ),
         None,
     )
@@ -321,6 +332,36 @@ def reconcile_answer_shape(text: str) -> str:
     return "".join(parts)
 
 
+def enforce_answer_boundary(text: str) -> str:
+    """Make the third opening bullet an actual abstention, or a stated gap.
+
+    The writer tends to reuse the nearest trade-off ("VACUUM does not return
+    space to the OS") as the "when not to use it" answer. That is a limitation,
+    not a condition for abstaining, so it reads like an answer while giving the
+    reader nothing actionable. Keep a real boundary, otherwise say so.
+    """
+    parts = re.split(r"^(##[ \t]+90 秒回答)[ \t]*$", text, flags=re.MULTILINE)
+    if len(parts) < 3:
+        return text
+    body = parts[2]
+    end = body.find("\n## ")
+    section, rest = (body, "") if end == -1 else (body[:end], body[end:])
+    lines = section.splitlines()
+    changed = False
+    for index, line in enumerate(lines):
+        if not line.startswith("- 什么时候不要用："):
+            continue
+        claim = line.split("：", 1)[-1]
+        if is_boundary_statement(claim):
+            continue
+        lines[index] = "- 什么时候不要用：本轮未确认（证据缺口）。"
+        changed = True
+    if not changed:
+        return text
+    parts[2] = "\n".join(lines) + ("\n\n" + rest.lstrip("\n") if rest else "\n")
+    return "".join(parts)
+
+
 def _trim_concept_map(content: str) -> str:
     """Never cut a concept table by character count: that leaves 2 concepts."""
     lines = content.splitlines()
@@ -372,4 +413,5 @@ def enforce_learning_budget(text: str) -> str:
             break
         chunks[index + 1] = trimmed
         bounded = "".join(chunks)
-    return reconcile_answer_shape(enforce_answer_shape(bounded))
+    bounded = reconcile_answer_shape(enforce_answer_shape(bounded))
+    return enforce_answer_boundary(bounded)
