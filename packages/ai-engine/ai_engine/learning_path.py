@@ -13,7 +13,7 @@ SECTION_CAPS = {
     "90 秒回答": 360,
     "概念图": 450,
     "分层解释": 850,
-    "可运行示例": 550,
+    "可运行示例": 900,
     "常见误区": 380,
     "自检": 300,
 }
@@ -23,6 +23,38 @@ _EMPTY_LAYER_GAP = "本轮未确认（这一层还没有足够证据展开）。
 
 
 _EXPECTATION = re.compile(r"预期(?:输出|结果)|expected output|should print", re.IGNORECASE)
+
+
+def repair_truncated_example(text: str) -> str:
+    """End an example on a complete statement, even when the writer cut it.
+
+    The writer sometimes stops mid-query (``SELECT pid, datname,``) and closes
+    the fence. The section fits the budget, so no trim runs, and the reader gets
+    a script that fails at the prompt. Drop the incomplete tail and say so.
+    """
+    parts = re.split(r"^(##[ \t]+可运行示例)[ \t]*$", text, flags=re.MULTILINE)
+    if len(parts) < 3:
+        return text
+    body = parts[2]
+    end = body.find("\n## ")
+    section, rest = (body, "") if end == -1 else (body[:end], body[end:])
+    match = re.search(r"```([^\n]*)\n([\s\S]*?)```", section)
+    if match is None or "sql" not in match.group(1).lower():
+        return text
+    code = match.group(2).rstrip()
+    lines = [line for line in code.splitlines()]
+    if not lines or lines[-1].strip().endswith(";") or lines[-1].strip().startswith("--"):
+        return text
+    boundary = None
+    for index, line in enumerate(lines):
+        if line.strip().endswith(";"):
+            boundary = index
+    if boundary is None:
+        return text
+    kept = "\n".join(lines[: boundary + 1]) + "\n-- 其余语句已省略（原示例在语句中间被截断）"
+    section = section[: match.start(2)] + kept + "\n" + section[match.end(2):]
+    parts[2] = section + rest
+    return "".join(parts)
 
 
 def ensure_example_expectation(text: str) -> str:
@@ -168,17 +200,7 @@ def _trim_section(content: str, cap: int) -> str:
     fence = match.group(0)
     before = content[: match.start()].rstrip()
     if len(fence) + 8 >= cap:
-        lines = fence.splitlines()
-        header, body, _ = lines[0], lines[1:-1], lines[-1]
-        room = max(1, cap - len(header) - 8)
-        kept_lines = []
-        used = 0
-        for line in body:
-            if used + len(line) + 1 > room:
-                break
-            kept_lines.append(line)
-            used += len(line) + 1
-        return lead + f"{header}\n" + "\n".join(kept_lines or body[:1]) + "\n```\n"
+        return lead + _cut_fence_at_statement(fence, cap)
     room = cap - len(fence) - 4
     kept_before = _cut_text(before, room) if before else ""
     return lead + (kept_before + "\n\n" if kept_before else "") + fence + "\n"
@@ -213,6 +235,34 @@ def _trim_layered_section(content: str, cap: int) -> str:
         rendered.append(f"{heading.strip()}\n\n{text}\n")
     text = "\n\n" + "\n".join(rendered)
     return text if len(text) <= cap else text[:cap].rstrip() + "\n"
+
+
+def _cut_fence_at_statement(fence: str, cap: int) -> str:
+    """Shorten a code block without leaving a half-written statement.
+
+    A SQL example cut mid-query looks runnable but fails at the prompt. Keep the
+    largest prefix that ends on a statement boundary and say what was elided.
+    """
+    lines = fence.splitlines()
+    header, body = lines[0], lines[1:-1]
+    room = max(1, cap - len(header) - 40)
+    kept: list[str] = []
+    used = 0
+    for line in body:
+        if used + len(line) + 1 > room:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    # Back up to the last completed statement, unless nothing is complete yet.
+    boundary = None
+    for index, line in enumerate(kept):
+        if line.strip().endswith(";"):
+            boundary = index
+    if boundary is not None:
+        kept = kept[: boundary + 1] + ["-- 其余语句已省略"]
+    elif kept:
+        kept = kept + ["-- 示例因篇幅截断"]
+    return f"{header}\n" + "\n".join(kept) + "\n```\n"
 
 
 def _drop_trailing_paragraphs(content: str, cap: int) -> str:
@@ -493,6 +543,8 @@ def enforce_learning_budget(text: str) -> str:
         out.append(parts[index])
         if heading == "概念图":
             out.append(_trim_concept_map(body))
+        elif heading == "可运行示例":
+            out.append(_trim_section(body, cap or 900) if cap else body)
         elif heading == "分层解释":
             out.append(_trim_layered_section(body, cap or 850))
         else:
@@ -505,7 +557,7 @@ def enforce_learning_budget(text: str) -> str:
         candidates = [
             (len(chunks[index + 1]), index)
             for index in range(1, len(chunks), 2)
-            if chunks[index].strip().lstrip("#").strip() in {"分层解释", "可运行示例", "概念图", "常见误区"}
+            if chunks[index].strip().lstrip("#").strip() in {"分层解释", "概念图", "常见误区"}
         ]
         if not candidates:
             break
@@ -518,5 +570,5 @@ def enforce_learning_budget(text: str) -> str:
         chunks[index + 1] = trimmed
         bounded = "".join(chunks)
     bounded = reconcile_answer_shape(enforce_answer_shape(bounded))
-    bounded = ensure_example_expectation(bounded)
+    bounded = ensure_example_expectation(repair_truncated_example(bounded))
     return enforce_answer_boundary(bounded)

@@ -365,3 +365,15 @@ def test_an_example_with_an_expectation_is_untouched() -> None:
     )
     bounded = enforce_learning_budget(text)
     assert bounded.count("预期输出") == 1
+
+
+def test_an_example_cut_mid_statement_is_closed_at_the_last_statement() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
+        "## 可运行示例\n" + LONG,
+        "## 可运行示例\n```sql\nSELECT 1;\nSELECT pid, datname,\n```\n\n预期输出：两行。",
+    )
+    bounded = enforce_learning_budget(text)
+    section = bounded.split("## 可运行示例")[1].split("## 常见误区")[0]
+    assert "SELECT 1;" in section
+    assert "SELECT pid, datname," not in section
+    assert "其余语句已省略" in section
