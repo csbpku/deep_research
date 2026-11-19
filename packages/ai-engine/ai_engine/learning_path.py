@@ -395,8 +395,13 @@ _BOUNDARY_CONDITION = re.compile(
     r"当|如果|若|一旦|在[^，。]{0,30}(?:时|情况下)|只在|"
     r"(?:阻止|阻塞|导致|造成)[^。；]{0,60}(?:无效|无法|不能|失败|回卷)"
 )
-# "避免停机" is a benefit, not an abstention; only "avoid using X" is a ban.
-_DIRECT_PROHIBITION = re.compile(r"不要|不应|不宜|不建议|避免使用|避免依赖|仅适合|只适合")
+# A bare "don't" is usually tuning advice ("don't change the global default"),
+# not an abstention. Direct prohibitions must name the act of using the thing.
+_DIRECT_PROHIBITION = re.compile(
+    r"不要(?:使用|依赖|启用|采用|把[^。]{0,24}用于)|"
+    r"不应(?:使用|依赖|启用)|不宜(?:使用|依赖)|"
+    r"避免(?:使用|依赖)|仅适合|只适合"
+)
 # A condition ("when X") is only a boundary when it leads to a negative
 # outcome. "在表内容变化时更新统计" is normal operation, not an abstention.
 _NEGATIVE_OUTCOME = re.compile(r"无效|无法|不能|失败|回卷|不要|不应|不宜|不建议|仅适合|只适合")
@@ -568,6 +573,7 @@ def fill_answer_boundary_from_sources(
             if not is_boundary_statement(sentence):
                 continue
             claim = re.sub(r"^\s*答案要点[:：]\s*", "", sentence)
+            claim = re.sub(r"^[\s|\-*·\d.、]+", "", claim)
             claim = claim.strip("| ，；。 ")
             if len(claim) > 140:
                 cut = max(claim.rfind("，", 0, 120), claim.rfind("；", 0, 120))

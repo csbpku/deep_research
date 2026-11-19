@@ -462,3 +462,21 @@ def test_a_benefit_is_not_an_abstention() -> None:
     ]
     out = fill_answer_boundary_from_sources(text, sources)
     assert "本轮未确认" in out
+
+
+def test_tuning_advice_is_not_an_abstention() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。")
+    sources = [
+        (3, "- 优先选择按表设置来处理少数高流量表，而不要更改服务器范围内的默认设置。"),
+    ]
+    out = fill_answer_boundary_from_sources(text, sources)
+    assert "本轮未确认" in out
+
+
+def test_a_direct_usage_ban_is_accepted() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。")
+    sources = [(4, "不要在长事务未结束时依赖 autovacuum 回收空间。")]
+    out = fill_answer_boundary_from_sources(text, sources)
+    line = next(line for line in out.splitlines() if line.startswith("- 什么时候不要用"))
+    assert "本轮未确认" not in line
+    assert "[S4]" in line
