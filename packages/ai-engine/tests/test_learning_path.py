@@ -264,3 +264,10 @@ def test_an_unclosed_fence_is_closed_before_the_next_heading() -> None:
     bounded = enforce_learning_budget(text)
     assert bounded.count("```") % 2 == 0
     assert "## 常见误区" in bounded
+
+
+def test_a_fence_glued_to_a_heading_is_separated() -> None:
+    text = _doc().replace("## 可运行示例\n", "## 可运行示例```sql\n")
+    bounded = enforce_learning_budget(text)
+    assert "## 可运行示例\n" in bounded
+    assert bounded.count("```") % 2 == 0

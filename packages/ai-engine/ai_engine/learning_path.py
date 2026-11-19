@@ -29,8 +29,16 @@ def normalize_learning_headings(text: str) -> str:
     heading, the table is invisible to the parser, and the budget pass truncates
     the section as prose.
     """
+    text = re.sub(
+        r"^(##\s+[^\n|`]+?)\s*(\|)",
+        r"\1\n\n\2",
+        text,
+        flags=re.MULTILINE,
+    )
+    # A fence glued to the heading ("## 可运行示例```bash") is not a heading
+    # either; separate it so the section boundary survives.
     return re.sub(
-        r"^(##\s+[^\n|]+?)\s*(\|)",
+        r"^(##\s+[^\n]+?)\s*(```)",
         r"\1\n\n\2",
         text,
         flags=re.MULTILINE,
@@ -123,10 +131,11 @@ def _trim_section(content: str, cap: int) -> str:
     """
     if len(content) <= cap:
         return content
+    lead = content[: len(content) - len(content.lstrip("\n"))]
     match = re.search(r"```[^\n]*\n[\s\S]*?```", content)
     if match is None:
         kept = _drop_trailing_paragraphs(content, cap)
-        return kept if kept else _cut_text(content, cap) + "\n"
+        return lead + (kept if kept else _cut_text(content, cap) + "\n")
     fence = match.group(0)
     before = content[: match.start()].rstrip()
     if len(fence) + 8 >= cap:
@@ -140,10 +149,10 @@ def _trim_section(content: str, cap: int) -> str:
                 break
             kept_lines.append(line)
             used += len(line) + 1
-        return f"{header}\n" + "\n".join(kept_lines or body[:1]) + "\n```\n"
+        return lead + f"{header}\n" + "\n".join(kept_lines or body[:1]) + "\n```\n"
     room = cap - len(fence) - 4
     kept_before = _cut_text(before, room) if before else ""
-    return (kept_before + "\n\n" if kept_before else "") + fence + "\n"
+    return lead + (kept_before + "\n\n" if kept_before else "") + fence + "\n"
 
 
 def _drop_trailing_paragraphs(content: str, cap: int) -> str:
@@ -358,6 +367,9 @@ def enforce_learning_budget(text: str) -> str:
         _, index = max(candidates)
         body = chunks[index + 1]
         keep = max(120, int(len(body) * 0.75))
-        chunks[index + 1] = _trim_section(body, keep)
+        trimmed = _trim_section(body, keep)
+        if len(trimmed) >= len(body) - 20:
+            break
+        chunks[index + 1] = trimmed
         bounded = "".join(chunks)
     return reconcile_answer_shape(enforce_answer_shape(bounded))
