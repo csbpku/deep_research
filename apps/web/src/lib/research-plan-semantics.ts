@@ -103,21 +103,21 @@ export function inferDecisionDimensions(
     /(?:不(?:需要|讨论|考虑|关注|比较|涉及|展开|延伸|扩展|涵盖|纳入)|无需|不要)(?!忽略|遗漏)[^。；;\n]*?(?=但是|但|不过|然而|同时|而且|并且|\bbut\b|\bhowever\b|[。；;\n]|$)/gu,
     (excluded) => { exclusions.push(excluded); return ''; },
   );
-  const inferred = DIMENSION_SIGNALS.filter(([, signal]) => signal.test(relevant)).map(([dimension]) => dimension);
+  const excludedDimensions = new Set(DIMENSION_SIGNALS
+    .filter(([, signal]) => exclusions.some((excluded) => signal.test(excluded)))
+    .map(([dimension]) => dimension));
+  const inferred = DIMENSION_SIGNALS.filter(([, signal]) => signal.test(relevant))
+    .map(([dimension]) => dimension)
+    .filter((dimension) => !excludedDimensions.has(dimension));
   if (inferred.length === 0) {
-    // A comparison with nothing but the two generic defaults is too coarse to
-    // scan; ask for the trade-off dimensions such a choice actually turns on.
-    return options.length >= 2
+    const base = options.length >= 2
       ? ['效果与适用范围', '安全与风险', '可运维性']
       : [...DEFAULT_RESEARCH_DECISION_DIMENSIONS];
+    return base.filter((dimension) => !excludedDimensions.has(dimension));
   }
-  if (options.length >= 2 && inferred.length < 3) {
+  if (options.length >= 2 && inferred.length < 3 && exclusions.length === 0) {
     const fallbacks = ['效果与适用范围', '安全与风险', '可运维性', '成本与资源'];
     return Array.from(new Set([...inferred, ...fallbacks])).slice(0, 3);
   }
   return inferred;
-  const excludedDimensions = new Set(DIMENSION_SIGNALS
-    .filter(([, signal]) => exclusions.some((excluded) => signal.test(excluded)))
-    .map(([dimension]) => dimension));
-  return DEFAULT_RESEARCH_DECISION_DIMENSIONS.filter((dimension) => !excludedDimensions.has(dimension));
 }
