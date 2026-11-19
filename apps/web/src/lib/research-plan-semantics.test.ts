@@ -26,4 +26,11 @@ describe('inferDecisionDimensions', () => {
       '可运维性',
     ]);
   });
+
+  it('never widens back into an excluded dimension', () => {
+    expect(inferDecisionDimensions('比较 A 和 B，不讨论安全风险', '', ['A', 'B'])).toEqual([
+      '效果与适用范围',
+      '可运维性',
+    ]);
+  });
 });
