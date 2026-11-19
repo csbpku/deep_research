@@ -121,6 +121,7 @@ function questionToBrief(
   topicId: string | undefined,
   partial: Partial<ResearchBrief> & { scope?: ResearchScope } = {},
 ): ResearchBrief {
+  const comparisonOptions = partial.comparisonOptions ?? inferComparisonOptions(question);
   return {
     objective,
     comparisonOnly: partial.comparisonOnly ?? false,
@@ -129,8 +130,8 @@ function questionToBrief(
     scope: partial.scope ?? ResearchScopeSchema.parse({}),
     constraints: partial.constraints ?? [],
     questionsToAnswer: partial.questionsToAnswer ?? defaultQuestionsToAnswer(objective, partial.comparisonOnly),
-    comparisonOptions: partial.comparisonOptions ?? inferComparisonOptions(question),
-    decisionDimensions: partial.decisionDimensions ?? (objective === 'decide' ? inferDecisionDimensions(question, partial.context, partial.comparisonOptions ?? []) : []),
+    comparisonOptions: partial.comparisonOptions ?? comparisonOptions,
+    decisionDimensions: partial.decisionDimensions ?? (objective === 'decide' ? inferDecisionDimensions(question, partial.context, comparisonOptions) : []),
     successCriteria: partial.successCriteria ?? defaultSuccessCriteria(objective, partial.comparisonOnly),
     sourcePolicy: partial.sourcePolicy ?? 'prefer_user_sources',
     contextRefs: partial.contextRefs ?? [],
