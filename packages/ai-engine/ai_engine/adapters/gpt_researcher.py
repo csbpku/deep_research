@@ -5100,6 +5100,10 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 compact=job.request.objective in {"learn", "investigate", "explore"},
             )
             report = _clean_report_output(report, sources)
+            if job.request.report_type == "comparison_matrix":
+                from ai_engine.comparison_matrix import dedupe_option_rows
+
+                report = dedupe_option_rows(report)
             report = await _ensure_complete_report(researcher, report, sources)
             # Preserve the distinction between a successful report writer and
             # a recovery synthesis in the durable receipt. Without this flag,
