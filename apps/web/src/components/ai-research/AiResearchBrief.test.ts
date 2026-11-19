@@ -258,6 +258,25 @@ function mountBrief(initialProps: BriefProps) {
       }
       const change = find(output); if (!change) throw new Error(`Field ${label} not found`); change({ target: { value } }); flush();
     },
+    removeDimension(label: string) {
+      function find(node: ReactNode): (() => void) | undefined {
+        if (Array.isArray(node)) { for (const child of node) { const found = find(child); if (found) return found; } return; }
+        if (!isValidElement<{ children?: ReactNode; label?: string; onDelete?: () => void }>(node)) return;
+        if (node.props.label === label && node.props.onDelete) return node.props.onDelete;
+        return find(node.props.children);
+      }
+      const remove = find(output); if (!remove) throw new Error(`Dimension ${label} not found`); remove(); flush();
+    },
+    addDimension(label: string, value: string) {
+      this.changeField(label, value);
+      function find(node: ReactNode): (() => void) | undefined {
+        if (Array.isArray(node)) { for (const child of node) { const found = find(child); if (found) return found; } return; }
+        if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node)) return;
+        if (node.props.children === '添加' && node.props.onClick) return node.props.onClick as () => void;
+        return find(node.props.children);
+      }
+      const add = find(output); if (!add) throw new Error('Add dimension button not found'); add(); flush();
+    },
     update(next: Partial<BriefProps>) { props = { ...props, ...next }; flush(); },
     suggestions() {
       const found = findSuggestions(output);
@@ -365,6 +384,30 @@ describe('AI research brief client request races', () => {
     await vi.advanceTimersByTimeAsync(0); brief.flush();
     brief.changeObjective('learn');
     expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ objective: 'learn', comparisonOptions: [], decisionDimensions: [] });
+  });
+
+  it('lets the reader drop a proposed comparison dimension', async () => {
+    const { brief, requests, ready } = setup();
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) {
+      const plan = planResponse('Key-value store comparison');
+      respond(request, request.url.endsWith('/plan') ? { ...plan, brief: { ...plan.brief, objective: 'decide', comparisonOptions: ['A', 'B'], decisionDimensions: ['成本', '性能'] } } : { items: [] });
+    }
+    await vi.advanceTimersByTimeAsync(0); brief.flush();
+    brief.removeDimension('性能');
+    expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ decisionDimensions: ['成本'] });
+  });
+
+  it('lets the reader add a comparison dimension', async () => {
+    const { brief, requests, ready } = setup();
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) {
+      const plan = planResponse('Key-value store comparison');
+      respond(request, request.url.endsWith('/plan') ? { ...plan, brief: { ...plan.brief, objective: 'decide', comparisonOptions: ['A', 'B'], decisionDimensions: ['成本'] } } : { items: [] });
+    }
+    await vi.advanceTimersByTimeAsync(0); brief.flush();
+    brief.addDimension('补充对比维度', '迁移成本');
+    expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ decisionDimensions: ['成本', '迁移成本'] });
   });
 
   it('keeps an explicitly edited question when switching to decision research', async () => {

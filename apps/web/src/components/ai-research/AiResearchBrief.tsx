@@ -172,6 +172,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
   const editedBriefRef = useRef<BriefValue | null>(initialBrief ?? null);
   const focusTouchedRef = useRef(!!initialBrief?.brief?.questionsToAnswer.length);
   const decisionDimensionsRef = useRef<string[]>(initialBrief?.objective === 'decide' ? initialBrief.brief?.decisionDimensions ?? [] : []);
+  const [dimensionDraft, setDimensionDraft] = useState<string[]>(decisionDimensionsRef.current);
+  const [dimensionInput, setDimensionInput] = useState('');
   const callbacksRef = useRef({ onBriefReady, onPlanningChange });
   callbacksRef.current = { onBriefReady, onPlanningChange };
   const contextSearchQuery = getPersonalContextSearchQuery(contextPanelOpen, contextSearch, trimmed);
@@ -252,7 +254,10 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
         const data = (await response.json()) as PlanResponse;
         if (cancelled) return;
         setState({ status: 'ready', plan: data });
-        if (!editedBriefRef.current && data.brief.objective === 'decide') decisionDimensionsRef.current = data.brief.decisionDimensions ?? [];
+        if (!editedBriefRef.current && data.brief.objective === 'decide') {
+          decisionDimensionsRef.current = data.brief.decisionDimensions ?? [];
+          setDimensionDraft(decisionDimensionsRef.current);
+        }
         const edited = editedBriefRef.current;
         if (edited?.brief?.question === trimmed) {
           callbacksRef.current.onPlanningChange?.(false);
@@ -376,6 +381,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
     nextFocusText = focusText,
     nextComparisonText = comparisonText,
     nextComparisonOnly = comparisonOnly,
+    nextDecisionDimensions = decisionDimensionsRef.current,
     nextTimeRange = timeRange,
     nextScopeFrom = scopeFrom,
     nextScopeTo = scopeTo,
@@ -386,6 +392,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
     nextFocusText?: string;
     nextComparisonText?: string;
     nextComparisonOnly?: boolean;
+    nextDecisionDimensions?: string[];
     nextTimeRange?: ResearchTimeRange['preset'];
     nextScopeFrom?: string;
     nextScopeTo?: string;
@@ -433,7 +440,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
       .slice(0, 20);
     const explicitDecisionDimensions = inferDecisionDimensions(trimmed, nextFocusText, comparisonOptions);
     const decisionDimensions = nextObjective === 'decide'
-      ? decisionDimensionsRef.current.length ? decisionDimensionsRef.current : explicitDecisionDimensions
+      ? nextDecisionDimensions.length ? nextDecisionDimensions : explicitDecisionDimensions
       : [];
     const validScope = nextTimeRange !== 'custom'
       || (!!nextScopeFrom && !!nextScopeTo && nextScopeFrom <= nextScopeTo);
@@ -645,6 +652,55 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
                     label={<Box component="span"><Box component="span" sx={{ fontWeight: 500 }}>只对比，不推荐</Box><Typography component="span" variant="metadata" sx={{ display: 'block', color: 'text.secondary' }}>输出差异矩阵和条件性结论，不给唯一选择</Typography></Box>}
                     sx={{ m: 0, alignItems: 'flex-start' }}
                   />
+                </Box>
+              ) : null}
+
+              {objective === 'decide' ? (
+                <Box component="section" aria-label="对比维度" sx={{ display: 'grid', gap: 1 }}>
+                  <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>对比维度</Typography>
+                  <Typography component="span" variant="metadata" sx={{ color: 'text.secondary', lineHeight: 1.6 }}>
+                    矩阵的列。默认由 AI 提议，可以删掉不关心的，或补一个自己的。
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+                    {dimensionDraft.map((dimension) => (
+                      <Chip
+                        key={dimension}
+                        label={dimension}
+                        onDelete={() => {
+                          const next = dimensionDraft.filter((item) => item !== dimension);
+                          setDimensionDraft(next);
+                          decisionDimensionsRef.current = next;
+                          publishPlan({ nextDecisionDimensions: next });
+                        }}
+                        size="small"
+                      />
+                    ))}
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <TextField
+                      size="small"
+                      value={dimensionInput}
+                      onChange={(event) => setDimensionInput(event.target.value)}
+                      placeholder="补充一个维度，例如：迁移成本"
+                      aria-label="补充对比维度"
+                      slotProps={{ htmlInput: { 'aria-label': '补充对比维度' } }}
+                      sx={{ flex: 1 }}
+                    />
+                    <Button
+                      type="button"
+                      size="small"
+                      disabled={!dimensionInput.trim() || dimensionDraft.includes(dimensionInput.trim())}
+                      onClick={() => {
+                        const next = [...dimensionDraft, dimensionInput.trim()].slice(0, 6);
+                        setDimensionDraft(next);
+                        decisionDimensionsRef.current = next;
+                        setDimensionInput('');
+                        publishPlan({ nextDecisionDimensions: next });
+                      }}
+                    >
+                      添加
+                    </Button>
+                  </Box>
                 </Box>
               ) : null}
 
