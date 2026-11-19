@@ -104,12 +104,18 @@ export function inferDecisionDimensions(
     (excluded) => { exclusions.push(excluded); return ''; },
   );
   const inferred = DIMENSION_SIGNALS.filter(([, signal]) => signal.test(relevant)).map(([dimension]) => dimension);
-  if (inferred.length > 0) return inferred;
-  // A comparison with nothing but the two generic defaults is too coarse to
-  // scan; ask for the trade-off dimensions such a choice actually turns on.
-  if (options.length >= 2) {
-    return ['效果与适用范围', '成本与资源', '安全与风险', '可运维性'];
+  if (inferred.length === 0) {
+    // A comparison with nothing but the two generic defaults is too coarse to
+    // scan; ask for the trade-off dimensions such a choice actually turns on.
+    return options.length >= 2
+      ? ['效果与适用范围', '安全与风险', '可运维性']
+      : [...DEFAULT_RESEARCH_DECISION_DIMENSIONS];
   }
+  if (options.length >= 2 && inferred.length < 3) {
+    const fallbacks = ['效果与适用范围', '安全与风险', '可运维性', '成本与资源'];
+    return Array.from(new Set([...inferred, ...fallbacks])).slice(0, 3);
+  }
+  return inferred;
   const excludedDimensions = new Set(DIMENSION_SIGNALS
     .filter(([, signal]) => exclusions.some((excluded) => signal.test(excluded)))
     .map(([dimension]) => dimension));

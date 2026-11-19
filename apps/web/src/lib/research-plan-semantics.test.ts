@@ -10,7 +10,6 @@ describe('inferDecisionDimensions', () => {
   it('proposes trade-off dimensions for a bare comparison', () => {
     expect(inferDecisionDimensions('比较 A 与 B', '', ['A', 'B'])).toEqual([
       '效果与适用范围',
-      '成本与资源',
       '安全与风险',
       '可运维性',
     ]);
@@ -18,5 +17,13 @@ describe('inferDecisionDimensions', () => {
 
   it('stays with the two defaults when nothing is being compared', () => {
     expect(inferDecisionDimensions('是否引入缓存')).toEqual(['效果与适用范围', '安全与风险']);
+  });
+
+  it('widens a one-signal comparison to three dimensions', () => {
+    expect(inferDecisionDimensions('比较 A 与 B 的适用边界', '', ['A', 'B'])).toEqual([
+      '效果与适用范围',
+      '安全与风险',
+      '可运维性',
+    ]);
   });
 });
