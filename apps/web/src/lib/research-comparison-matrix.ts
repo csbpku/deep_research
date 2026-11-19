@@ -77,12 +77,17 @@ export function checkComparisonMatrix(body: string): ComparisonMatrixCheck {
     if (row.every(cell => /^:?-{2,}:?$/u.test(cell))) continue;
     if (!header) { header = row; continue; }
     rows += 1;
-    row.forEach((cell, column) => {
-      if (column === 0) return;
-      if (!cell) return;
-      if (HAS_EVIDENCE.test(cell) || EXPLICIT_GAP.test(cell)) return;
-      unmarked.push({ row: row[0] || `第 ${rows} 行`, column: header?.[column] || `第 ${column + 1} 列`, text: cell.slice(0, 120) });
-    });
+    const width = Math.max((header?.length ?? 1) - 1, row.length - 1);
+    for (let column = 1; column <= width; column++) {
+      const cell = row[column] ?? '';
+      const label = header?.[column] || `第 ${column + 1} 列`;
+      if (!cell) {
+        unmarked.push({ row: row[0] || `第 ${rows} 行`, column: label, text: '表格缺少这一维度' });
+        continue;
+      }
+      if (HAS_EVIDENCE.test(cell) || EXPLICIT_GAP.test(cell)) continue;
+      unmarked.push({ row: row[0] || `第 ${rows} 行`, column: label, text: cell.slice(0, 120) });
+    }
   }
   return { present: true, rows, columns: Math.max(0, (header?.length ?? 0) - 1), unmarked };
 }
@@ -108,7 +113,7 @@ export function parseComparisonMatrix(body: string): ComparisonMatrix | null {
     if (row.every(cell => /^:?-{2,}:?$/u.test(cell))) continue;
     if (!header) { header = row; continue; }
     const option = row[0] || `第 ${rows.length + 1} 行`;
-    const parsed = row.slice(1).map(cell => {
+    const parsed: ComparisonCell[] = row.slice(1).map(cell => {
       const citations = [...cell.matchAll(EVIDENCE)].map(match => match[0]);
       const text = cell
         .replace(EVIDENCE, '')
@@ -116,10 +121,18 @@ export function parseComparisonMatrix(body: string): ComparisonMatrix | null {
         .replace(/\s{2,}/gu, ' ')
         .trim();
       const status = classify(cell, citations);
-      counts[status] += 1;
       return { text: text || '未知', citations, status };
     });
-    rows.push({ option, cells: parsed });
+    // A short row must not silently shift columns: pad it with an explicit gap
+    // so the phone card can still label every dimension.
+    const dimensions = (header ?? []).slice(1);
+    const complete = dimensions.map((_, index) => parsed[index] ?? {
+      text: '未知（表格没有给出这一维度）',
+      citations: [],
+      status: 'unknown' as const,
+    });
+    for (const cell of complete) counts[cell.status] += 1;
+    rows.push({ option, cells: complete });
   }
   if (!header || rows.length === 0) return null;
   return { dimensions: header.slice(1), rows, counts };

@@ -44,6 +44,19 @@ describe('parseComparisonMatrix', () => {
     expect(matrix?.rows[0].cells[0]).toMatchObject({ status: 'evidence', citations: ['[S1]', '[S3]'] });
   });
 
+  it('pads a short row so every dimension keeps its column', () => {
+    const body = `## 对比矩阵
+
+| 方案 | 死锁 | 池占用 |
+|---|---|---|
+| A | **有证据**：先锁后查 [S1] |
+`;
+    const matrix = parseComparisonMatrix(body);
+    expect(matrix?.rows[0].cells).toHaveLength(2);
+    expect(matrix?.rows[0].cells[1]).toMatchObject({ status: 'unknown' });
+    expect(checkComparisonMatrix(body).unmarked).toHaveLength(1);
+  });
+
   it('returns null when the section has no table at all', () => {
     expect(parseComparisonMatrix('## 对比矩阵\n\n没有表。')).toBeNull();
   });
