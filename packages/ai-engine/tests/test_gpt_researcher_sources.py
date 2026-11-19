@@ -2204,6 +2204,14 @@ def test_adjacent_materialized_citations_are_separated() -> None:
     assert "[One guide](https://example.com/one) [Two guide](https://example.com/two)" == materialized
 
 
+def test_learning_path_citations_stay_compact() -> None:
+    sources = [_source("https://example.com/guide", "A very long official title", "Captured.")]
+
+    materialized = _materialize_evidence_citations("结论 [S1]。", sources, compact=True)
+
+    assert materialized == "结论 [S1](https://example.com/guide)。"
+
+
 def test_web_brief_contract_has_a_brief_length_budget() -> None:
     brief = _report_output_contract("问题", report_type="web_brief", report_length="brief")
     standard = _report_output_contract("问题", report_type="web_brief", report_length="standard")

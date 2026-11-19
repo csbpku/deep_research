@@ -5097,11 +5097,17 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             # Resolve stable evidence ids before cleaning links. This makes
             # citations deterministic even when the writer chooses a nearby
             # first-party URL variant such as www/non-www.
+            # The artifact decides the citation style, not only the objective:
+            # a learning path or a matrix stays scannable even when the caller
+            # did not carry the intent through to the request.
+            compact_citations = (
+                job.request.objective in {"learn", "investigate", "explore"}
+                or job.request.report_type in {"learning_path", "comparison_matrix"}
+            )
             report = _materialize_evidence_citations(
                 report,
                 sources,
-                compact=job.request.objective in {"learn", "investigate", "explore"}
-                or job.request.report_type == "comparison_matrix",
+                compact=compact_citations,
                 plain_matrix=job.request.report_type == "comparison_matrix",
             )
             report = _clean_report_output(report, sources)
@@ -5146,11 +5152,17 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             )
             # Recovery is a second writer, so its output must cross the same
             # citation/materialization boundary as the primary writer.
+            # The artifact decides the citation style, not only the objective:
+            # a learning path or a matrix stays scannable even when the caller
+            # did not carry the intent through to the request.
+            compact_citations = (
+                job.request.objective in {"learn", "investigate", "explore"}
+                or job.request.report_type in {"learning_path", "comparison_matrix"}
+            )
             report = _materialize_evidence_citations(
                 report,
                 sources,
-                compact=job.request.objective in {"learn", "investigate", "explore"}
-                or job.request.report_type == "comparison_matrix",
+                compact=compact_citations,
                 plain_matrix=job.request.report_type == "comparison_matrix",
             )
             report = _clean_report_output(report, sources)
