@@ -54,13 +54,14 @@ export async function loginWithCredentials(
     );
   }
 
-  const sessionResponse = await request.get(`${BASE_URL}/api/auth/session`);
-  const session = await sessionResponse.json() as {
-    user?: { email?: string; role?: string };
-  };
-  if (session.user?.email !== user.email || session.user.role !== user.role) {
-    throw new Error('E2E login failed: authenticated session was not established');
+  let session: { user?: { email?: string; role?: string } } | null = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const sessionResponse = await request.get(`${BASE_URL}/api/auth/session`);
+    session = await sessionResponse.json() as typeof session;
+    if (session?.user?.email === user.email && session.user.role === user.role) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  throw new Error('E2E login failed: authenticated session was not established');
 }
 
 /** Wait for React hydration after a full navigation. */

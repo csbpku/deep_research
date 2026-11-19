@@ -202,15 +202,15 @@ test.describe('AI Research parent (UI polish)', () => {
   test('uncertain submission requires checking history before retry', async ({ page }) => {
     await loginWithCredentials(page.context().request, { email: 'member@e2e.local', role: 'member' });
     // 拦截 POST 返回 500
+    await loginWithCredentials(page.context().request, {
+      email: 'member@e2e.local',
+      role: 'member',
+    });
     await page.route('**/api/ai-research', (route) => {
       if (route.request().method() === 'POST') {
         return route.fulfill({ status: 500, body: 'fail' });
       }
       return route.continue();
-    });
-    await loginWithCredentials(page.context().request, {
-      email: 'member@e2e.local',
-      role: 'member',
     });
     await page.goto('/ai-research');
     const input = page.getByRole('textbox', { name: 'AI 调研对话输入' });
