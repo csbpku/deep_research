@@ -19,6 +19,7 @@ SECTION_CAPS = {
 }
 
 HEADINGS = tuple(SECTION_CAPS)
+_EMPTY_LAYER_GAP = "本轮未确认（这一层还没有足够证据展开）。"
 
 
 def normalize_learning_headings(text: str) -> str:
@@ -153,6 +154,37 @@ def _trim_section(content: str, cap: int) -> str:
     room = cap - len(fence) - 4
     kept_before = _cut_text(before, room) if before else ""
     return lead + (kept_before + "\n\n" if kept_before else "") + fence + "\n"
+
+
+def _trim_layered_section(content: str, cap: int) -> str:
+    """Keep all three layers, shrinking each instead of deleting the tail.
+
+    Dropping trailing paragraphs can leave ``### 第二层`` with no body at all:
+    the heading survives the cut while its explanation does not, so the page
+    claims a layered explanation but delivers one layer. Budget per layer and
+    always keep at least one paragraph under each.
+    """
+    if len(content) <= cap:
+        return content
+    parts = re.split(r"(?m)^(###\s+.+)$", content)
+    if len(parts) < 5:
+        kept = _drop_trailing_paragraphs(content, cap)
+        return kept if kept.strip() else _cut_text(content, cap) + "\n"
+    layers = [(parts[i], parts[i + 1]) for i in range(1, len(parts), 2)]
+    budget = max(60, (cap - 24) // len(layers) - 8)
+    rendered = []
+    for heading, body in layers:
+        text = body.strip()
+        if not text:
+            # A heading with no body is worse than a stated gap: the page
+            # promises a layer and delivers nothing. Say so instead of
+            # pretending the structure is complete.
+            text = _EMPTY_LAYER_GAP
+        elif len(text) > budget:
+            text = _cut_text(text, budget).rstrip()
+        rendered.append(f"{heading.strip()}\n\n{text}\n")
+    text = "\n\n" + "\n".join(rendered)
+    return text if len(text) <= cap else text[:cap].rstrip() + "\n"
 
 
 def _drop_trailing_paragraphs(content: str, cap: int) -> str:
@@ -433,6 +465,8 @@ def enforce_learning_budget(text: str) -> str:
         out.append(parts[index])
         if heading == "概念图":
             out.append(_trim_concept_map(body))
+        elif heading == "分层解释":
+            out.append(_trim_layered_section(body, cap or 850))
         else:
             out.append(_trim_section(body, cap) if cap else body)
     bounded = "".join(out)

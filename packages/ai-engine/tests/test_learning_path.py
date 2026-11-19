@@ -336,3 +336,13 @@ def test_a_condition_without_a_negative_outcome_is_not_a_boundary() -> None:
     bounded = enforce_learning_budget(text)
     bullet = next(line for line in bounded.splitlines() if line.startswith("- 什么时候不要用"))
     assert "本轮未确认" in bullet
+
+
+def test_an_empty_layer_gets_a_stated_gap_not_a_bare_heading() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
+        "## 分层解释\n",
+        "## 分层解释\n\n### 第一层\n有正文。\n\n### 第二层\n\n### 第三层\n也有正文。\n\n",
+    ).replace("## 概念图\n", "## 概念图\n\n| 概念 | 含义 | 关系 |\n|---|---|---|\n| A | a | 与 B 相连 |\n| B | b | 与 A 相连 |\n| C | c | 依赖 A |\n| D | d | 依赖 B |\n\n")
+    bounded = enforce_learning_budget(text)
+    layer = bounded.split("### 第二层")[1].split("### 第三层")[0]
+    assert "本轮未确认" in layer
