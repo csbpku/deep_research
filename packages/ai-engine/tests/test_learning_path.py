@@ -442,3 +442,14 @@ def test_boundary_scaffolding_is_removed_even_when_the_sentence_is_valid() -> No
     assert "答案要点" not in line
     assert "；。" not in line
     assert line.endswith("。[S1]")
+
+
+def test_fill_survives_a_budget_pass_that_restores_the_gap() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。")
+    sources = [(2, "任何阻止 xmin 推进的因素都会使清理无法进行，不管如何调参。")]
+    filled = fill_answer_boundary_from_sources(text, sources)
+    rebound = enforce_learning_budget(filled)
+    refilled = fill_answer_boundary_from_sources(rebound, sources)
+    line = next(line for line in refilled.splitlines() if line.startswith("- 什么时候不要用"))
+    assert "本轮未确认" not in line
+    assert "[S2]" in line

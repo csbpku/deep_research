@@ -5139,14 +5139,15 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     fill_answer_boundary_from_sources,
                 )
 
-                report = fill_answer_boundary_from_sources(
-                    report,
-                    [
-                        (index, source.snippet or "")
-                        for index, source in enumerate(_captured_sources(sources), start=1)
-                    ],
-                )
+                evidence = [
+                    (index, source.snippet or "")
+                    for index, source in enumerate(_captured_sources(sources), start=1)
+                ]
+                report = fill_answer_boundary_from_sources(report, evidence)
                 report = enforce_learning_budget(report)
+                # Budgeting can restore the gap after the first fill; the
+                # source sentence is still the best available boundary.
+                report = fill_answer_boundary_from_sources(report, evidence)
             memo_accepted = False
             if job.request.report_type == "decision_memo":
                 # Condense the report without another search. The resulting
