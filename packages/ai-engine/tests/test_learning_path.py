@@ -423,3 +423,13 @@ def test_a_source_trade_off_does_not_fill_the_boundary() -> None:
     sources = [(1, "普通 VACUUM 通常不会把空间归还操作系统。")]
     out = fill_answer_boundary_from_sources(text, sources)
     assert "本轮未确认" in out
+
+
+def test_a_source_boundary_drops_writer_labels_and_stray_punctuation() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。")
+    sources = [(1, "答案要点：若 xmin 视界被卡住，参数调整无法解除阻塞；。")]
+    out = fill_answer_boundary_from_sources(text, sources)
+    line = next(line for line in out.splitlines() if line.startswith("- 什么时候不要用"))
+    assert "答案要点" not in line
+    assert "；。" not in line
+    assert line.endswith("。[S1]")

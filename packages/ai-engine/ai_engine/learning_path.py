@@ -566,11 +566,13 @@ def fill_answer_boundary_from_sources(
             sentence = " ".join(sentence.split())
             if not is_boundary_statement(sentence):
                 continue
-            claim = sentence.strip("，；。 ")
+            claim = re.sub(r"^\s*答案要点[:：]\s*", "", sentence)
+            claim = claim.strip("，；。 ")
             if len(claim) > 140:
                 cut = max(claim.rfind("，", 0, 120), claim.rfind("；", 0, 120))
                 claim = claim[: cut + 1] if cut > 40 else claim[:140]
-            lines[gap_index] = f"- 什么时候不要用：{claim.rstrip('，；')}。[S{number}]"
+            claim = claim.rstrip("，；。 ")
+            lines[gap_index] = f"- 什么时候不要用：{claim}。[S{number}]"
             parts[2] = "\n".join(lines) + ("\n\n" + rest.lstrip("\n") if rest else "\n")
             return "".join(parts)
     return text
