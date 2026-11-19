@@ -731,6 +731,60 @@ async def test_missing_inventory_coverage_marker_is_not_treated_as_complete(
     assert result.to_dict()["review_outcome"] == "attention"
 
 
+@pytest.mark.asyncio
+async def test_a_partial_batch_answer_recovers_only_the_missing_claims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.reviewer import ClaimInventoryItem, _adjudicate_batch_with_split
+
+    batch = tuple(
+        ClaimInventoryItem(
+            claim_id=f"C{index}",
+            claim=f"事实{index}",
+            risk="medium",
+            claim_type="external_fact",
+        )
+        for index in range(1, 5)
+    )
+    calls = 0
+
+    async def review(**kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        prompt = str(kwargs.get("user_prompt", ""))
+        ids = [item for item in ("C1", "C2", "C3", "C4") if item in prompt]
+        # First call sees all four but answers only the first two. The recovery
+        # call receives exactly the missing pair.
+        if len(ids) == 4:
+            ids = ["C1", "C2"]
+        return SimpleNamespace(text=json.dumps({"claims": [
+            {
+                "claim_id": claim_id,
+                "claim": f"事实{claim_id[1:]}",
+                "verdict": "unsupported",
+                "risk": "medium",
+            }
+            for claim_id in ids
+        ]}, ensure_ascii=False))
+
+    monkeypatch.setattr("ai_engine.reviewer.generate_text", review)
+    result, error = await _adjudicate_batch_with_split(
+        batch=batch,
+        batch_index=1,
+        batch_count=1,
+        topic="部分批次",
+        report_type="research_report",
+        source_text="source",
+        llm_spec="fake:model",
+    )
+
+    assert error is None
+    assert result is not None
+    assert result.coverage_status == "complete"
+    assert {claim.claim_id for claim in result.claims} == {"C1", "C2", "C3", "C4"}
+    assert calls == 2
+
+
 @pytest.mark.parametrize(
     ("risk", "expected_status"),
     [("high", "blocked"), ("medium", "needs_revision"), ("low", "needs_revision")],

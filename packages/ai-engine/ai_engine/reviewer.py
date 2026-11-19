@@ -1773,6 +1773,52 @@ async def _adjudicate_batch_with_split(
         semaphore=semaphore,
         attempts=2,
     )
+    if result is not None:
+        # The parser always emits one verdict per inventory row, so a skipped
+        # row arrives as an explicit execution_failed placeholder rather than
+        # as a missing key.
+        failed_ids = {
+            claim.claim_id
+            for claim in result.claims
+            if claim.execution_error_code == "incomplete_batch_output"
+        }
+        missing = tuple(item for item in batch if item.claim_id in failed_ids)
+        if not missing:
+            return result, error
+        if len(missing) < len(batch) and len(batch) >= 2:
+            # A provider can answer a batch only partially. Treat the missing
+            # rows as a smaller batch instead of marking them execution_failed:
+            # the answer is usually complete for the other rows, and the parser
+            # has no way to tell "the model skipped this" from "the batch was
+            # too large".
+            recovered, recovered_error = await _adjudicate_batch_with_split(
+                batch=missing,
+                batch_index=batch_index,
+                batch_count=batch_count,
+                topic=topic,
+                report_type=report_type,
+                source_text=source_text,
+                llm_spec=llm_spec,
+                semaphore=semaphore,
+            )
+            if recovered is not None and len(recovered.claims) == len(missing):
+                merged = {claim.claim_id: claim for claim in result.claims}
+                merged.update({claim.claim_id: claim for claim in recovered.claims})
+                ordered = tuple(merged[item.claim_id] for item in batch if item.claim_id in merged)
+                return ReviewResult(
+                    status=_status_for_claims(list(ordered)),
+                    claims=ordered,
+                    revision_instructions=tuple(dict.fromkeys(
+                        (*result.revision_instructions, *recovered.revision_instructions)
+                    )),
+                    coverage_status="complete",
+                ), None
+            return result, recovered_error or error
+        if len(missing) == len(batch):
+            # No usable answer at all: fall through to the normal split path.
+            result = None
+        else:
+            return result, error
     if result is not None or len(batch) < 2 or _adjudication_request_rejected(error):
         return result, error
 
