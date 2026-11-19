@@ -3,6 +3,7 @@
 from ai_engine.learning_path import (
     enforce_answer_shape,
     enforce_learning_budget,
+    fill_answer_boundary_from_sources,
     is_valid_learning_path,
     reconcile_answer_shape,
 )
@@ -404,3 +405,21 @@ def test_a_question_without_an_answer_is_counted_as_a_gap() -> None:
     bounded = enforce_learning_budget(text)
     section = bounded.split("## 自检")[1]
     assert "本轮未确认" in section
+
+
+def test_a_source_condition_fills_an_unconfirmed_boundary() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。")
+    sources = [
+        (5, "任何阻止 xmin 视界推进的因素都会使所有表的清理无法进行，不管 autovacuum 调得多激进。"),
+    ]
+    out = fill_answer_boundary_from_sources(text, sources)
+    assert "什么时候不要用：本轮未确认" not in out
+    assert "阻止 xmin 视界推进" in out
+    assert "[S5]" in out
+
+
+def test_a_source_trade_off_does_not_fill_the_boundary() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。")
+    sources = [(1, "普通 VACUUM 通常不会把空间归还操作系统。")]
+    out = fill_answer_boundary_from_sources(text, sources)
+    assert "本轮未确认" in out

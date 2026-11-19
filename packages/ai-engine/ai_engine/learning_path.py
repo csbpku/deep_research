@@ -529,6 +529,53 @@ def _cited_boundary(rest: str) -> str | None:
     return None
 
 
+_SOURCE_CLEAN = re.compile(r"\[([^\]]+)\]\([^)]*\)|[*_`>#]")
+
+
+def fill_answer_boundary_from_sources(
+    text: str, sources: list[tuple[int, str]]
+) -> str:
+    """Fill an unconfirmed boundary with a cited condition from the evidence.
+
+    The writer often leaves "本轮未确认" even when a retrieved troubleshooting
+    page states the exact abstention condition ("anything that blocks the xmin
+    horizon makes cleanup impossible, no matter how hard you tune autovacuum").
+    The condition is in the source snippet, not in the body, so body-only
+    reconciliation cannot see it. Lift the cited sentence instead of inventing.
+    """
+    parts = re.split(r"^(##[ \t]+90 秒回答)[ \t]*$", text, flags=re.MULTILINE)
+    if len(parts) < 3:
+        return text
+    body = parts[2]
+    end = body.find("\n## ")
+    section, rest = (body, "") if end == -1 else (body[:end], body[end:])
+    lines = section.splitlines()
+    gap_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("- 什么时候不要用：")
+            and not is_boundary_statement(line.split("：", 1)[-1])
+        ),
+        None,
+    )
+    if gap_index is None:
+        return text
+    for number, snippet in sources:
+        for sentence in re.split(r"(?<=[。；])", _SOURCE_CLEAN.sub("", snippet or "")):
+            sentence = " ".join(sentence.split())
+            if not is_boundary_statement(sentence):
+                continue
+            claim = sentence.strip("，；。 ")
+            if len(claim) > 140:
+                cut = max(claim.rfind("，", 0, 120), claim.rfind("；", 0, 120))
+                claim = claim[: cut + 1] if cut > 40 else claim[:140]
+            lines[gap_index] = f"- 什么时候不要用：{claim.rstrip('，；')}。[S{number}]"
+            parts[2] = "\n".join(lines) + ("\n\n" + rest.lstrip("\n") if rest else "\n")
+            return "".join(parts)
+    return text
+
+
 def enforce_answer_boundary(text: str) -> str:
     """Make the third opening bullet an actual abstention, or a stated gap.
 
