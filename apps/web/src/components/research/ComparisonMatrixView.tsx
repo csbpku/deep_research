@@ -12,11 +12,11 @@ const TONE = {
   conflict: { label: '冲突', color: 'var(--dr-color-danger)', icon: AlertTriangle },
 } as const;
 
-function Cell({ cell }: { cell: ComparisonCell }) {
+function CellBody({ cell }: { cell: ComparisonCell }) {
   const tone = TONE[cell.status];
   const Icon = tone.icon;
   return (
-    <Box component="td" data-status={cell.status} sx={{ minWidth: 180, verticalAlign: 'top' }}>
+    <>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, color: tone.color }}>
         <Icon size={12} aria-hidden="true" />
         <Typography component="span" sx={{ fontSize: 'var(--dr-type-caption)', fontWeight: 600 }}>
@@ -29,6 +29,14 @@ function Cell({ cell }: { cell: ComparisonCell }) {
           {cell.citations.join(' ')}
         </Box>
       )}
+    </>
+  );
+}
+
+function Cell({ cell }: { cell: ComparisonCell }) {
+  return (
+    <Box component="td" data-status={cell.status} sx={{ minWidth: 180, verticalAlign: 'top' }}>
+      <CellBody cell={cell} />
     </Box>
   );
 }
@@ -45,7 +53,32 @@ export function ComparisonMatrixView({ matrix }: { matrix: ComparisonMatrix }) {
           counts[status] ? <span key={status}>{TONE[status].label} {counts[status]}</span> : null
         ))}
       </Box>
-      <Box sx={{ overflowX: 'auto', border: '1px solid var(--dr-color-outline)', borderRadius: 'var(--dr-radius-small)' }} role="region" aria-label="对比矩阵，可横向滚动" tabIndex={0}>
+      <Box sx={{ display: { xs: 'grid', sm: 'block' }, gap: 1.5 }}>
+        {matrix.rows.map(row => (
+          <Box
+            key={row.option}
+            data-testid="comparison-matrix-card"
+            component="section"
+            aria-label={row.option}
+            sx={{ display: { xs: 'block', sm: 'none' }, border: '1px solid var(--dr-color-outline)', borderRadius: 'var(--dr-radius-small)', p: 1.5 }}
+          >
+            <Typography component="h3" sx={{ fontSize: 'var(--dr-type-title-small)', fontWeight: 600, mb: 1 }}>
+              {row.option}
+            </Typography>
+            <Box sx={{ display: 'grid', gap: 1.25 }}>
+              {row.cells.map((cell, index) => (
+                <Box key={`${row.option}-m-${index}`} data-status={cell.status}>
+                  <Typography component="h4" sx={{ fontSize: 'var(--dr-type-caption)', fontWeight: 600, color: 'var(--dr-color-text-muted)', mb: 0.25 }}>
+                    {matrix.dimensions[index] ?? `维度 ${index + 1}`}
+                  </Typography>
+                  <CellBody cell={cell} />
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        ))}
+      </Box>
+      <Box sx={{ display: { xs: 'none', sm: 'block' }, overflowX: 'auto', border: '1px solid var(--dr-color-outline)', borderRadius: 'var(--dr-radius-small)' }} role="region" aria-label="对比矩阵，可横向滚动" tabIndex={0}>
         <Box component="table" sx={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', fontSize: 'var(--dr-type-label)' }}>
           <Box component="thead">
             <Box component="tr">
