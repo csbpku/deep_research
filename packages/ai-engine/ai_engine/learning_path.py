@@ -59,6 +59,30 @@ _BUDGET_NOTE = re.compile(
 _BIBLIOGRAPHY = re.compile(r"^##\s*(参考文献|参考资料|References)\s*$", re.MULTILINE | re.IGNORECASE)
 
 
+def balance_code_fences(text: str) -> str:
+    """Close a fence the writer left open before the next heading.
+
+    An unterminated ``` turns every following section into code, so the reader
+    sees "## 常见误区" rendered as a literal line inside the example. Close the
+    block at the next heading (and at EOF) rather than leaving the page broken.
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    in_fence = False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence and line.startswith("## "):
+            out.append("```")
+            in_fence = False
+        out.append(line)
+    if in_fence:
+        out.append("```")
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
 def strip_bibliography(text: str) -> str:
     """Remove a trailing bibliography; every claim already carries [S#]."""
     match = _BIBLIOGRAPHY.search(text)
@@ -77,32 +101,59 @@ def strip_budget_notes(text: str) -> str:
     return _BUDGET_NOTE.sub("\n\n", text).strip() + "\n"
 
 
-def _trim_section(content: str, cap: int) -> str:
-    """Drop whole paragraphs instead of leaving a truncation scar.
+def _cut_text(text: str, limit: int) -> str:
+    """Cut prose on a sentence boundary without leaving a dangling half-line."""
+    if len(text) <= limit:
+        return text.rstrip()
+    cut = text[:limit]
+    boundary = max(cut.rfind("。"), cut.rfind("！"), cut.rfind("？"), cut.rfind("\n"))
+    if boundary > limit // 2:
+        cut = cut[: boundary + 1]
+    return cut.rstrip()
 
-    A learning path is read as a finished artifact. An inline note such as
-    "this section was cut at the word limit" tells the reader the document is
-    broken; it also consumes the space the note is apologising for. Remove
-    trailing paragraphs until the section fits, and only cut inside a paragraph
-    when a single paragraph is itself over budget - then stop on a sentence
-    boundary.
+
+def _trim_section(content: str, cap: int) -> str:
+    """Fit a section into its cap without destroying its example.
+
+    Dropping trailing paragraphs is right for prose, but a runnable example is
+    a single fenced block: popping it leaves an empty section, and cutting
+    inside it loses the closing fence and swallows the following headings.
+    Keep the fence, trim the prose around it, and only shorten the code itself
+    when the fence alone exceeds the cap.
     """
     if len(content) <= cap:
         return content
+    match = re.search(r"```[^\n]*\n[\s\S]*?```", content)
+    if match is None:
+        kept = _drop_trailing_paragraphs(content, cap)
+        return kept if kept else _cut_text(content, cap) + "\n"
+    fence = match.group(0)
+    before = content[: match.start()].rstrip()
+    if len(fence) + 8 >= cap:
+        lines = fence.splitlines()
+        header, body, _ = lines[0], lines[1:-1], lines[-1]
+        room = max(1, cap - len(header) - 8)
+        kept_lines = []
+        used = 0
+        for line in body:
+            if used + len(line) + 1 > room:
+                break
+            kept_lines.append(line)
+            used += len(line) + 1
+        return f"{header}\n" + "\n".join(kept_lines or body[:1]) + "\n```\n"
+    room = cap - len(fence) - 4
+    kept_before = _cut_text(before, room) if before else ""
+    return (kept_before + "\n\n" if kept_before else "") + fence + "\n"
+
+
+def _drop_trailing_paragraphs(content: str, cap: int) -> str:
     paragraphs = re.split(r"(\n\s*\n)", content)
-    # Drop from the end, preserving the separators between kept paragraphs.
     while paragraphs and len("".join(paragraphs)) > cap:
         paragraphs.pop()
         if paragraphs and paragraphs[-1].strip() == "":
             paragraphs.pop()
     kept = "".join(paragraphs).rstrip()
-    if kept:
-        return kept + "\n"
-    cut = content[:cap]
-    boundary = max(cut.rfind("。"), cut.rfind("！"), cut.rfind("？"), cut.rfind("\n"))
-    if boundary > cap // 2:
-        cut = cut[: boundary + 1]
-    return cut.rstrip() + "\n"
+    return kept + "\n" if kept else ""
 
 
 _ANSWER_LABELS = ("- 是什么：", "- 什么时候用：", "- 什么时候不要用：")
@@ -275,7 +326,9 @@ def _trim_concept_map(content: str) -> str:
 
 def enforce_learning_budget(text: str) -> str:
     """Trim overlong sections, keeping the six-section order and all headings."""
-    text = strip_bibliography(strip_budget_notes(normalize_learning_headings(text)))
+    text = strip_bibliography(
+        strip_budget_notes(balance_code_fences(normalize_learning_headings(text)))
+    )
     if not is_valid_learning_path(text):
         return text
     parts = re.split(r"^(##\s+.+)$", text, flags=re.MULTILINE)

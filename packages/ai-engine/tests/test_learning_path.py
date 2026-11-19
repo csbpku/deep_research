@@ -241,3 +241,26 @@ def test_the_budget_drops_a_trailing_bibliography() -> None:
     bounded = enforce_learning_budget(text)
     assert "## 参考文献" not in bounded
     assert "## 自检" in bounded
+
+
+def test_trimming_a_section_never_leaves_a_code_fence_open() -> None:
+    text = _doc()
+    text = text.replace(
+        "## 可运行示例\n",
+        "## 可运行示例\n\n"
+        + "\n\n".join(f"说明段落 {index}。" * 30 for index in range(6))
+        + "\n\n```sql\nSELECT 1;\n```\n\n结尾说明。\n",
+    )
+    bounded = enforce_learning_budget(text)
+    assert bounded.count("```") % 2 == 0
+    assert "## 常见误区" in bounded.split("```")[-1]
+
+
+def test_an_unclosed_fence_is_closed_before_the_next_heading() -> None:
+    text = _doc().replace(
+        "```sql\nSELECT 1;\n```",
+        "```sql\nSELECT 1;",
+    )
+    bounded = enforce_learning_budget(text)
+    assert bounded.count("```") % 2 == 0
+    assert "## 常见误区" in bounded
