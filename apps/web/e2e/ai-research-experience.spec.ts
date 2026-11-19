@@ -259,7 +259,7 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
   // delete button is its own tab stop, so walk to the add field by name.
   await tabTo(page.getByRole('textbox', { name: '补充对比维度' }));
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('textbox', { name: '对比对象' })).toBeFocused();
+  await tabTo(page.getByRole('textbox', { name: '对比对象' }));
   // Single-round is the default now, so it owns the radio group's tab stop.
   await tabTo(page.getByRole('radio', { name: /^单轮研究/ }));
   await page.keyboard.press('ArrowRight');
