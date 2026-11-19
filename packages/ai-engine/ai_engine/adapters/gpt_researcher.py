@@ -2243,7 +2243,16 @@ def _install_standard_intent_questions(
                 base = list(await original(query, query_domains))
             except Exception:  # noqa: BLE001 - planning must degrade, not fail
                 base = []
-            return base + [f"{topic} {question}" for question in questions]
+            # A bare question is not a search query: "什么情况下会失效" returns
+            # generic blog posts, while the citation we need lives on a
+            # troubleshooting page. Bias the boundary question toward the
+            # source type that states failure conditions.
+            lanes = [f"{topic} {question}" for question in questions]
+            for index, question in enumerate(questions):
+                if any(marker in question for marker in ("不要用", "不该用", "不应该", "不适用", "失效")):
+                    lanes.append(f"{topic} 故障排查 限制 不适用 官方文档")
+                    break
+            return base + lanes
         result = await original(query, query_domains)
         return list(result)
 

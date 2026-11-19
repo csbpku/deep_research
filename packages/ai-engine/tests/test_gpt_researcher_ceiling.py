@@ -377,4 +377,5 @@ def test_standard_path_uses_the_questions_as_first_sub_queries() -> None:
     assert asyncio.run(conductor.plan_research("ignored")) == [
         "vendor query",
         "VACUUM 什么情况下不该用？",
+        "VACUUM 故障排查 限制 不适用 官方文档",
     ]
