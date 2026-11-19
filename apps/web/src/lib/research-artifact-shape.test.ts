@@ -11,6 +11,7 @@ describe('research artifact shape', () => {
   it('recognises an intent report by its first contract heading', () => {
     expect(hasOwnArtifactContract({ type: 'research', body: '## 现象与范围\n\n...' })).toBe(true);
     expect(hasOwnArtifactContract({ type: 'research', body: '## 一句话回答\n\n...' })).toBe(true);
+    expect(hasOwnArtifactContract({ type: 'research', body: '# 机制分析\n\n## 现象与范围\n\n...' })).toBe(true);
   });
 
   it('does not suppress a plain long research report or a knowledge card', () => {
