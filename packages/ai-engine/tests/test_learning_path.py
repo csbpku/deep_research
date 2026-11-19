@@ -531,3 +531,20 @@ SELECT 1;
     out = enforce_learning_budget(body)
     assert "问题一？" in out and "问题二？" in out and "问题三？" in out
     assert "缺少答案要点" not in out
+
+
+def test_bold_answer_label_is_recognised():
+    from ai_engine.learning_path import _trim_self_check
+
+    content = "\n1. 问题一？\n**答案要点**：答案一。\n\n2. 问题二？\n答案：答案二。\n\n3. 问题三？\n**答案**：答案三。\n"
+    out = _trim_self_check(content, 700)
+    assert "缺少答案要点" not in out
+    assert "答案一" in out and "答案三" in out
+
+def test_missing_answer_keeps_the_question_text():
+    from ai_engine.learning_path import _trim_self_check
+
+    out = _trim_self_check("\n1. autovacuum 什么时候失效？\n2. 怎么观察？\n", 700)
+    assert "autovacuum 什么时候失效？" in out
+    assert "怎么观察？" in out
+    assert "缺少答案要点" in out

@@ -209,7 +209,7 @@ def _trim_section(content: str, cap: int) -> str:
 _SELF_CHECK_ITEM = re.compile(r"(?m)^(\d+)\.\s+")
 
 
-_ANSWER_LINE = re.compile(r"答案(?:要点)?[：:]")
+_ANSWER_LINE = re.compile(r"答案(?:要点)?\*{0,2}\s*[：:]")
 
 
 def _trim_self_check(content: str, cap: int) -> str:
@@ -235,7 +235,11 @@ def _trim_self_check(content: str, cap: int) -> str:
             continue
         item = raw[index]
         if not _ANSWER_LINE.search(item):
-            items.append(f"{index + 1}. 本轮未确认（该题缺少答案要点，已省略）。")
+            # Keep the question itself. Replacing the whole item erased what
+            # the writer did produce, leaving three identical placeholder rows.
+            question = _SELF_CHECK_ITEM.sub("", item, count=1).strip()
+            first = question.splitlines()[0] if question else "自检题未生成"
+            items.append(f"{index + 1}. {first}\n   本轮未确认（该题缺少答案要点）。")
         else:
             items.append(item)
     budget = max(80, (cap - len(lead)) // 3 - 8)
