@@ -3737,7 +3737,13 @@ def _materialize_evidence_citations(
     compact: bool = False,
     plain_matrix: bool = False,
 ) -> str:
-    """Turn writer-produced evidence ids into deterministic Markdown links."""
+    """Turn writer-produced evidence ids into deterministic Markdown links.
+
+    ``plain_matrix`` keeps only the ``[S#]`` label. It is named for the
+    comparison matrix, where a full link makes a cell unreadable, and is also
+    used for the learning path: its opening and concept table are dense, and a
+    ten-character label is the maximum they can carry.
+    """
     captured = _captured_sources(sources)
     if not captured:
         return report
@@ -5108,7 +5114,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 report,
                 sources,
                 compact=compact_citations,
-                plain_matrix=job.request.report_type == "comparison_matrix",
+                plain_matrix=job.request.report_type in {"comparison_matrix", "learning_path"},
             )
             report = _clean_report_output(report, sources)
             if job.request.report_type == "comparison_matrix":
@@ -5163,7 +5169,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 report,
                 sources,
                 compact=compact_citations,
-                plain_matrix=job.request.report_type == "comparison_matrix",
+                plain_matrix=job.request.report_type in {"comparison_matrix", "learning_path"},
             )
             report = _clean_report_output(report, sources)
             if job.request.report_type == "learning_path":

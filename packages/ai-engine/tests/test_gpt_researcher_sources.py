@@ -2207,9 +2207,13 @@ def test_adjacent_materialized_citations_are_separated() -> None:
 def test_learning_path_citations_stay_compact() -> None:
     sources = [_source("https://example.com/guide", "A very long official title", "Captured.")]
 
-    materialized = _materialize_evidence_citations("结论 [S1]。", sources, compact=True)
+    # A learning path passes the same plain-label flag as the matrix: a full
+    # URL inside the 90-second answer or the concept table makes it unreadable.
+    materialized = _materialize_evidence_citations(
+        "结论 [S1]。", sources, compact=True, plain_matrix=True
+    )
 
-    assert materialized == "结论 [S1](https://example.com/guide)。"
+    assert materialized == "结论 [S1]。"
 
 
 def test_web_brief_contract_has_a_brief_length_budget() -> None:
