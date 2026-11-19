@@ -346,3 +346,22 @@ def test_an_empty_layer_gets_a_stated_gap_not_a_bare_heading() -> None:
     bounded = enforce_learning_budget(text)
     layer = bounded.split("### 第二层")[1].split("### 第三层")[0]
     assert "本轮未确认" in layer
+
+
+def test_an_example_without_an_expectation_states_the_gap() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
+        "## 可运行示例\n" + LONG,
+        "## 可运行示例\n```bash\npsql -c 'select 1';\n```",
+    )
+    bounded = enforce_learning_budget(text)
+    assert "预期输出" in bounded
+    assert "尚未记录实际运行结果" in bounded
+
+
+def test_an_example_with_an_expectation_is_untouched() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
+        "## 可运行示例\n" + LONG,
+        "## 可运行示例\n```bash\npsql -c 'select 1';\n```\n\n预期输出：一行 `1`。",
+    )
+    bounded = enforce_learning_budget(text)
+    assert bounded.count("预期输出") == 1

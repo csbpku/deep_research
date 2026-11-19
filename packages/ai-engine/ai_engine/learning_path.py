@@ -22,6 +22,34 @@ HEADINGS = tuple(SECTION_CAPS)
 _EMPTY_LAYER_GAP = "本轮未确认（这一层还没有足够证据展开）。"
 
 
+_EXPECTATION = re.compile(r"预期(?:输出|结果)|expected output|should print", re.IGNORECASE)
+
+
+def ensure_example_expectation(text: str) -> str:
+    """A runnable example must say what running it produces.
+
+    The writer often supplies a long diagnostic script and stops at the closing
+    fence. A reader can run it but cannot tell whether the result is healthy, so
+    the "example" teaches nothing. If the section has no expectation, state the
+    gap rather than inventing an output.
+    """
+    parts = re.split(r"^(##[ \t]+可运行示例)[ \t]*$", text, flags=re.MULTILINE)
+    if len(parts) < 3:
+        return text
+    body = parts[2]
+    end = body.find("\n## ")
+    section, rest = (body, "") if end == -1 else (body[:end], body[end:])
+    if "```" not in section or _EXPECTATION.search(section):
+        return text
+    fence_end = section.rfind("```")
+    if fence_end == -1:
+        return text
+    insert_at = fence_end + 3
+    expectation = "\n\n**预期输出：** 本轮未确认（尚未记录实际运行结果）。\n"
+    parts[2] = section[:insert_at] + expectation + section[insert_at:] + rest
+    return "".join(parts)
+
+
 def normalize_learning_headings(text: str) -> str:
     """Separate a heading glued to the first line of its body.
 
@@ -490,4 +518,5 @@ def enforce_learning_budget(text: str) -> str:
         chunks[index + 1] = trimmed
         bounded = "".join(chunks)
     bounded = reconcile_answer_shape(enforce_answer_shape(bounded))
+    bounded = ensure_example_expectation(bounded)
     return enforce_answer_boundary(bounded)
