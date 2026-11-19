@@ -230,13 +230,13 @@ def _trim_self_check(content: str, cap: int) -> str:
             return base + missing + "\n"
         # Not enough room for the stated gap: keep whole items and report only
         # the questions that actually fit, rather than a fragment.
-        kept = content[: starts[0]].rstrip()
+        kept_text = content[: starts[0]].rstrip()
         for start, end in zip(starts, starts[1:] + [len(content)]):
             item = content[start:end].strip()
-            if len(kept) + len(item) + 2 > cap - len(missing):
+            if len(kept_text) + len(item) + 2 > cap - len(missing):
                 break
-            kept += "\n\n" + item
-        return kept + missing + "\n"
+            kept_text += "\n\n" + item
+        return kept_text + missing + "\n"
     lead = content[: starts[0]]
     items = [content[start:end].strip() for start, end in zip(starts, starts[1:] + [len(content)])]
     budget = max(80, (cap - len(lead)) // max(3, len(items)))
