@@ -303,3 +303,27 @@ def test_a_disabled_setting_is_not_a_direct_prohibition() -> None:
     )
     bounded = enforce_learning_budget(text)
     assert "本轮未确认（证据缺口）" in bounded
+
+
+def test_a_cited_condition_in_the_body_becomes_the_boundary() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
+        "## 概念图\n",
+        "## 概念图\n\n| 概念 | 含义 | 关系 |\n|---|---|---|\n"
+        "| `xmin` 视界 | 最旧快照边界 | 长事务、复制槽可阻止视界推进，"
+        "使调高 autovacuum 强度也无效。[S5] |\n\n",
+    )
+    bounded = enforce_learning_budget(text)
+    bullet = next(line for line in bounded.splitlines() if line.startswith("- 什么时候不要用"))
+    assert "阻止视界推进" in bullet
+    assert "[S5]" in bullet
+
+
+def test_an_uncited_condition_is_not_lifted() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
+        "## 概念图\n",
+        "## 概念图\n\n| 概念 | 含义 | 关系 |\n|---|---|---|\n"
+        "| `xmin` 视界 | 最旧快照边界 | 长事务可阻止视界推进，使调高 autovacuum 强度也无效。 |\n\n",
+    )
+    bounded = enforce_learning_budget(text)
+    bullet = next(line for line in bounded.splitlines() if line.startswith("- 什么时候不要用"))
+    assert "本轮未确认" in bullet

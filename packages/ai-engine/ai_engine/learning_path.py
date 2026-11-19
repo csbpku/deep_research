@@ -236,7 +236,10 @@ _PROHIBITION = re.compile(r"不要|不应|不适合|不宜|避免|禁用|不建�
 # A boundary answers "when should I not use it", so it needs a condition
 # ("when X") or a direct prohibition ("do not do Y"). A bare limitation
 # ("VACUUM does not return space to the OS") is a trade-off, not a boundary.
-_BOUNDARY_CONDITION = re.compile(r"当|如果|若|一旦|在[^，。]{0,30}(?:时|情况下)|只在")
+_BOUNDARY_CONDITION = re.compile(
+    r"当|如果|若|一旦|在[^，。]{0,30}(?:时|情况下)|只在|"
+    r"(?:阻止|阻塞|导致|造成)[^。；]{0,60}(?:无效|无法|不能|失败|回卷)"
+)
 _DIRECT_PROHIBITION = re.compile(r"不要|不应|不宜|避免|不建议|仅适合|只适合")
 
 
@@ -246,7 +249,7 @@ def is_boundary_statement(claim: str) -> bool:
         return False
     if _DIRECT_PROHIBITION.search(text):
         return True
-    return bool(_BOUNDARY_CONDITION.search(text) and _PROHIBITION.search(text))
+    return bool(_BOUNDARY_CONDITION.search(text))
 
 
 def reconcile_answer_shape(text: str) -> str:
@@ -281,7 +284,9 @@ def reconcile_answer_shape(text: str) -> str:
     if gap_index is None or not rest:
         return text
     source = ""
-    prohibited = re.compile(r"不要|不应|不适合|不宜|避免|禁用|不建议")
+    # Prefer a cited condition + negative outcome from anywhere in the body.
+    source = _cited_boundary(rest) or ""
+    prohibited = re.compile(r"不要|不应|不适合|不宜|避免|不建议")
     # Only the misconception section answers "when not to use it"; scanning
     # the whole body picks up prerequisites ("learn X before VACUUM"), which
     # is about ordering, not about abstaining.
@@ -292,9 +297,17 @@ def reconcile_answer_shape(text: str) -> str:
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or stripped.startswith("|") or stripped.startswith("```"):
             continue
+        if stripped.startswith("- 什么时候不要用"):
+            continue
         if "[S" in stripped and prohibited.search(stripped):
             source = stripped.lstrip("-*· ").strip()
             break
+    if not source:
+        # The evidence for a boundary is not always written as a misconception.
+        # Release notes and troubleshooting docs often state it as "X blocks Y,
+        # so tuning Z does not help" — a condition plus a negative outcome, with
+        # no 不要 in sight. Scan cited body cells for that shape before giving up.
+        source = _cited_boundary(rest) or ""
     if not source:
         # Fall back to an uncited misconception only when it names a concrete
         # prohibition; otherwise the opening would lift a neutral comparison.
@@ -323,13 +336,39 @@ def reconcile_answer_shape(text: str) -> str:
         # front. The sentence after the last arrow is the actual claim.
         claim = claim.rsplit("→", 1)[1]
     claim = re.sub(r"^[\s\-*·]+", "", claim)
+    citations = "".join(dict.fromkeys(re.findall(r"\[S\d+\]", source)))
     if len(claim) > 140:
         boundary = max(claim.rfind("，", 0, 120), claim.rfind("；", 0, 120))
         claim = claim[: boundary + 1] if boundary > 60 else claim[:140]
         claim = claim.rstrip("，；") + "。"
+    if citations and citations not in claim:
+        claim = f"{claim.rstrip('。')}。{citations}"
     lines[gap_index] = f"- 什么时候不要用：{claim}"
     parts[2] = "\n".join(lines) + ("\n\n" + rest.lstrip("\n") if rest else "\n")
     return "".join(parts)
+
+
+def _cited_boundary(rest: str) -> str | None:
+    """Find a cited sentence that bounds use, not just a cited trade-off."""
+    for line in rest.splitlines():
+        stripped = line.strip()
+        if "[S" not in stripped or stripped.startswith("## 自检"):
+            continue
+        if stripped.startswith("- 什么时候不要用"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        citations = "".join(
+            dict.fromkeys(re.findall(r"\[S\d+\]", stripped))
+        )
+        for cell in reversed(cells):
+            cell = re.sub(r"\[S(\d+)\]\([^)]*\)", r"[S\1]", cell)
+            for sentence in re.split(r"(?<=[。；])", cell):
+                if is_boundary_statement(sentence):
+                    sentence = sentence.strip()
+                    if citations and citations not in sentence:
+                        sentence = f"{sentence.rstrip('。')}。{citations}"
+                    return sentence
+    return None
 
 
 def enforce_answer_boundary(text: str) -> str:
