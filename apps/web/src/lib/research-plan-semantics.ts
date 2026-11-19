@@ -93,7 +93,11 @@ const DIMENSION_SIGNALS: ReadonlyArray<readonly [string, RegExp]> = [
 ];
 
 /** Defaults are suggestions; operational gates are added only for requested topics. */
-export function inferDecisionDimensions(question: string, context = ''): string[] {
+export function inferDecisionDimensions(
+  question: string,
+  context = '',
+  options: string[] = [],
+): string[] {
   const exclusions: string[] = [];
   const relevant = `${question}\n${context}`.replace(
     /(?:不(?:需要|讨论|考虑|关注|比较|涉及|展开|延伸|扩展|涵盖|纳入)|无需|不要)(?!忽略|遗漏)[^。；;\n]*?(?=但是|但|不过|然而|同时|而且|并且|\bbut\b|\bhowever\b|[。；;\n]|$)/gu,
@@ -101,6 +105,11 @@ export function inferDecisionDimensions(question: string, context = ''): string[
   );
   const inferred = DIMENSION_SIGNALS.filter(([, signal]) => signal.test(relevant)).map(([dimension]) => dimension);
   if (inferred.length > 0) return inferred;
+  // A comparison with nothing but the two generic defaults is too coarse to
+  // scan; ask for the trade-off dimensions such a choice actually turns on.
+  if (options.length >= 2) {
+    return ['效果与适用范围', '成本与资源', '安全与风险', '可运维性'];
+  }
   const excludedDimensions = new Set(DIMENSION_SIGNALS
     .filter(([, signal]) => exclusions.some((excluded) => signal.test(excluded)))
     .map(([dimension]) => dimension));

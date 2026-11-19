@@ -5097,7 +5097,8 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             report = _materialize_evidence_citations(
                 report,
                 sources,
-                compact=job.request.objective in {"learn", "investigate", "explore"},
+                compact=job.request.objective in {"learn", "investigate", "explore"}
+                or job.request.report_type == "comparison_matrix",
             )
             report = _clean_report_output(report, sources)
             if job.request.report_type == "comparison_matrix":
@@ -5144,7 +5145,8 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             report = _materialize_evidence_citations(
                 report,
                 sources,
-                compact=job.request.objective in {"learn", "investigate", "explore"},
+                compact=job.request.objective in {"learn", "investigate", "explore"}
+                or job.request.report_type == "comparison_matrix",
             )
             report = _clean_report_output(report, sources)
             if job.request.report_type == "learning_path":

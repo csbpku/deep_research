@@ -431,7 +431,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
       .map((item) => item.trim())
       .filter(Boolean)
       .slice(0, 20);
-    const explicitDecisionDimensions = inferDecisionDimensions(trimmed, nextFocusText);
+    const explicitDecisionDimensions = inferDecisionDimensions(trimmed, nextFocusText, comparisonOptions);
     const decisionDimensions = nextObjective === 'decide'
       ? decisionDimensionsRef.current.length ? decisionDimensionsRef.current : explicitDecisionDimensions
       : [];

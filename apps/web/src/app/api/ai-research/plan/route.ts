@@ -130,7 +130,7 @@ function questionToBrief(
     constraints: partial.constraints ?? [],
     questionsToAnswer: partial.questionsToAnswer ?? defaultQuestionsToAnswer(objective, partial.comparisonOnly),
     comparisonOptions: partial.comparisonOptions ?? inferComparisonOptions(question),
-    decisionDimensions: partial.decisionDimensions ?? (objective === 'decide' ? inferDecisionDimensions(question, partial.context) : []),
+    decisionDimensions: partial.decisionDimensions ?? (objective === 'decide' ? inferDecisionDimensions(question, partial.context, partial.comparisonOptions ?? []) : []),
     successCriteria: partial.successCriteria ?? defaultSuccessCriteria(objective, partial.comparisonOnly),
     sourcePolicy: partial.sourcePolicy ?? 'prefer_user_sources',
     contextRefs: partial.contextRefs ?? [],
