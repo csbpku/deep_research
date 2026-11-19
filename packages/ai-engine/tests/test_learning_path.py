@@ -382,7 +382,7 @@ def test_an_example_cut_mid_statement_is_closed_at_the_last_statement() -> None:
 def test_self_check_does_not_end_mid_question() -> None:
     text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
         "## 自检\n" + LONG,
-        "## 自检\n\n1. 问题一？\n\n答案一。\n\n2. 问题二？\n\n答案二。\n\n3. 问题三？\n\n答案三。\n",
+        "## 自检\n\n1. 问题一？\n\n答案要点：一。\n\n2. 问题二？\n\n答案要点：二。\n\n3. 问题三？\n\n答案要点：三。\n",
     )
     bounded = enforce_learning_budget(text)
     section = bounded.split("## 自检")[1]
@@ -394,3 +394,13 @@ def test_concept_map_keeps_one_blank_line_before_the_next_heading() -> None:
     text = _doc()
     bounded = enforce_learning_budget(text)
     assert "\n\n\n" not in bounded
+
+
+def test_a_question_without_an_answer_is_counted_as_a_gap() -> None:
+    text = _doc_with_third_bullet("本轮未确认（证据缺口）。").replace(
+        "## 自检\n" + LONG,
+        "## 自检\n\n1. 问题一？\n\n答案要点：一。\n\n2. 问题二？\n\n3. 问题三？\n\n答案要点：三。\n",
+    )
+    bounded = enforce_learning_budget(text)
+    section = bounded.split("## 自检")[1]
+    assert "本轮未确认" in section
