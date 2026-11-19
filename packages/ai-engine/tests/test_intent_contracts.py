@@ -94,3 +94,7 @@ def test_learning_path_contract_is_a_bounded_path() -> None:
     assert "## 常见误区" in contract
     assert "## 自检" in contract
     assert "2,400" in contract
+    # A three-row concept map is the most common "looks complete" failure:
+    # the validator requires 4–6 rows, so the writer must be told it is a hard
+    # requirement rather than "list a few concepts".
+    assert "4–6 行是硬要求" in contract
