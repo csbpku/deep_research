@@ -117,7 +117,12 @@ export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps)
             <Typography component="p" sx={{ fontWeight: 600 }}>
               {index + 1}. {item.question}
             </Typography>
-            {!visible && (
+            {!item.hasAnswer && (
+              <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5 }}>
+                本题缺少答案要点，暂不能自检。
+              </Typography>
+            )}
+            {item.hasAnswer && !visible && (
               <Stack direction="row" spacing={1} sx={{ mt: 0.5, alignItems: 'center', flexWrap: 'wrap' }} aria-label="自评">
                 <Typography variant="caption" color="text.secondary">
                   先想一想，你的把握是？
@@ -134,7 +139,7 @@ export function LearningSelfCheck({ items, researchId }: LearningSelfCheckProps)
                 ))}
               </Stack>
             )}
-            {visible && (
+            {item.hasAnswer && visible && (
               <>
                 {rating && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>

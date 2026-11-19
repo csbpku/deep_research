@@ -2,6 +2,8 @@
 export interface SelfCheckItem {
   question: string;
   answer: string;
+  /** False when the writer shipped a question without an answer. */
+  hasAnswer: boolean;
 }
 
 const SECTION = /^##\s+自检\s*$/mu;
@@ -21,7 +23,10 @@ export function parseSelfCheck(body: string): SelfCheckItem[] {
   let question: string | null = null;
   let answer: string[] = [];
   const flush = () => {
-    if (question) items.push({ question: clean(question), answer: clean(answer.join(' ')) });
+    if (question) {
+      const text = clean(answer.join(' '));
+      items.push({ question: clean(question), answer: text, hasAnswer: text.length > 0 });
+    }
     question = null;
     answer = [];
   };
@@ -41,7 +46,7 @@ export function parseSelfCheck(body: string): SelfCheckItem[] {
     if (question) answer.push(line);
   }
   flush();
-  return items.filter(item => item.question && item.answer);
+  return items.filter(item => item.question);
 }
 
 /** Remove the self-check section so the interactive component owns it. */

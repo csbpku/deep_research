@@ -17,6 +17,7 @@ describe('parseSelfCheck', () => {
   it('parses inline and next-line answers', () => {
     const items = parseSelfCheck(body);
     expect(items).toHaveLength(2);
+    expect(items.every(item => item.hasAnswer)).toBe(true);
     expect(items[0].question).toBe('什么是快照？');
     expect(items[0].answer).toContain('事务状态集合');
     expect(items[1].answer).toContain('标记删除');

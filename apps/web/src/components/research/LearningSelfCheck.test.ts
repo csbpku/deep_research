@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LearningSelfCheck } from './LearningSelfCheck';
 
 const items = [
-  { question: '问题一？', answer: '答案一。' },
-  { question: '问题二？', answer: '答案二。' },
+  { question: '问题一？', answer: '答案一。', hasAnswer: true },
+  { question: '问题二？', answer: '答案二。', hasAnswer: true },
 ];
 
 function render(node: React.ReactElement) {
@@ -22,6 +22,15 @@ describe('LearningSelfCheck', () => {
     expect(html).not.toContain('答案一。');
     expect(html).toContain('你的把握是');
     expect(html).toContain('不确定');
+  });
+
+  it('shows an unanswered question as a stated gap', () => {
+    const html = render(createElement(LearningSelfCheck, {
+      items: [{ question: '问题三？', answer: '', hasAnswer: false }],
+    }));
+    expect(html).toContain('问题三？');
+    expect(html).toContain('本题缺少答案要点');
+    expect(html).not.toContain('你的把握是');
   });
 
   it('renders nothing without items', () => {
