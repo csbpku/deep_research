@@ -33,6 +33,17 @@ describe('parseComparisonMatrix', () => {
     expect(check.unmarked).toEqual([]);
   });
 
+  it('treats a bare source label as a citation', () => {
+    const body = `## 对比矩阵
+
+| 方案 | 死锁 |
+|---|---|
+| A | **有证据**：多锁需统一顺序 S1S3 |
+`;
+    const matrix = parseComparisonMatrix(body);
+    expect(matrix?.rows[0].cells[0]).toMatchObject({ status: 'evidence', citations: ['[S1]', '[S3]'] });
+  });
+
   it('returns null when the section has no table at all', () => {
     expect(parseComparisonMatrix('## 对比矩阵\n\n没有表。')).toBeNull();
   });

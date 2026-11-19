@@ -30,6 +30,14 @@ export interface ComparisonMatrix {
 }
 
 const EVIDENCE = /\[S\d+\]/gu;
+// Writers sometimes emit bare labels ("S1", "S2S3") inside a matrix cell. Treat
+// them as citations instead of silently dropping the evidence and calling the
+// cell "unknown".
+const BARE_CITATION = /(?<![\w[])S\d+(?:S\d+)*/gu;
+
+function bracketBareCitations(cell: string): string {
+  return cell.replace(BARE_CITATION, (match) => match.split(/(?=S\d)/u).map(part => `[${part}]`).join(''));
+}
 const HAS_EVIDENCE = /\[S\d+\]/u;
 const EXPLICIT_GAP = /未知|待实测|未确认|冲突|未找到|无直接证据|未核验|没有证据/u;
 const PARTIAL = /部分|仅覆盖|未完全|尚未|有限/u;
@@ -65,7 +73,7 @@ export function checkComparisonMatrix(body: string): ComparisonMatrixCheck {
   const unmarked: ComparisonMatrixIssue[] = [];
   let rows = 0;
   for (const line of table) {
-    const row = cells(line);
+    const row = cells(line).map(bracketBareCitations);
     if (row.every(cell => /^:?-{2,}:?$/u.test(cell))) continue;
     if (!header) { header = row; continue; }
     rows += 1;
@@ -96,7 +104,7 @@ export function parseComparisonMatrix(body: string): ComparisonMatrix | null {
   const rows: { option: string; cells: ComparisonCell[] }[] = [];
   const counts: Record<ComparisonCellStatus, number> = { evidence: 0, partial: 0, unknown: 0, conflict: 0 };
   for (const line of table) {
-    const row = cells(line);
+    const row = cells(line).map(bracketBareCitations);
     if (row.every(cell => /^:?-{2,}:?$/u.test(cell))) continue;
     if (!header) { header = row; continue; }
     const option = row[0] || `第 ${rows.length + 1} 行`;
