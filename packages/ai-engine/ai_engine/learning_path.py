@@ -578,6 +578,37 @@ def fill_answer_boundary_from_sources(
     return text
 
 
+def normalize_answer_boundary_text(text: str) -> str:
+    """Strip writer scaffolding that leaked into the boundary bullet.
+
+    A sentence lifted from the writer's own draft can still carry "答案要点："
+    and a doubled "；。". Those are artifacts of the upstream format, not
+    content, so remove them even when the bullet otherwise reads as a boundary.
+    """
+    parts = re.split(r"^(##[ \t]+90 秒回答)[ \t]*$", text, flags=re.MULTILINE)
+    if len(parts) < 3:
+        return text
+    body = parts[2]
+    end = body.find("\n## ")
+    section, rest = (body, "") if end == -1 else (body[:end], body[end:])
+    lines = section.splitlines()
+    changed = False
+    for index, line in enumerate(lines):
+        if not line.startswith("- 什么时候不要用："):
+            continue
+        prefix, value = line.split("：", 1)
+        cleaned = re.sub(r"^\s*答案要点[:：]\s*", "", value)
+        cleaned = re.sub(r"[，；]+。", "。", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        if cleaned != value:
+            lines[index] = f"{prefix}：{cleaned}"
+            changed = True
+    if not changed:
+        return text
+    parts[2] = "\n".join(lines) + ("\n\n" + rest.lstrip("\n") if rest else "\n")
+    return "".join(parts)
+
+
 def enforce_answer_boundary(text: str) -> str:
     """Make the third opening bullet an actual abstention, or a stated gap.
 
@@ -667,5 +698,6 @@ def enforce_learning_budget(text: str) -> str:
         bounded = "".join(chunks)
     bounded = reconcile_answer_shape(enforce_answer_shape(bounded))
     bounded = ensure_example_expectation(repair_truncated_example(bounded))
+    bounded = normalize_answer_boundary_text(bounded)
     bounded = re.sub(r"\n{3,}", "\n\n", bounded)
     return enforce_answer_boundary(bounded)

@@ -433,3 +433,12 @@ def test_a_source_boundary_drops_writer_labels_and_stray_punctuation() -> None:
     assert "答案要点" not in line
     assert "；。" not in line
     assert line.endswith("。[S1]")
+
+
+def test_boundary_scaffolding_is_removed_even_when_the_sentence_is_valid() -> None:
+    text = _doc_with_third_bullet("答案要点：若 xmin 被卡住，参数调整无法解除阻塞；。[S1]")
+    bounded = enforce_learning_budget(text)
+    line = next(line for line in bounded.splitlines() if line.startswith("- 什么时候不要用"))
+    assert "答案要点" not in line
+    assert "；。" not in line
+    assert line.endswith("。[S1]")
