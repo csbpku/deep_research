@@ -257,6 +257,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
         if (!editedBriefRef.current && data.brief.objective === 'decide') {
           decisionDimensionsRef.current = data.brief.decisionDimensions ?? [];
           setDimensionDraft(decisionDimensionsRef.current);
+        } else if (data.brief.objective === 'decide' && dimensionDraft.length === 0 && decisionDimensionsRef.current.length > 0) {
+          setDimensionDraft(decisionDimensionsRef.current);
         }
         const edited = editedBriefRef.current;
         if (edited?.brief?.question === trimmed) {

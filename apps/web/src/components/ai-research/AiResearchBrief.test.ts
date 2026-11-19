@@ -410,6 +410,21 @@ describe('AI research brief client request races', () => {
     expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ decisionDimensions: ['成本', '迁移成本'] });
   });
 
+  it('restores the edited comparison dimensions after a detour into learning', async () => {
+    const { brief, requests, ready } = setup();
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) {
+      const plan = planResponse('Key-value store comparison');
+      respond(request, request.url.endsWith('/plan') ? { ...plan, brief: { ...plan.brief, objective: 'decide', comparisonOptions: ['A', 'B'], decisionDimensions: ['成本', '性能'] } } : { items: [] });
+    }
+    await vi.advanceTimersByTimeAsync(0); brief.flush();
+    brief.removeDimension('性能');
+    brief.changeObjective('learn');
+    expect(ready.mock.calls.at(-1)![0].brief.decisionDimensions).toEqual([]);
+    brief.changeObjective('decide');
+    expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ decisionDimensions: ['成本'] });
+  });
+
   it('keeps an explicitly edited question when switching to decision research', async () => {
     const { brief, requests, ready } = setup();
     await vi.advanceTimersByTimeAsync(300);
