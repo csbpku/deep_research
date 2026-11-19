@@ -258,31 +258,28 @@ def _trim_self_check(content: str, cap: int) -> str:
 def _trim_layered_section(content: str, cap: int) -> str:
     """Keep all three layers, shrinking each instead of deleting the tail.
 
-    Dropping trailing paragraphs can leave ``### 第二层`` with no body at all:
-    the heading survives the cut while its explanation does not, so the page
-    claims a layered explanation but delivers one layer. Budget per layer and
-    always keep at least one paragraph under each.
+    Dropping trailing paragraphs can leave ``### 第二层`` with no body at all,
+    or remove the heading entirely: the page then claims a layered explanation
+    but delivers one layer. Name every missing layer with a stated gap and
+    budget each one so the structure survives the cut.
     """
     parts = re.split(r"(?m)^(###\s+.+)$", content)
-    if len(parts) < 5:
-        kept = _drop_trailing_paragraphs(content, cap)
-        return kept if kept.strip() else _cut_text(content, cap) + "\n"
-    layers = [(parts[i], parts[i + 1]) for i in range(1, len(parts), 2)]
-    if len(content) <= cap and all(body.strip() for _, body in layers):
-        return content
+    lead = parts[0].strip()
+    layers = [(parts[index], parts[index + 1]) for index in range(1, len(parts), 2)]
+    for expected in ("第一层", "第二层", "第三层"):
+        if not any(expected in heading for heading, _ in layers):
+            layers.append((f"### {expected}", ""))
     budget = max(60, (cap - 24) // len(layers) - 8)
     rendered = []
     for heading, body in layers:
-        text = body.strip()
-        if not text:
-            # A heading with no body is worse than a stated gap: the page
-            # promises a layer and delivers nothing. Say so instead of
-            # pretending the structure is complete.
-            text = _EMPTY_LAYER_GAP
-        elif len(text) > budget:
+        # A heading with no body is worse than a stated gap: the page promises
+        # a layer and delivers nothing.
+        text = body.strip() or _EMPTY_LAYER_GAP
+        if len(text) > budget:
             text = _cut_text(text, budget).rstrip()
         rendered.append(f"{heading.strip()}\n\n{text}\n")
-    text = "\n\n" + "\n".join(rendered)
+    prefix = f"\n\n{lead}\n\n" if lead else "\n\n"
+    text = prefix + "\n".join(rendered)
     return text if len(text) <= cap else text[:cap].rstrip() + "\n"
 
 
