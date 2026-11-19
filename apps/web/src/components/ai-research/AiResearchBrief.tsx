@@ -658,6 +658,25 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
               ) : null}
 
               {objective === 'decide' ? (
+                <Box component="label" sx={{ display: 'grid', gap: 1 }}>
+                  <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>对比对象</Typography>
+                  <TextField
+                    fullWidth
+                    multiline
+                    value={comparisonText}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setComparisonText(next);
+                      publishPlan({ nextComparisonText: next });
+                    }}
+                    rows={2}
+                    placeholder="例如：Claude Research\nGemini Deep Research\nChatGPT Deep Research"
+                    aria-label="研究对比对象"
+                    sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
+                  />
+                </Box>
+              ) : null}
+              {objective === 'decide' ? (
                 <Box component="section" aria-label="对比维度" sx={{ display: 'grid', gap: 1 }}>
                   <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>对比维度</Typography>
                   <Typography component="span" variant="metadata" sx={{ color: 'text.secondary', lineHeight: 1.6 }}>
@@ -706,25 +725,6 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ou
                 </Box>
               ) : null}
 
-              {objective === 'decide' ? (
-                <Box component="label" sx={{ display: 'grid', gap: 1 }}>
-                  <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>对比对象</Typography>
-                  <TextField
-                    fullWidth
-                    multiline
-                    value={comparisonText}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      setComparisonText(next);
-                      publishPlan({ nextComparisonText: next });
-                    }}
-                    rows={2}
-                    placeholder="例如：Claude Research\nGemini Deep Research\nChatGPT Deep Research"
-                    aria-label="研究对比对象"
-                    sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
-                  />
-                </Box>
-              ) : null}
             </Box>
 
             {advancedControls ? (
