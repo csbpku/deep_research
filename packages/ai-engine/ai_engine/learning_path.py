@@ -164,13 +164,13 @@ def _trim_layered_section(content: str, cap: int) -> str:
     claims a layered explanation but delivers one layer. Budget per layer and
     always keep at least one paragraph under each.
     """
-    if len(content) <= cap:
-        return content
     parts = re.split(r"(?m)^(###\s+.+)$", content)
     if len(parts) < 5:
         kept = _drop_trailing_paragraphs(content, cap)
         return kept if kept.strip() else _cut_text(content, cap) + "\n"
     layers = [(parts[i], parts[i + 1]) for i in range(1, len(parts), 2)]
+    if len(content) <= cap and all(body.strip() for _, body in layers):
+        return content
     budget = max(60, (cap - 24) // len(layers) - 8)
     rendered = []
     for heading, body in layers:
