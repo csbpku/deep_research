@@ -99,6 +99,15 @@ function briefInstruction(brief: ResearchBrief | undefined): string {
           ...brief.decisionDimensions.map((item) => `  - ${item}`),
         ]
       : []),
+    ...(brief.objective === 'learn'
+      ? [
+          '- 学习产物首屏必须写成三行，每行一句：',
+          '  - 是什么：…',
+          '  - 什么时候用：…',
+          '  - 什么时候不要用：…',
+          '- “什么时候不要用”必须写成“当 … 时不要…”或直接禁止动作；没有证据就写“本轮未确认（证据缺口）”，不要拿局限冒充边界。',
+        ]
+      : []),
     ...(brief.constraints.length > 0
       ? ['- 已知约束：', ...brief.constraints.map((item) => `  - ${item}`)]
       : []),

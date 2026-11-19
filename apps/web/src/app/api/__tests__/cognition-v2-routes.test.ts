@@ -221,6 +221,19 @@ describe('POST /api/ai-research — V2 brief forwarding', () => {
     expect(upstreamBody.context).toContain('索引差异是什么');
     expect(upstreamBody.context).toContain('团队已用 PG 15');
 
+    // A learning plan must reach the writer as an explicit three-line
+    // contract; otherwise the first screen is left to the model's discretion.
+    const learnBrief = { ...brief, objective: 'learn' as const, question: '学习 PostgreSQL MVCC' };
+    mocks.aiJobCreate.mockResolvedValueOnce({ id: 'job-learn' });
+    await POST(req('http://localhost/api/ai-research', { brief: learnBrief }) as never);
+    const learnCall = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => JSON.parse(String((call[1] as RequestInit).body)) as { topic?: string; context?: string })
+      .find(body => body.topic === '学习 PostgreSQL MVCC')!;
+    const learnBody = learnCall;
+    expect(learnBody.context).toContain('- 是什么：');
+    expect(learnBody.context).toContain('- 什么时候不要用：');
+    expect(learnBody.context).toContain('不要拿局限冒充边界');
+
     // 2. primaryTopicId 触发 TopicFollow upsert
     expect(mocks.topicFollowUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
