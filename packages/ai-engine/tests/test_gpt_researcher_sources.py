@@ -2177,6 +2177,22 @@ async def test_brief_preserves_spent_tokens_after_later_failure_or_cancellation(
     assert (job.token_in, job.token_out) == (23, 7)
 
 
+def test_comparison_matrix_cells_keep_citations_as_plain_labels() -> None:
+    sources = [
+        _source("https://example.com/one", "A very long official guide title", "Captured one."),
+    ]
+
+    materialized = _materialize_evidence_citations(
+        "| A | 有证据 [S1] |",
+        sources,
+        compact=True,
+        plain_matrix=True,
+    )
+
+    assert "有证据 S1 |" in materialized
+    assert "](https://example.com/one)" not in materialized
+
+
 def test_adjacent_materialized_citations_are_separated() -> None:
     sources = [
         _source("https://example.com/one", "One guide", "Captured one."),

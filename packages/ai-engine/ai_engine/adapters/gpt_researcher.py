@@ -3735,6 +3735,7 @@ def _materialize_evidence_citations(
     sources: list[AdapterSource],
     *,
     compact: bool = False,
+    plain_matrix: bool = False,
 ) -> str:
     """Turn writer-produced evidence ids into deterministic Markdown links."""
     captured = _captured_sources(sources)
@@ -3751,6 +3752,8 @@ def _materialize_evidence_citations(
         value = ref.get("value")
         title = " ".join((source.title or f"来源 S{index}").split())[:120]
         if isinstance(value, str) and _is_web_source_url(value):
+            if plain_matrix:
+                return f"S{index}"
             label = f"S{index}" if compact else title
             return f"[{label}]({value})"
         return f"（{title}，来源 S{index}）"
@@ -5099,6 +5102,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 sources,
                 compact=job.request.objective in {"learn", "investigate", "explore"}
                 or job.request.report_type == "comparison_matrix",
+                plain_matrix=job.request.report_type == "comparison_matrix",
             )
             report = _clean_report_output(report, sources)
             if job.request.report_type == "comparison_matrix":
@@ -5147,6 +5151,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 sources,
                 compact=job.request.objective in {"learn", "investigate", "explore"}
                 or job.request.report_type == "comparison_matrix",
+                plain_matrix=job.request.report_type == "comparison_matrix",
             )
             report = _clean_report_output(report, sources)
             if job.request.report_type == "learning_path":
