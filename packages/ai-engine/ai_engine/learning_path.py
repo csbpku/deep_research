@@ -237,11 +237,11 @@ _PROHIBITION = re.compile(r"不要|不应|不适合|不宜|避免|禁用|不建�
 # ("when X") or a direct prohibition ("do not do Y"). A bare limitation
 # ("VACUUM does not return space to the OS") is a trade-off, not a boundary.
 _BOUNDARY_CONDITION = re.compile(r"当|如果|若|一旦|在[^，。]{0,30}(?:时|情况下)|只在")
-_DIRECT_PROHIBITION = re.compile(r"不要|不应|不宜|避免|禁用|不建议|仅适合|只适合")
+_DIRECT_PROHIBITION = re.compile(r"不要|不应|不宜|避免|不建议|仅适合|只适合")
 
 
 def is_boundary_statement(claim: str) -> bool:
-    text = claim.strip()
+    text = re.sub(r"^\s*答案要点[:：]\s*", "", claim).strip()
     if not text or any(marker in text for marker in _GAP_MARKERS):
         return False
     if _DIRECT_PROHIBITION.search(text):

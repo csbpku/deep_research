@@ -295,3 +295,11 @@ def test_a_conditional_boundary_survives() -> None:
     text = _doc_with_third_bullet("当长事务阻塞 xmin 视界时，不要继续提高 autovacuum 力度。")
     bounded = enforce_learning_budget(text)
     assert "当长事务阻塞 xmin 视界时" in bounded
+
+
+def test_a_disabled_setting_is_not_a_direct_prohibition() -> None:
+    text = _doc_with_third_bullet(
+        "答案要点：还要依次检查表级禁用、锁等待和旧快照阻塞。"
+    )
+    bounded = enforce_learning_budget(text)
+    assert "本轮未确认（证据缺口）" in bounded
