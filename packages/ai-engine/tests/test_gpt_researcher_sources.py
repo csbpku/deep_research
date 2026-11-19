@@ -2189,7 +2189,7 @@ def test_comparison_matrix_cells_keep_citations_as_plain_labels() -> None:
         plain_matrix=True,
     )
 
-    assert "有证据 S1 |" in materialized
+    assert "有证据 [S1] |" in materialized
     assert "](https://example.com/one)" not in materialized
 
 

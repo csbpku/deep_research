@@ -38,18 +38,33 @@ function cells(line: string): string[] {
   return line.trim().replace(/^\|/u, '').replace(/\|$/u, '').split('|').map(cell => cell.trim());
 }
 
+function firstTableLines(lines: string[], start: number): string[] {
+  const table: string[] = [];
+  for (let index = start + 1; index < lines.length; index++) {
+    const raw = lines[index];
+    const line = raw.trim();
+    if (line.startsWith('|')) {
+      table.push(line);
+      continue;
+    }
+    if (table.length === 0 && line === '') continue;
+    // A second table after a blank line or prose is a different artifact:
+    // only the first table is the matrix.
+    break;
+  }
+  return table;
+}
+
 export function checkComparisonMatrix(body: string): ComparisonMatrixCheck {
   const lines = String(body ?? '').split(/\r?\n/u);
   const start = lines.findIndex(line => /^##\s+对比矩阵\s*$/u.test(line.trim()));
   if (start < 0) return { present: false, rows: 0, columns: 0, unmarked: [] };
 
+  const table = firstTableLines(lines, start);
   let header: string[] | null = null;
   const unmarked: ComparisonMatrixIssue[] = [];
   let rows = 0;
-  for (let index = start + 1; index < lines.length; index++) {
-    const line = lines[index].trim();
-    if (line.startsWith('## ')) break;
-    if (!line.startsWith('|')) continue;
+  for (const line of table) {
     const row = cells(line);
     if (row.every(cell => /^:?-{2,}:?$/u.test(cell))) continue;
     if (!header) { header = row; continue; }
@@ -76,13 +91,11 @@ export function parseComparisonMatrix(body: string): ComparisonMatrix | null {
   const lines = String(body ?? '').split(/\r?\n/u);
   const start = lines.findIndex(line => /^##\s+对比矩阵\s*$/u.test(line.trim()));
   if (start < 0) return null;
+  const table = firstTableLines(lines, start);
   let header: string[] | null = null;
   const rows: { option: string; cells: ComparisonCell[] }[] = [];
   const counts: Record<ComparisonCellStatus, number> = { evidence: 0, partial: 0, unknown: 0, conflict: 0 };
-  for (let index = start + 1; index < lines.length; index++) {
-    const line = lines[index].trim();
-    if (line.startsWith('## ')) break;
-    if (!line.startsWith('|')) continue;
+  for (const line of table) {
     const row = cells(line);
     if (row.every(cell => /^:?-{2,}:?$/u.test(cell))) continue;
     if (!header) { header = row; continue; }

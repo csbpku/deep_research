@@ -3753,7 +3753,7 @@ def _materialize_evidence_citations(
         title = " ".join((source.title or f"来源 S{index}").split())[:120]
         if isinstance(value, str) and _is_web_source_url(value):
             if plain_matrix:
-                return f"S{index}"
+                return f"[S{index}]"
             label = f"S{index}" if compact else title
             return f"[{label}]({value})"
         return f"（{title}，来源 S{index}）"
