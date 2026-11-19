@@ -19,7 +19,7 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { ResearchAdvancedSettings, ResearchOutputPicker } from './ResearchConfirmationControls';
-import { readResearchDraft, writeResearchDraft } from '@/lib/ai-research-state';
+import { defaultReportTypeForBrief, readResearchDraft, writeResearchDraft } from '@/lib/ai-research-state';
 import { InlineAiResearchStatus } from '@/components/ai-research/InlineAiResearchStatus';
 import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiResearchBrief';
 import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
@@ -392,7 +392,7 @@ export function AiResearchConversation({
   // pick wins, and a late re-render must never reset it.
   function applyIntentDefault(next: BriefValue | null) {
     if (!next?.objective || reportTypeTouchedRef.current) return;
-    setReportType(next.brief?.comparisonOnly ? 'comparison_matrix' : next.objective === 'decide' ? 'decision_memo' : 'research_report');
+    setReportType(defaultReportTypeForBrief(next.brief ?? { objective: next.objective }));
   }
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

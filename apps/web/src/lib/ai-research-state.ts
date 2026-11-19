@@ -12,6 +12,21 @@ export type ResearchDraft = {
   brief: BriefValue | null;
 };
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem'>;
+
+/**
+ * A confirmed intent owns the artifact. Picking the output control for the
+ * user is only safe because they can still override it; what is not safe is
+ * starting a learning plan on a 20k-character report by default.
+ */
+export function defaultReportTypeForBrief(
+  brief: { objective?: string | null; comparisonOnly?: boolean | null } | null | undefined,
+): ResearchDraft['reportType'] {
+  if (!brief?.objective) return 'research_report';
+  if (brief.comparisonOnly) return 'comparison_matrix';
+  if (brief.objective === 'decide') return 'decision_memo';
+  if (brief.objective === 'learn') return 'learning_path';
+  return 'research_report';
+}
 const keyFor = (userId: string, conversationId: string) => `ai-research-draft:v1:${userId}:${conversationId}`;
 
 export function formatResearchRelativeTime(iso: string | null, now = Date.now()): string {
