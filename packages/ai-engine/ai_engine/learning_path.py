@@ -225,7 +225,6 @@ def _trim_self_check(content: str, cap: int) -> str:
         missing = "\n\n" + "\n\n".join(
             f"{index}. 本轮未确认（自检题未生成）。" for index in range(len(starts) + 1, 4)
         )
-        room = max(0, cap - len(missing) - 1)
         base = content.rstrip()
         if len(base) + len(missing) + 1 <= cap:
             return base + missing + "\n"
