@@ -388,3 +388,9 @@ def test_self_check_does_not_end_mid_question() -> None:
     section = bounded.split("## 自检")[1]
     assert section.count("问题") >= 3
     assert "3. 问题三？" in section
+
+
+def test_concept_map_keeps_one_blank_line_before_the_next_heading() -> None:
+    text = _doc()
+    bounded = enforce_learning_budget(text)
+    assert "\n\n\n" not in bounded

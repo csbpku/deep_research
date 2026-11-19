@@ -621,4 +621,5 @@ def enforce_learning_budget(text: str) -> str:
         bounded = "".join(chunks)
     bounded = reconcile_answer_shape(enforce_answer_shape(bounded))
     bounded = ensure_example_expectation(repair_truncated_example(bounded))
+    bounded = re.sub(r"\n{3,}", "\n\n", bounded)
     return enforce_answer_boundary(bounded)
