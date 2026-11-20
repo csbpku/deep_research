@@ -16,6 +16,7 @@
 import React, { useCallback, useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { staleDays, staleness } from '@/lib/search/judgement-age';
 import { Search as SearchIcon } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
@@ -38,6 +39,14 @@ interface SearchRow {
   title: string;
   snippet: string;
   highlighted: string;
+  judgementMatch?: string | null;
+  bodyPreview?: string | null;
+  judgementConfidence?: 'low' | 'medium' | 'high' | null;
+  judgementScope?: string | null;
+  judgementStale?: boolean;
+  judgementReviewAt?: string | null;
+  matchReasons?: Array<'judgement' | 'title' | 'tag'>;
+  matchReason?: 'judgement' | 'title' | 'tag' | null;
   publishedAt: string;
   rank: number;
   isPrivate: boolean;
@@ -53,6 +62,33 @@ interface SearchResponse {
 
 // Preserve the existing URL/API contract: all is omitted from requests.
 const ALL = 'all';
+
+/** Keep the preview short enough to stay a preview, not a second result body. */
+function previewText(text: string, limit = 160): string {
+  const flat = text
+    .replace(/^\s*>\s?/gmu, '')
+    .replace(/^\s*#{1,6}\s+/gmu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+}
+
+/** Highlight the user's query in the judgement without trusting model text as HTML. */
+function highlightQuery(text: string, query: string): React.ReactNode {
+  const needle = query.trim();
+  if (!needle) return text;
+  const index = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (index < 0) return text;
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark>{text.slice(index, index + needle.length)}</mark>
+      {text.slice(index + needle.length)}
+    </>
+  );
+}
+
+const CONFIDENCE_LABELS: Record<string, string> = { low: '低', medium: '中', high: '高' };
 
 const TYPE_TABS: Array<{ key: string; label: string }> = [
   { key: ALL, label: '全部' },
@@ -280,12 +316,58 @@ function SearchContent() {
                             {row.title}
                           </Link>
                         </h2>
-                        {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
-                            并在返回前转义来源文本，只保留高亮标签。 */}
-                        <p
-                          className={styles.snippet}
-                          dangerouslySetInnerHTML={{ __html: row.highlighted }}
-                        />
+                        {/* 先解释为什么命中，再给出高亮片段；正文命中是默认情况。 */}
+                        {row.matchReasons?.includes('judgement') && row.judgementMatch ? (
+                          <>
+                            <p className={styles.snippet}>
+                              <span className={styles.judgementLabel}>判断命中：</span>
+                              <span>{highlightQuery(row.judgementMatch, submittedQ)}</span>
+                            </p>
+                            {row.judgementStale ? (
+                              <p className={staleness(row.judgementReviewAt) === 'abandoned' ? styles.abandoned : styles.stale}>
+                                {staleness(row.judgementReviewAt) === 'abandoned' ? '已长期未复核' : '判断已过期'}
+                                {staleDays(row.judgementReviewAt) > 0 ? ` ${staleDays(row.judgementReviewAt)} 天` : ''}，仅供历史参考；使用前请先复核。
+                                {' '}
+                                <Link href={`${detailHref(row)}#knowledge-judgement`} className={styles.staleAction}>
+                                  去复查
+                                </Link>
+                              </p>
+                            ) : null}
+                            <p className={styles.reason}>
+                              <span className={styles.judgementLabel}>判断可信度：</span>
+                              {CONFIDENCE_LABELS[row.judgementConfidence ?? 'medium'] ?? '中'}
+                              {row.judgementScope ? ` · 适用边界：${row.judgementScope}` : ''}
+                            </p>
+                            {row.bodyPreview ? (
+                              <div className={styles.preview}>{previewText(row.bodyPreview)}</div>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            {row.matchReasons?.includes('title') ? (
+                              <p className={styles.reason}>
+                                <span className={styles.judgementLabel}>标题命中：</span>
+                                标题包含「{submittedQ}」
+                              </p>
+                            ) : null}
+                            {row.matchReasons?.includes('tag') ? (
+                              <p className={styles.reason}>
+                                <span className={styles.judgementLabel}>标签命中：</span>
+                                标签包含「{submittedQ}」
+                              </p>
+                            ) : null}
+                            {!row.matchReasons?.length && row.highlighted.includes('<mark>') ? (
+                              <p className={styles.reason}>
+                                <span className={styles.judgementLabel}>正文命中：</span>
+                                摘录包含「{submittedQ}」
+                              </p>
+                            ) : null}
+                            <p
+                              className={styles.snippet}
+                              dangerouslySetInnerHTML={{ __html: row.highlighted }}
+                            />
+                          </>
+                        )}
                         <time className={styles.date} dateTime={row.publishedAt}>
                           {new Date(row.publishedAt).toLocaleString('zh-CN')}
                         </time>
