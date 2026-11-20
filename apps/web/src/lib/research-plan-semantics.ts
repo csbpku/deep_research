@@ -7,7 +7,10 @@ function cleanOption(value: string): string {
   return value
     .replace(/^\s*and\s+/iu, '')
     // Scenario and requested comparison dimensions are not part of a name.
-    .replace(/\s+(?:在|针对|面向|用于|for\b|in\b)\s*.+$/iu, '')
+    // English markers stay case-sensitive so SQL names such as "SELECT FOR
+    // UPDATE" keep their keywords instead of being cut at "FOR".
+    .replace(/\s+(?:在|针对|面向|用于)\s*.+$/u, '')
+    .replace(/\s+(?:for|in)\s+.+$/u, '')
     .replace(/\s*的(?:工程取舍|研究过程|研究能力|产品能力|适用|异常|取消|优劣|区别|差异|选择|机制|行为|成本|性能).*/u, '')
     .replace(/\s*(?:工程取舍|研究过程(?:设计)?|研究能力|产品能力|优劣|区别|差异|对比|比较)$/iu, '')
     .replace(/^[“"'「『]|[”"'」』。！？!?\.]+$/gu, '')
@@ -64,7 +67,8 @@ export function inferComparisonOptions(question: string): string[] {
   const namedPart = comparison.split(/，|,/u)
     .filter((part) => !INSTRUCTION.test(part.trim()))
     .join('、')
-    .replace(/\s+(?:在|针对|面向|用于|for\b|in\b)\s*.+$/iu, '')
+    .replace(/\s+(?:在|针对|面向|用于)\s*.+$/u, '')
+    .replace(/\s+(?:for|in)\s+.+$/u, '')
     .replace(/\s*的(?:工程取舍|研究过程|研究能力|产品能力|适用|异常|取消|优劣|区别|差异|选择|机制|行为|成本|性能).*/u, '');
   const options = Array.from(new Set(splitNamedItems(namedPart)
     .map(cleanOption)
@@ -89,16 +93,31 @@ const DIMENSION_SIGNALS: ReadonlyArray<readonly [string, RegExp]> = [
 ];
 
 /** Defaults are suggestions; operational gates are added only for requested topics. */
-export function inferDecisionDimensions(question: string, context = ''): string[] {
+export function inferDecisionDimensions(
+  question: string,
+  context = '',
+  options: string[] = [],
+): string[] {
   const exclusions: string[] = [];
   const relevant = `${question}\n${context}`.replace(
     /(?:不(?:需要|讨论|考虑|关注|比较|涉及|展开|延伸|扩展|涵盖|纳入)|无需|不要)(?!忽略|遗漏)[^。；;\n]*?(?=但是|但|不过|然而|同时|而且|并且|\bbut\b|\bhowever\b|[。；;\n]|$)/gu,
     (excluded) => { exclusions.push(excluded); return ''; },
   );
-  const inferred = DIMENSION_SIGNALS.filter(([, signal]) => signal.test(relevant)).map(([dimension]) => dimension);
-  if (inferred.length > 0) return inferred;
   const excludedDimensions = new Set(DIMENSION_SIGNALS
     .filter(([, signal]) => exclusions.some((excluded) => signal.test(excluded)))
     .map(([dimension]) => dimension));
-  return DEFAULT_RESEARCH_DECISION_DIMENSIONS.filter((dimension) => !excludedDimensions.has(dimension));
+  const inferred = DIMENSION_SIGNALS.filter(([, signal]) => signal.test(relevant))
+    .map(([dimension]) => dimension)
+    .filter((dimension) => !excludedDimensions.has(dimension));
+  if (inferred.length === 0) {
+    const base = options.length >= 2
+      ? ['效果与适用范围', '安全与风险', '可运维性']
+      : [...DEFAULT_RESEARCH_DECISION_DIMENSIONS];
+    return base.filter((dimension) => !excludedDimensions.has(dimension));
+  }
+  if (options.length >= 2 && inferred.length < 3 && exclusions.length === 0) {
+    const fallbacks = ['效果与适用范围', '安全与风险', '可运维性', '成本与资源'];
+    return Array.from(new Set([...inferred, ...fallbacks])).slice(0, 3);
+  }
+  return inferred;
 }
