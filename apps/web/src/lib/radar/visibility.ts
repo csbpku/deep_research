@@ -3,10 +3,37 @@
 // 规则与详情页一致：
 //   - 仅自动雷达（daily + syncRunId）或已审核通过的用户分享；
 //   - 非 admin：未评分 / noise / 无 tier 一律隐藏；
-//   - 非 admin：自动雷达的高价值（collection/deep_read）需 enrichment、reader 质量、
-//     内容审核全部通过（external_reading 除外）。
+//   - 非 admin：自动雷达的高价值（collection/deep_read）需 enrichment、reader 质量，
+//     以及可公开摘要的审核状态（external_reading 除外）；正文公开另行判断。
 
+import type { Prisma } from '@prisma/client';
 import { hasPublicRadarScore } from './score-validity';
+
+type RadarReviewInput = {
+  enrichmentStatus?: string | null;
+  readerQualityStatus?: string | null;
+  contentReviewStatus?: string | null;
+  renderReviewStatus?: string | null;
+};
+
+/** Public summaries and shared consumers (bookmarks/chat) use the same gate. */
+export const RADAR_PUBLIC_REVIEW_WHERE = {
+  enrichmentStatus: 'ready',
+  readerQualityStatus: 'ready',
+  OR: [
+    { contentReviewStatus: 'approved' },
+    { contentReviewStatus: null },
+    { contentReviewStatus: 'needs_manual_review', renderReviewStatus: 'approved' },
+  ],
+} satisfies Prisma.SummaryWhereInput;
+
+export function hasPublicRadarReview(summary: RadarReviewInput): boolean {
+  return summary.enrichmentStatus === 'ready'
+    && summary.readerQualityStatus === 'ready'
+    && (summary.contentReviewStatus === 'approved'
+      || summary.contentReviewStatus === null
+      || (summary.contentReviewStatus === 'needs_manual_review' && summary.renderReviewStatus === 'approved'));
+}
 
 export type RadarVisibilityInput = {
   source: string;
@@ -15,10 +42,7 @@ export type RadarVisibilityInput = {
   distilledScore?: unknown;
   distilledTier?: string | null;
   tags?: string[] | null;
-  enrichmentStatus?: string | null;
-  readerQualityStatus?: string | null;
-  contentReviewStatus?: string | null;
-};
+} & RadarReviewInput;
 
 export const radarVisibilitySelect = {
   id: true,
@@ -31,6 +55,7 @@ export const radarVisibilitySelect = {
   enrichmentStatus: true,
   readerQualityStatus: true,
   contentReviewStatus: true,
+  renderReviewStatus: true,
 } as const;
 
 export function isRadarSource(summary: Pick<RadarVisibilityInput, 'source' | 'syncRunId' | 'shareSource'>): boolean {
@@ -50,6 +75,19 @@ export function radarTier(summary: Pick<RadarVisibilityInput, 'distilledScore' |
   return null;
 }
 
+/** Summary visibility never grants access to an unapproved cached source. */
+export function requiresRadarSummaryOnlyReading(
+  summary: Pick<RadarVisibilityInput, 'distilledScore' | 'distilledTier' | 'contentReviewStatus'>,
+): boolean {
+  return radarTier(summary) !== 'skim' && summary.contentReviewStatus !== 'approved';
+}
+
+export function redactsRadarCachedContent(
+  summary: Pick<RadarVisibilityInput, 'distilledScore' | 'distilledTier' | 'contentReviewStatus' | 'tags'>,
+): boolean {
+  return Boolean(summary.tags?.includes('external_reading')) || requiresRadarSummaryOnlyReading(summary);
+}
+
 export function isRadarSummaryVisible(summary: RadarVisibilityInput, isAdmin: boolean): boolean {
   if (!isRadarSource(summary)) return false;
   if (isAdmin) return true;
@@ -62,11 +100,7 @@ export function isRadarSummaryVisible(summary: RadarVisibilityInput, isAdmin: bo
   if (
     highValue
     && !externalReading
-    && !(
-      summary.enrichmentStatus === 'ready'
-      && summary.readerQualityStatus === 'ready'
-      && summary.contentReviewStatus === 'approved'
-    )
+    && !hasPublicRadarReview(summary)
   ) return false;
   return true;
 }
@@ -80,6 +114,9 @@ export function canSeedChatFromSummary(
   isAdmin: boolean,
 ): boolean {
   if (summary.status === 'archived') return false;
-  if (isRadarSource(summary)) return isRadarSummaryVisible(summary, isAdmin);
+  if (isRadarSource(summary)) {
+    return isRadarSummaryVisible(summary, isAdmin)
+      && (isAdmin || !requiresRadarSummaryOnlyReading(summary) || Boolean(summary.tags?.includes('external_reading')));
+  }
   return summary.status === 'published';
 }
