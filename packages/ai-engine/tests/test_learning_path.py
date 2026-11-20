@@ -302,6 +302,56 @@ def test_the_word_wraparound_is_not_itself_a_negative_outcome() -> None:
     assert "未冻结行龄驱动" not in opening
 
 
+def test_the_page_budget_never_empties_the_concept_map() -> None:
+    rows = "\n".join(
+        f"| C{i} | 概念 {i} 的机制说明足够长以占用预算 | C{i} 与 C{i + 1} 通过共享状态关联 |"
+        for i in range(1, 6)
+    )
+    text = f"""## 90 秒回答
+
+- 是什么：x。
+- 什么时候用：y。
+- 什么时候不要用：当长事务阻塞清理时，不要继续调参。[S1]
+
+## 概念图
+
+| 核心概念 | 含义 | 关系 |
+|---|---|---|
+{rows}
+
+## 分层解释
+
+### 第一层
+{'很长的解释。' * 200}
+
+### 第二层
+{'很长的解释。' * 200}
+
+### 第三层
+{'很长的解释。' * 200}
+
+## 可运行示例
+
+```sql
+SELECT 1;
+```
+
+**预期输出：** 本轮未确认。
+
+## 常见误区
+
+- 误区：a → 实际情况：b。[S1]
+
+## 自检
+
+1. **问：a？**
+   答案要点：b。[S1]
+"""
+    out = enforce_learning_budget(text)
+    section = out.split("## 概念图")[1].split("## 分层解释")[0]
+    assert sum(1 for line in section.splitlines() if line.startswith("| C")) == 5
+
+
 def test_a_conditional_boundary_survives() -> None:
     text = _doc_with_third_bullet("当长事务阻塞 xmin 视界时，不要继续提高 autovacuum 力度。")
     bounded = enforce_learning_budget(text)

@@ -696,10 +696,13 @@ def enforce_learning_budget(text: str) -> str:
     # explanatory section until the whole path fits, never dropping a heading.
     while len(bounded) > MAX_CHARS:
         chunks = re.split(r"^(##\s+.+)$", bounded, flags=re.MULTILINE)
+        # Never pick the concept map here: character-trimming a table keeps
+        # the header and drops the rows, which is exactly the empty map the
+        # publish gate rejects. ``_trim_concept_map`` owns that section.
         candidates = [
             (len(chunks[index + 1]), index)
             for index in range(1, len(chunks), 2)
-            if chunks[index].strip().lstrip("#").strip() in {"分层解释", "概念图", "常见误区"}
+            if chunks[index].strip().lstrip("#").strip() in {"分层解释", "常见误区"}
         ]
         if not candidates:
             break
