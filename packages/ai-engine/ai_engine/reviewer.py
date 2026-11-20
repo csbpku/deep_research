@@ -1811,8 +1811,13 @@ async def _adjudicate_batch_with_split(
                     revision_instructions=tuple(dict.fromkeys(
                         (*result.revision_instructions, *recovered.revision_instructions)
                     )),
-                    coverage_status="complete",
-                ), None
+                    coverage_status=(
+                        "insufficient"
+                        if recovered.coverage_status == "insufficient"
+                        or any(claim.judgment_status in {"execution_failed", "not_judged"} for claim in ordered)
+                        else "complete"
+                    ),
+                ), recovered_error
             return result, recovered_error or error
         if len(missing) == len(batch):
             # No usable answer at all: fall through to the normal split path.
@@ -1984,7 +1989,13 @@ async def _adjudicate_fact_batches(
                     missing_items,
                     reason=f"第 {batch_index} 批未返回这些声明的判断结果。",
                 ))
-            missing_count = len(missing_items)
+            # The parser supplies placeholders for omitted rows. An ID alone
+            # is not a completed judgment, even after recursive recovery.
+            missing_count = len({
+                *(item.claim_id for item in missing_items),
+                *(claim.claim_id for claim in batch_claims
+                  if claim.judgment_status in {"execution_failed", "not_judged"}),
+            })
             if batch_result.coverage_status == "insufficient" or missing_count:
                 failed_batches += 1
             else:
@@ -2396,16 +2407,6 @@ class DefaultResearchReviewer:
                 # with several concrete fact markers cannot be "complete"
                 # when the inventory contains fewer rows than that bound.
                 inventory_coverage = "insufficient"
-            if report_type == "slides" and inventory_coverage == "insufficient" and inventory:
-                # Slides are terse bullets, not prose. The prose-shaped
-                # coverage heuristic reads "five short pages" as an
-                # incomplete scan and blocks every deck. Keep the claims and
-                # let the publication gate disclose unverified ones instead.
-                _review_logger.info(
-                    "ai-engine.fact_review.slides_coverage_relaxed",
-                    extra={"claim_count": len(inventory)},
-                )
-                inventory_coverage = "complete"
             await emit_phase("adjudicating", {
                 "inventory_count": len(inventory),
                 "factual_claim_count": len(factual_inventory),

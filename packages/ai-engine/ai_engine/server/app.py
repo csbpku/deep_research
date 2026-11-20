@@ -3275,6 +3275,15 @@ async def review_research(body: ReviewResearchBody, request: Request) -> dict[st
     }
 
 
+@app.get("/health/preflight")
+async def preflight(force: bool = False) -> dict[str, object]:
+    # The normal internal-service middleware protects this endpoint. Unlike
+    # public liveness, it may inspect credentials and provider readiness.
+    from ai_engine.server.preflight import research_preflight
+
+    return dict(await research_preflight(_adapter_singleton(), force=force))
+
+
 @app.get("/health")
 async def health_alias(
     request: Request,

@@ -129,6 +129,7 @@ export function RadarReadingOverview({
       {detail.isAuthenticated ? (
         <Box sx={{ mt: isPage ? 2 : space.lg }}>
           <RadarFeedbackBar
+            key={detail.id}
             summaryId={detail.id}
             initialCounts={detail.feedbackCounts ?? emptyRadarFeedbackCounts()}
             initialMine={detail.myFeedbacks ?? []}

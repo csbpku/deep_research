@@ -697,7 +697,12 @@ export default function ResearchDetailPage() {
                   ) : null}
                 </div>
                 {isJudgementDue(data.judgementReviewAt) && data.canEdit ? (
-                  <JudgementReviewActions researchId={data.id} />
+                  <JudgementReviewActions researchId={data.id} initialJudgement={{
+                    judgement: data.judgement,
+                    judgementConfidence: data.judgementConfidence ?? 'medium',
+                    judgementScope: data.judgementScope ?? '',
+                    judgementReviewAt: data.judgementReviewAt?.slice(0, 10) ?? '',
+                  }} />
                 ) : null}
               </SectionCard>
             )}

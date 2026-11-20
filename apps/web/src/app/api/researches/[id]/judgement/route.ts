@@ -1,7 +1,7 @@
 // POST /api/researches/[id]/judgement — review a knowledge card's claim.
 //
 // A published judgement is a promise with an expiry date. When it comes due the
-// owner must either reaffirm it (extend the date), revise it (go edit), or
+// owner must either reaffirm it (extend the date), revise the judgement, or
 // archive the card. Reaffirming is recorded in research_audit so the claim's
 // history is inspectable, not silently extended.
 
@@ -16,13 +16,22 @@ import { log, withRequestId } from '../../../../../lib/log';
 import { ResearchIdParam } from '../../../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
+import { validateKnowledgeJudgement } from '../../../../../lib/research-knowledge-judgement';
+import { knowledgeCardIndexText, queuePersonalKnowledgeIndex } from '../../../../../lib/personal-knowledge-index';
 
 export const dynamic = 'force-dynamic';
 
-const JudgementReviewBody = z.object({
-  action: z.enum(['reaffirm', 'revise', 'archive']),
-  reviewAt: z.string().datetime({ offset: true }).optional(),
-});
+const JudgementReviewBody = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('reaffirm'), reviewAt: z.string().datetime({ offset: true }).optional() }),
+  z.object({
+    action: z.literal('revise'),
+    judgement: z.string().max(500),
+    judgementConfidence: z.enum(['low', 'medium', 'high']),
+    judgementScope: z.string().max(500),
+    judgementReviewAt: z.string().datetime({ offset: true }),
+  }),
+  z.object({ action: z.literal('archive') }),
+]);
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(
   async (req, ctx) => {
@@ -41,7 +50,8 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       where: { id: parsedParams.data.id },
       select: {
         id: true, type: true, status: true, authorId: true,
-        judgement: true, judgementReviewAt: true,
+        title: true, body: true, conclusion: true, updatedAt: true,
+        judgement: true, judgementConfidence: true, judgementScope: true, judgementReviewAt: true,
       },
     });
     if (!existing) {
@@ -90,7 +100,41 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     }
 
     if (parsedBody.action === 'revise') {
-      return NextResponse.json({ ok: true, redirectTo: `/researches/${existing.id}/edit` });
+      const judgement = validateKnowledgeJudgement(parsedBody);
+      if (!judgement.ok) {
+        return toApiErrorResponse({ code: ERROR_CODES.VALIDATION_FAILED, message: judgement.message, requestId });
+      }
+      if (existing.status !== RESEARCH_STATUS.PUBLISHED) {
+        return toApiErrorResponse({ code: ERROR_CODES.VALIDATION_FAILED, message: '只有已发布的判断需要修订复查', requestId });
+      }
+      const revised = judgement.value;
+      const updated = await prisma.$transaction(async (tx) => {
+        const result = await tx.research.updateMany({
+          where: { id: existing.id, status: RESEARCH_STATUS.PUBLISHED, updatedAt: existing.updatedAt },
+          data: { ...revised, knowledgeIndexText: knowledgeCardIndexText({ ...existing, ...revised }) },
+        });
+        if (result.count !== 1) return false;
+        await tx.researchAudit.create({
+          data: {
+            researchId: existing.id,
+            editorId: user.id,
+            action: 'edit',
+            reason: '复查后修订知识卡判断',
+            diff: {
+              judgement: { from: existing.judgement, to: revised.judgement },
+              judgementConfidence: { from: existing.judgementConfidence, to: revised.judgementConfidence },
+              judgementScope: { from: existing.judgementScope, to: revised.judgementScope },
+              judgementReviewAt: { from: existing.judgementReviewAt?.toISOString() ?? null, to: revised.judgementReviewAt.toISOString() },
+            },
+          },
+        });
+        await queuePersonalKnowledgeIndex(tx, { ownerId: existing.authorId, researchId: existing.id, operation: 'upsert' });
+        return true;
+      });
+      if (!updated) {
+        return toApiErrorResponse({ code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '知识卡已更新，请刷新后重新修订判断', requestId });
+      }
+      return NextResponse.json({ ok: true, id: existing.id, ...revised });
     }
 
     const { transitionResearchStatus } = await import('../../../../../lib/research-status-actions');

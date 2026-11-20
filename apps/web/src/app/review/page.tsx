@@ -99,8 +99,8 @@ export default function ReviewQueuePage() {
         <QueueSection
           title="判断待复查"
           description="已发布的知识卡，判断的复查时间已到。确认仍成立、修订或归档。"
-          href="/researches?judgementDue=true"
-          query="scope=published&judgementDue=true"
+          href="/researches?tab=mine&judgementDue=true"
+          query="scope=mine&judgementDue=true"
           icon={<AlarmClock size={18} aria-hidden />}
           render={item => (
             <>

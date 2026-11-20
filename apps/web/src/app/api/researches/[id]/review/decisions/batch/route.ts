@@ -160,6 +160,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   }
 
   const result = await prisma.$transaction(async (tx) => {
+    // Read decisions only after acquiring the lock: a waiter must observe
+    // decisions committed by the previous holder, not its earlier snapshot.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${run.id}))`;
     const freshResearch = await tx.research.findUnique({
       where: { id: research.id },
       select: {
@@ -198,9 +201,6 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     ) {
       throw new Error('REVIEW_DECISION_STALE');
     }
-    // Serialize concurrent submissions for the same run. Without this, two
-    // requests can both observe "no decision" and write duplicate accepts.
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${freshRun.id}))`;
     const freshAlreadyDecided = new Set((freshRun.decisions ?? []).map((decision) => decision.claimId));
     const freshClaimIds = claimIds.filter((claimId) => !freshAlreadyDecided.has(claimId));
     const freshClaims = asReviewClaims(freshRun.claims);

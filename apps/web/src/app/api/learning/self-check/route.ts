@@ -28,20 +28,21 @@ export const POST = apiHandler(async (request: NextRequest) => {
   if (!research) {
     return toApiErrorResponse({ code: ERROR_CODES.NOT_FOUND, message: '调研不存在', requestId: request.headers.get('x-request-id') || 'unknown' });
   }
-  const row = await prisma.learningSelfCheck.upsert({
-    where: { userId_researchId_questionKey: { userId: user.id, researchId: parsed.researchId, questionKey: parsed.questionKey } },
-    create: {
-      userId: user.id,
-      researchId: parsed.researchId,
-      questionKey: parsed.questionKey,
-      rating: parsed.rating,
-      ...(parsed.rating === 'got_it' ? {} : { firstMissedAt: new Date() }),
-    },
-    update: {
-      rating: parsed.rating,
-      ...(parsed.rating === 'got_it' ? { firstMissedAt: null } : {}),
-    },
-  });
+  // Keep the weak interval's start atomically, including got_it -> weak and
+  // concurrent re-ratings. A read followed by upsert can reset that clock.
+  const [row] = await prisma.$queryRaw<Array<{
+    id: string; rating: string; updatedAt: Date; firstMissedAt: Date | null;
+  }>>`
+    INSERT INTO "learning_self_check" ("userId", "researchId", "questionKey", "rating", "firstMissedAt", "updatedAt")
+    VALUES (${user.id}::uuid, ${parsed.researchId}::uuid, ${parsed.questionKey}, ${parsed.rating},
+      CASE WHEN ${parsed.rating} = 'got_it' THEN NULL ELSE CURRENT_TIMESTAMP END, CURRENT_TIMESTAMP)
+    ON CONFLICT ("userId", "researchId", "questionKey") DO UPDATE SET
+      "rating" = EXCLUDED."rating",
+      "firstMissedAt" = CASE WHEN EXCLUDED."rating" = 'got_it' THEN NULL
+        ELSE COALESCE("learning_self_check"."firstMissedAt", EXCLUDED."firstMissedAt") END,
+      "updatedAt" = EXCLUDED."updatedAt"
+    RETURNING "id", "rating", "updatedAt", "firstMissedAt"`;
+  if (!row) throw new Error('Self-check upsert returned no row');
   return NextResponse.json({ id: row.id, rating: row.rating, updatedAt: row.updatedAt, firstMissedAt: row.firstMissedAt });
 });
 

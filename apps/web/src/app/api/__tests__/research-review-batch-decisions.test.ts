@@ -167,6 +167,22 @@ describe('batch review claim decisions', () => {
     expect(await response.json()).toMatchObject({ acceptedCount: 0, alreadyAcceptedCount: 1 });
   });
 
+  it('locks the run before reading the decisions used for deduplication', async () => {
+    const lock = vi.fn().mockResolvedValue(1);
+    mocks.transaction.mockImplementation((callback: (tx: unknown) => Promise<unknown>) => callback({
+      $executeRaw: lock,
+      research: { findUnique: mocks.txResearchFindUnique },
+      researchReviewRun: { findUnique: mocks.txRunFindUnique, findMany: mocks.runFindMany },
+      researchReviewDecision: { createMany: mocks.createMany, findMany: mocks.findMany },
+    }));
+    const response = await batchPost(new Request(`http://localhost/api/researches/${RESEARCH_ID}/review/decisions/batch`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ runId: RUN_ID, claimIds: ['claim-1'], reason: 'Concurrent accept.' }),
+    }) as never, params());
+    expect(response.status).toBe(201);
+    expect(lock.mock.invocationCallOrder[0]).toBeLessThan(mocks.txRunFindUnique.mock.invocationCallOrder[0]);
+  });
+
   it('rejects a high-risk claim instead of silently skipping it', async () => {
     const research = baseResearch([
       twoClaims[0],
