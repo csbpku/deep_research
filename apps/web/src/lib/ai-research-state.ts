@@ -2,7 +2,7 @@ import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import type { BriefValue } from '@/components/ai-research/AiResearchBrief';
 
 export type ResearchDraft = {
-  reportType: 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
+  reportType: 'decision_memo' | 'comparison_matrix' | 'learning_path' | 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
   reportLength: 'brief' | 'standard' | 'deep';
   sourcePolicy: 'prefer_user_sources' | 'only_user_sources';
   sourceUrls: string[];
@@ -12,6 +12,21 @@ export type ResearchDraft = {
   brief: BriefValue | null;
 };
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem'>;
+
+/**
+ * A confirmed intent owns the artifact. Picking the output control for the
+ * user is only safe because they can still override it; what is not safe is
+ * starting a learning plan on a 20k-character report by default.
+ */
+export function defaultReportTypeForBrief(
+  brief: { objective?: string | null; comparisonOnly?: boolean | null } | null | undefined,
+): ResearchDraft['reportType'] {
+  if (!brief?.objective) return 'research_report';
+  if (brief.comparisonOnly) return 'comparison_matrix';
+  if (brief.objective === 'decide') return 'decision_memo';
+  if (brief.objective === 'learn') return 'learning_path';
+  return 'research_report';
+}
 const keyFor = (userId: string, conversationId: string) => `ai-research-draft:v1:${userId}:${conversationId}`;
 
 export function formatResearchRelativeTime(iso: string | null, now = Date.now()): string {
@@ -36,7 +51,7 @@ export function stripResearchCitationMarkers(content: string): string {
 function isDraft(value: unknown): value is ResearchDraft {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const v = value as Record<string, unknown>;
-  if (!['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(v.reportType)) ||
+  if (!['decision_memo', 'comparison_matrix', 'learning_path', 'research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(v.reportType)) ||
       !['brief', 'standard', 'deep'].includes(String(v.reportLength)) ||
       !['prefer_user_sources', 'only_user_sources'].includes(String(v.sourcePolicy)) ||
       !Array.isArray(v.sourceUrls) || v.sourceUrls.length > 10 ||

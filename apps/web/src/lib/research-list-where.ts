@@ -10,10 +10,12 @@ export interface ResearchListWhereInput {
   objective?: 'explore' | 'learn' | 'investigate' | 'decide';
   reviewStatus?: string;
   hasOpenClaims?: boolean;
+  needsReview?: boolean;
+  judgementDue?: boolean;
 }
 
 export function researchListWhere(input: ResearchListWhereInput): Prisma.ResearchWhereInput {
-  const { scope, userId, type, query, topicId, objective, reviewStatus, hasOpenClaims } = input;
+  const { scope, userId, type, query, topicId, objective, reviewStatus, hasOpenClaims, needsReview, judgementDue } = input;
   const clauses: Prisma.ResearchWhereInput[] = [];
   if (type) {
     clauses.push({ type: { equals: type as Prisma.EnumResearchTypeFilter['equals'] } });
@@ -65,6 +67,21 @@ export function researchListWhere(input: ResearchListWhereInput): Prisma.Researc
         { reviewClaims: { equals: Prisma.JsonNull } },
         { reviewClaims: { equals: [] } },
       ],
+    });
+  }
+  if (needsReview === true) {
+    clauses.push({
+      learningSelfChecks: {
+        some: { userId, rating: { in: ['unsure', 'missed'] } },
+      },
+    });
+  }
+  if (judgementDue === true) {
+    clauses.push({
+      type: 'knowledge',
+      status: 'published',
+      judgement: { not: null },
+      judgementReviewAt: { lte: new Date() },
     });
   }
   return { AND: clauses };

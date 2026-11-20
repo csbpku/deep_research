@@ -63,6 +63,9 @@ const FEATURED_TONES: Record<string, Tone> = {
 /** researches.type —— "研究报告 / 知识卡片" 区分 */
 const RESEARCH_TYPE_TONES: Record<string, Tone> = {
   research: { palette: 'evidence', label: '研究报告' },
+  decision_memo: { palette: 'evidence', label: '决策备忘' },
+  comparison_matrix: { palette: 'evidence', label: '对比矩阵' },
+  learning_path: { palette: 'evidence', label: '学习路径' },
   knowledge: { palette: 'neutral', label: '知识卡片' },
 };
 
@@ -82,6 +85,22 @@ const ISSUE_TONES: Record<string, Tone> = {
 };
 
 /** search results type —— 搜索结果类型徽章，使用中性 palette 不与 job status 混淆 */
+/** research publication verification state */
+const VERIFICATION_TONES: Record<string, Tone> = {
+  verified: { palette: 'success', label: '已核验' },
+  disclosed: { palette: 'warning', outlined: true, label: '带披露发布' },
+  conflicted: { palette: 'danger', label: '核验存在冲突' },
+  unverified: { palette: 'warning', outlined: true, label: '尚未完成核验' },
+};
+
+/** 用户确认的研究意图：主题概览 / 系统学习 / 机制分析 / 决策对比 */
+const INTENT_TONES: Record<string, Tone> = {
+  explore: { palette: 'context', outlined: true, label: '主题概览' },
+  learn: { palette: 'inference', outlined: true, label: '系统学习' },
+  investigate: { palette: 'evidence', outlined: true, label: '机制分析' },
+  decide: { palette: 'warning', outlined: true, label: '决策对比' },
+};
+
 const SEARCH_TYPE_TONES: Record<string, Tone> = {
   radar: { palette: 'neutral', label: '雷达' },
   summary: { palette: 'neutral', label: '摘要' },
@@ -100,6 +119,8 @@ const REGISTRY = {
   topicTier: TOPIC_TIER_TONES,
   issue: ISSUE_TONES,
   searchType: SEARCH_TYPE_TONES,
+  verification: VERIFICATION_TONES,
+  researchIntent: INTENT_TONES,
 } as const;
 
 export type StatusKind = keyof typeof REGISTRY;

@@ -318,6 +318,8 @@ export function TopicDetailTabs({
             issueTotalCount={issueTotalCount}
             issueUnreadCount={clientUnreadCount}
             candidateCount={topic.candidateCount}
+            candidates={candidates}
+            isAuthenticated={isAuthenticated}
             viewedAt={viewedAt}
             followed={isFollowed}
             markingViewed={markingViewed}
@@ -760,6 +762,8 @@ function IssuesPane({
   issueTotalCount,
   issueUnreadCount,
   candidateCount,
+  candidates,
+  isAuthenticated,
   viewedAt,
   followed,
   markingViewed,
@@ -771,6 +775,8 @@ function IssuesPane({
   issueTotalCount: number;
   issueUnreadCount: number;
   candidateCount: number;
+  candidates: CandidateRow[];
+  isAuthenticated: boolean;
   viewedAt: string | null;
   followed: boolean;
   markingViewed: boolean;
@@ -782,6 +788,10 @@ function IssuesPane({
   const [loadError, setLoadError] = useState<string | null>(null);
   const unreadCount = viewedAt ? 0 : issueUnreadCount;
   const hasMore = rows.length < issueTotalCount;
+  const candidateById = useMemo(
+    () => new Map(candidates.map((candidate) => [candidate.summaryId, candidate] as const)),
+    [candidates],
+  );
 
   async function loadMore() {
     if (loadingMore || !hasMore) return;
@@ -875,13 +885,37 @@ function IssuesPane({
                 <span>首发 {new Date(issue.firstSeenAt).toLocaleDateString('zh-CN')}</span>
                 <span>·</span>
                 <span>最近更新 {new Date(issue.lastSeenAt).toLocaleDateString('zh-CN')}</span>
-                {issue.candidateIds.length > 0 ? (
-                  <>
-                    <span>·</span>
-                    <span>{issue.candidateIds.length} 条关联内容</span>
-                  </>
-                ) : null}
               </div>
+              {issue.candidateIds.length > 0 ? (
+                <details className={styles.evidenceDisclosure}>
+                  <summary className={styles.evidenceSummary}>
+                    关联内容 {issue.candidateIds.length} 条
+                  </summary>
+                  <ul className={styles.evidenceList}>
+                    {issue.candidateIds.slice(0, 6).map((summaryId) => {
+                      const candidate = candidateById.get(summaryId);
+                      return (
+                        <li key={summaryId}>
+                          <Link href={`/radar/${summaryId}`} className={styles.textLink}>
+                            {candidate?.title ?? `来源 ${summaryId.slice(0, 8)}`}
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className={styles.itemMetadata}>
+                    {issue.candidateIds.length > 6 ? <span>仅列出前 6 条</span> : null}
+                    {isAuthenticated && issue.candidateIds[0] ? (
+                      <Link
+                        href={`/ai-research?seed=${encodeURIComponent(issue.candidateIds[0])}`}
+                        className={styles.textLink}
+                      >
+                        用这些内容做调研 →
+                      </Link>
+                    ) : null}
+                  </div>
+                </details>
+              ) : null}
             </li>
           ))}
         </ul>

@@ -164,6 +164,7 @@ async def run_once(
         source_refs=snapshot.source_refs,
         report_length=snapshot.report_length,
         max_urls_to_scrape=snapshot.max_urls_to_scrape,
+        objective=snapshot.objective,
         timeout_seconds=_resolve_worker_timeout(snapshot.report_length),
     )
     started_monotonic = asyncio.get_event_loop().time()

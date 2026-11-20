@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextResponse } from 'next/server';
+import { validRadarScore } from '@/lib/radar/test-score';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -58,6 +59,32 @@ beforeEach(() => {
 });
 
 describe('GET /api/ai-research/context', () => {
+  it.each([null, 'needs_manual_review'])('never uses hidden cached text from a summary-only bookmark: %s', async (contentReviewStatus) => {
+    const summaryId = '88888888-8888-4888-8888-888888888888';
+    mocks.bookmarkFindMany.mockResolvedValue([{
+      id: '77777777-7777-4777-8777-777777777777', note: null, targetType: 'radar_candidate',
+      targetId: summaryId, createdAt: new Date('2026-11-12'),
+    }]);
+    const summary = {
+      id: summaryId, title: 'GraphRAG source', body: 'PRIVATE-CACHED-TEXT'.repeat(50),
+      interpretation: null, url: 'https://example.com/graphrag', status: 'candidate',
+      source: 'daily', syncRunId: 'run-1', distilledTier: 'deep_read', distilledScore: validRadarScore,
+      enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus,
+      renderReviewStatus: 'approved', tags: [], shareSource: null,
+    };
+    mocks.summaryFindMany.mockResolvedValue([summary]);
+    const body = await (await GET(request('GraphRAG'))).json();
+    expect(body.items).toEqual([expect.objectContaining({ title: summary.title, snippet: '', isExcerpt: true })]);
+    expect(JSON.stringify(body)).not.toContain('PRIVATE-CACHED-TEXT');
+    expect(mocks.summaryFindMany.mock.calls[0][0].select.renderReviewStatus).toBe(true);
+
+    const noBodyMatch = await (await GET(request('PRIVATE-CACHED-TEXT'))).json();
+    expect(noBodyMatch.items).toEqual([]);
+    mocks.summaryFindMany.mockResolvedValue([{ ...summary, interpretation: 'GraphRAG public interpretation' }]);
+    const withInterpretation = await (await GET(request('GraphRAG'))).json();
+    expect(withInterpretation.items[0].snippet).toBe('GraphRAG public interpretation');
+  });
+
   it('requires authentication', async () => {
     mocks.requireUser.mockResolvedValueOnce(new NextResponse(null, { status: 401 }));
     const response = await GET(request());
