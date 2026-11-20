@@ -45,6 +45,15 @@ for (const theme of ['light', 'dark'] as const) {
       await expect(page.locator('[data-status-kind="method"]')).toHaveText('AI 调研');
       await expect(page.locator('[data-status-kind="featured"]')).toHaveText('精华');
       await expect(page.getByRole('link', { name: '参考资料', exact: true })).toHaveAttribute('href', 'https://example.com/reference');
+      // P0-8 阅读顺序：结论 → 背景/风险 → 正文 → 证据/协作 → 审查（折叠）。
+      const sectionHeadings = (await page.locator('h2').allTextContents()).map((text) => text.trim());
+      const headingAt = (label: string) => sectionHeadings.indexOf(label);
+      expect(headingAt('结论')).toBeLessThan(headingAt('背景'));
+      expect(headingAt('背景')).toBeLessThan(headingAt('正文'));
+      expect(headingAt('正文')).toBeLessThan(headingAt('团队讨论'));
+      const reviewPanel = page.locator('details#review-audit');
+      await expect(reviewPanel).toHaveCount(1);
+      expect(await reviewPanel.evaluate((element) => element.hasAttribute('open'))).toBe(false);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       // No exemptions; scope to migrated regions rather than claiming the old workbench is migrated.
       const results = await new AxeBuilder({ page }).include('section[data-section-tone]').include('[data-status-kind]').analyze();

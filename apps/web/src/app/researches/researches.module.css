@@ -24,3 +24,5 @@
 .metadata { display: flex; align-items: center; flex-wrap: wrap; gap: var(--dr-space-3); margin-top: var(--dr-space-3); color: var(--dr-color-text-muted); font-size: var(--dr-type-caption); line-height: var(--dr-line-height-body); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .slowLoading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dr-space-3); color: var(--dr-color-text-secondary); font-size: var(--dr-type-caption); }
 @media (max-width: 639px) { .search { flex-basis: 100%; max-width: none; } }
+
+.reviewDue { margin: var(--dr-space-2) 0 0; color: var(--dr-color-warning-text, #8a5a00); font-size: var(--dr-type-caption); font-weight: 600; }

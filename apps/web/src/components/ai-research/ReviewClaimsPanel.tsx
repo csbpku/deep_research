@@ -67,6 +67,8 @@ export function ReviewClaimsPanel({
   const [error, setError] = useState<string | null>(null);
   const [reasonFor, setReasonFor] = useState<{ claimId: string; action: ReviewDecisionAction } | null>(null);
   const [reason, setReason] = useState('');
+  const [bulkReasonOpen, setBulkReasonOpen] = useState(false);
+  const [bulkReason, setBulkReason] = useState('');
 
   if (!reviewRun) return null;
   const stale = reviewRun.executionStatus === 'stale';
@@ -87,6 +89,10 @@ export function ReviewClaimsPanel({
   const open = claims.filter((claim) => (
     claimEvidenceStatus(claim) !== 'supported'
     && !decisionResolvesClaim(claim, decisionByClaim.get(reviewClaimId(claim) ?? '') as ReviewDecisionRecord | undefined)
+  ));
+
+  const bulkEligible = open.filter((claim) => (
+    claimEvidenceStatus(claim) === 'unverified' && claim.risk?.toLowerCase() !== 'high'
   ));
 
   async function submitDecision(claim: ClaimShape, action: ReviewDecisionAction, why?: string) {
@@ -111,6 +117,33 @@ export function ReviewClaimsPanel({
       await queryClient.invalidateQueries({ queryKey: ['inline-ai-research', jobId] });
     } catch (err) {
       setError(friendlyMessage(err, '保存处理失败，请稍后重试。'));
+    } finally {
+      setBusyClaimId(null);
+    }
+  }
+
+  async function submitBulk(eligible: ClaimShape[]) {
+    if (!draftResearchId || eligible.length === 0) return;
+    const ids = eligible.map((claim) => reviewClaimId(claim)).filter((id): id is string => Boolean(id));
+    if (ids.length === 0) return;
+    setBusyClaimId('__bulk__');
+    setError(null);
+    try {
+      const response = await fetch(`/api/researches/${draftResearchId}/review/decisions/batch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          runId: reviewRun?.id,
+          claimIds: ids,
+          reason: bulkReason.trim(),
+        }),
+      });
+      if (!response.ok) throw await toApiHttpError(response, '批量处理失败');
+      setBulkReasonOpen(false);
+      setBulkReason('');
+      await queryClient.invalidateQueries({ queryKey: ['inline-ai-research', jobId] });
+    } catch (err) {
+      setError(friendlyMessage(err, '批量处理失败，请稍后重试。'));
     } finally {
       setBusyClaimId(null);
     }
@@ -149,6 +182,48 @@ export function ReviewClaimsPanel({
         ) : claimList()}
 
         {error ? <Typography component="p" role="alert" variant="metadata" color="error.main">{error}</Typography> : null}
+
+        {draftResearchId && bulkEligible.length > 1 ? (
+          <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5, display: 'grid', gap: 1 }}>
+            {bulkReasonOpen ? (
+              <>
+                <Typography component="p" variant="metadata" color="text.secondary">
+                  将把 {bulkEligible.length} 条低/中风险、仍缺直接依据的声明一起接受为待验证项；它们会共用下面这条理由，并保留各自的机器判读记录。
+                </Typography>
+                <Box
+                  component="textarea"
+                  value={bulkReason}
+                  onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setBulkReason(event.target.value)}
+                  rows={2}
+                  aria-label="批量处理理由"
+                  placeholder="例如：这些是内部讨论用的辅助判断，发布前已人工确认方向正确。"
+                  sx={{ width: '100%', resize: 'vertical', border: 1, borderColor: 'divider', borderRadius: 1, p: 1, typography: 'metadata', font: 'inherit', bgcolor: 'background.paper' }}
+                />
+                <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                  <Button type="button" size="xs" variant="ghost" onClick={() => { setBulkReasonOpen(false); setBulkReason(''); }}>取消</Button>
+                  <Button
+                    type="button"
+                    size="xs"
+                    disabled={bulkReason.trim().length < 5 || busyClaimId === '__bulk__'}
+                    onClick={() => void submitBulk(bulkEligible)}
+                  >
+                    {busyClaimId === '__bulk__' ? '保存中…' : `确认接受 ${bulkEligible.length} 条`}
+                  </Button>
+                </Box>
+              </>
+            ) : (
+              <>
+                <Button type="button" size="xs" variant="outline" onClick={() => { setBulkReasonOpen(true); setBulkReason(''); }}>
+                  <Check size={12} aria-hidden />
+                  批量接受为待验证（{bulkEligible.length} 条）
+                </Button>
+                <Typography component="p" variant="metadata" color="text.secondary">
+                  只处理低/中风险且仍缺直接依据的声明；来源冲突和高风险声明不会进入批量操作。
+                </Typography>
+              </>
+            )}
+          </Box>
+        ) : null}
 
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           {draftResearchId ? (

@@ -15,7 +15,10 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import { space } from '@deep-research/design-system';
 import {
+  BookOpenCheck,
   CheckCircle2,
+  Clock3,
+  FlaskConical,
   Search,
   Star,
   ThumbsUp,
@@ -30,7 +33,10 @@ export type RadarFeedbackType =
   | 'inaccurate'
   | 'used'
   | 'favorite'
-  | 'suggest_research';
+  | 'suggest_research'
+  | 'read'
+  | 'later'
+  | 'pilot';
 
 export type RadarFeedbackCounts = Record<RadarFeedbackType, number>;
 
@@ -45,16 +51,25 @@ interface RadarFeedbackBarProps {
 
 const FEEDBACK_LABELS: Record<RadarFeedbackType, { label: string; icon: LucideIcon }> = {
   useful: { label: '点赞', icon: ThumbsUp },
-  inaccurate: { label: '点踩', icon: ThumbsDown },
+  // 雷达卡片统一把 inaccurate 呈现为“不感兴趣”，底层枚举保持不变。
+  inaccurate: { label: '不感兴趣', icon: ThumbsDown },
   used: { label: '我用过', icon: CheckCircle2 },
   favorite: { label: '收藏', icon: Star },
   suggest_research: { label: '建议调研', icon: Search },
+  read: { label: '已读', icon: BookOpenCheck },
+  later: { label: '稍后', icon: Clock3 },
+  pilot: { label: '值得试点', icon: FlaskConical },
 };
 
-const ALL_TYPES: RadarFeedbackType[] = [
-  'favorite',
+/** P0-4 四个主判断：已读 / 稍后 / 值得试点 / 不感兴趣。 */
+export const RADAR_PRIMARY_FEEDBACK_TYPES: readonly RadarFeedbackType[] = [
+  'read',
+  'later',
+  'pilot',
   'inaccurate',
 ];
+
+const ALL_TYPES: RadarFeedbackType[] = [...RADAR_PRIMARY_FEEDBACK_TYPES];
 
 export function RadarFeedbackBar({
   summaryId,
@@ -148,6 +163,19 @@ export function RadarFeedbackBar({
       ) : null}
     </Box>
   );
+}
+
+export function emptyRadarFeedbackCounts(): RadarFeedbackCounts {
+  return {
+    useful: 0,
+    inaccurate: 0,
+    used: 0,
+    favorite: 0,
+    suggest_research: 0,
+    read: 0,
+    later: 0,
+    pilot: 0,
+  };
 }
 
 export const RADAR_FEEDBACK_TYPES_PUBLIC: readonly RadarFeedbackType[] = ALL_TYPES;
