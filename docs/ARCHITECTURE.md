@@ -343,7 +343,7 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 | `POST /api/researches/{id}/review` | owner/admin；为当前研究版本排队、重跑或读取独立事实审核 |
 | `POST /api/researches/{id}/review/decisions` | owner/admin；在当前审核 run 上追加声明处理决定，不能覆盖机器结论 |
 | `POST /api/knowledge/derive` / `POST /api/knowledge` | 从本人 AI 回答/研究稿的选中判断生成预览；确认后保存为私人知识草稿 |
-| `GET /api/search` | 搜索公开研究/雷达与本人私有研究/知识草稿；私有结果不对其他账号暴露 |
+| `GET /api/search` | 搜索公开研究/雷达与本人私有研究/知识草稿；私有结果不对其他账号暴露。`matchReasons` 按“判断 → 标题 → 标签”说明命中原因（正文命中返回空数组），`matchReason` 保留为第一个理由 |
 | `GET /api/ai-research/context` | 返回关键词资料及可选语义知识候选；语义候选默认不注入调研 |
 | `POST /api/shares` | 使用统一安全抓取器，创建待审核分享 |
 | `POST /api/radar/{id}/feedback` | 相同用户、候选和反馈类型幂等 |

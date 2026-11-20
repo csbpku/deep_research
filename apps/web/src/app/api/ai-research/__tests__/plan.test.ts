@@ -377,3 +377,39 @@ describe('POST /api/ai-research/plan', () => {
 function ctx(): { params: Promise<Record<string, string>> } {
   return { params: Promise.resolve({}) };
 }
+
+describe('comparison-only plans', () => {
+  it('does not ask for a recommendation', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 PostgreSQL advisory lock 与行锁', comparisonOnly: true,
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOnly).toBe(true);
+    expect(body.brief.questionsToAnswer.join(' ')).not.toContain('推荐什么选择');
+    expect(body.brief.successCriteria.join(' ')).not.toContain('推荐和下一步');
+    expect(body.plan.summary).toContain('不给出唯一推荐');
+  });
+});
+
+describe('comparison option inference keeps SQL identifiers intact', () => {
+  it('does not cut SELECT FOR UPDATE at the English preposition', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 pg_advisory_xact_lock 和 SELECT FOR UPDATE 在库存扣减场景的适用边界',
+      comparisonOnly: true,
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOptions).toEqual(['pg_advisory_xact_lock', 'SELECT FOR UPDATE']);
+  });
+});
+
+describe('learning plan covers counterexamples', () => {
+  it('asks when the technique should not be used', async () => {
+    const res = await planPost(
+      buildReq({ question: '我想系统学习 PostgreSQL 的 VACUUM' }) as never,
+      ctx(),
+    );
+    const body = await res.json();
+    expect(body.brief.questionsToAnswer.join('\n')).toContain('不应该使用');
+    expect(body.plan.steps.map((s: { title: string }) => s.title)).toContain('反例与不适用场景');
+  });
+});

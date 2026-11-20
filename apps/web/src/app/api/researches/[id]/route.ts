@@ -29,11 +29,16 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { resolveResearchSourceLink } from '../../../../lib/research-source-link';
 import { resolveCurrentReviewState } from '../../../../lib/research-review-state';
-import { getReviewDisclosureItems, getReviewPublicationGate, reviewCoverageStatus } from '../../../../lib/research-review-decisions';
+import { resolveResearchReviewInventory } from '../../../../lib/research-review-inventory';
+import { hasCompletedReviewInventory, projectResearchReviewForReader } from '../../../../lib/research-review-reader';
+import { coerceIntentCoverage, parseIntCoverage } from '../../../../lib/research-intent-coverage';
+import { cleanResearchArtifact } from '../../../../lib/research-artifact-cleanup';
+import { researchPublicationVersion } from '../../../../lib/research-publication-version';
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import {
   confirmedKnowledgeIndexText,
+  knowledgeCardIndexText,
   queuePersonalKnowledgeIndex,
   readingKnowledgeIndexTextFromBody,
 } from '../../../../lib/personal-knowledge-index';
@@ -49,6 +54,10 @@ const researchSelect = {
   background: true,
   conclusion: true,
   risks: true,
+  judgement: true,
+  judgementConfidence: true,
+  judgementScope: true,
+  judgementReviewAt: true,
   tags: true,
   authorId: true,
   creationMethod: true,
@@ -63,8 +72,14 @@ const researchSelect = {
   reviewRunToken: true,
   reviewedAt: true,
   reviewDetails: true,
+  publishedReviewVersion: true,
+  publishedReviewDisclosure: true,
+  publishedIntentCoverage: true,
+  publishedReviewAcknowledgedAt: true,
   sourceAiJob: {
     select: {
+      id: true,
+      reportType: true,
       brief: true,
       sourcePolicy: true,
       aiResearchSources: {
@@ -301,8 +316,25 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     }).catch(() => undefined);
   }
 
+  let readerReviewRuns = research.reviewRuns;
+  const revisionHash = resolveCurrentReviewState(research, research.reviewRuns, research.reviewStatus).revisionHash;
+  if (research.creationMethod === 'ai_research'
+    && research.reviewRuns.length === researchSelect.reviewRuns.take
+    && !research.reviewRuns.some((run) => run.revisionHash === revisionHash && hasCompletedReviewInventory(run))) {
+    // The history panel is bounded; safety warnings are not. Repeated failed
+    // retries must not push the last complete inventory out of the reader's
+    // evidence window. Only load the tail for this exact text revision.
+    const history = await prisma.research.findUnique({
+      where: { id: research.id },
+      select: { reviewRuns: {
+        where: { revisionHash }, orderBy: { createdAt: 'desc' },
+        select: researchSelect.reviewRuns.select,
+      } },
+    });
+    readerReviewRuns = [...new Map([...readerReviewRuns, ...(history?.reviewRuns ?? [])].map((run) => [run.id, run])).values()];
+  }
   return NextResponse.json({
-    ...shapeResearchDetail(research),
+    ...shapeResearchDetail(research, readerReviewRuns, research.authorId === u.id || u.role === 'admin'),
     canEdit,
     canManageStatus,
     researchTopics: research.researchTopics ?? [],
@@ -363,6 +395,9 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       background: true,
       conclusion: true,
       risks: true,
+      judgement: true,
+      judgementConfidence: true,
+      judgementScope: true,
       tags: true,
       authorId: true,
       status: true,
@@ -455,6 +490,9 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       conclusion: existing.conclusion,
       risks: existing.risks,
       tags: existing.tags,
+      judgement: existing.judgement,
+      judgementConfidence: existing.judgementConfidence,
+      judgementScope: existing.judgementScope,
     };
 
     const nextSnapshot = {
@@ -464,9 +502,20 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       conclusion: body.conclusion !== undefined ? body.conclusion : existing.conclusion,
       risks: body.risks !== undefined ? body.risks : existing.risks,
       tags: body.tags ?? existing.tags,
+      judgement: existing.judgement,
+      judgementConfidence: existing.judgementConfidence,
+      judgementScope: existing.judgementScope,
     };
 
     const diff = computeDiff(prevSnapshot, nextSnapshot);
+    const publishedIndexText = existing.type === 'knowledge'
+      ? knowledgeCardIndexText({
+          ...nextSnapshot,
+          judgement: existing.judgement,
+          judgementConfidence: existing.judgementConfidence,
+          judgementScope: existing.judgementScope,
+        })
+      : undefined;
 
     // $transaction: update + audit 原子
     const result = await prisma.$transaction(async (tx) => {
@@ -492,6 +541,9 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
           conclusion: body.conclusion !== undefined ? body.conclusion : undefined,
           risks: body.risks !== undefined ? body.risks : undefined,
           ...(body.tags !== undefined ? { tags: body.tags } : {}),
+          ...(existing.type === 'knowledge'
+            ? { knowledgeIndexText: publishedIndexText }
+            : {}),
         },
         select: researchSelect,
       });
@@ -530,10 +582,13 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     conclusion: existing.conclusion,
     risks: existing.risks,
     tags: existing.tags,
+    judgement: existing.judgement,
+    judgementConfidence: existing.judgementConfidence,
+    judgementScope: existing.judgementScope,
   };
   const nextSnapshot = {
     title: body.title ?? existing.title,
-    body: revisionBody ?? existing.body,
+    body: revisionBody ?? body.body ?? existing.body,
     background: body.background !== undefined ? body.background : existing.background,
     conclusion: body.conclusion !== undefined ? body.conclusion : existing.conclusion,
     risks: body.risks !== undefined ? body.risks : existing.risks,
@@ -542,9 +597,11 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   const diff = computeDiff(prevSnapshot, nextSnapshot);
   const contentChanged = Object.keys(diff).length > 0;
   const nextKnowledgeIndexText = existing.type === 'knowledge'
-    ? existing.readingSaveKey && existing.creationMethod === 'manual'
-      ? readingKnowledgeIndexTextFromBody(nextSnapshot.body)
-      : confirmedKnowledgeIndexText(nextSnapshot)
+    ? existing.judgement
+      ? knowledgeCardIndexText(nextSnapshot)
+      : existing.readingSaveKey && existing.creationMethod === 'manual'
+        ? readingKnowledgeIndexTextFromBody(nextSnapshot.body)
+        : knowledgeCardIndexText(nextSnapshot)
     : undefined;
   const invalidatedReview = contentChanged ? {
     reviewStatus: null,
@@ -772,6 +829,10 @@ function shapeResearchDetail(r: {
   background: string | null;
   conclusion: string | null;
   risks: string | null;
+  judgement?: string | null;
+  judgementConfidence?: string | null;
+  judgementScope?: string | null;
+  judgementReviewAt?: Date | null;
   tags: string[];
   authorId: string;
   creationMethod: string;
@@ -786,7 +847,13 @@ function shapeResearchDetail(r: {
   reviewRunToken?: string | null;
   reviewedAt: Date | null;
   reviewDetails: unknown;
+  publishedReviewVersion?: string | null;
+  publishedReviewDisclosure?: unknown;
+  publishedIntentCoverage?: unknown;
+  publishedReviewAcknowledgedAt?: Date | null;
   sourceAiJob?: {
+    id: string;
+    reportType?: string | null;
     brief: unknown;
     sourcePolicy: string;
     aiResearchSources: Array<{
@@ -828,8 +895,8 @@ function shapeResearchDetail(r: {
   createdAt: Date;
   updatedAt: Date;
   author: { id: string; name: string; email: string };
-}) {
-  const currentReview = resolveCurrentReviewState(r, r.reviewRuns, r.reviewStatus);
+}, readerReviewRuns = r.reviewRuns, includeAuditInternals = true) {
+  const currentReview = resolveCurrentReviewState(r, readerReviewRuns, r.reviewStatus);
   const currentRevisionHash = currentReview.revisionHash;
   const parsedBrief = ResearchBriefSchema.safeParse(r.sourceAiJob?.brief);
   const researchSufficiency = evaluateResearchSufficiency({
@@ -839,31 +906,39 @@ function shapeResearchDetail(r: {
     sourcePolicy: r.sourceAiJob?.sourcePolicy
       ?? (parsedBrief.success ? parsedBrief.data.sourcePolicy : null),
   });
-  const currentReviewPublicationGate = currentReview.run
-    ? getReviewPublicationGate({
-        executionStatus: currentReview.run.executionStatus,
-        outcome: currentReview.run.outcome,
-        coverageStatus: reviewCoverageStatus(currentReview.run.summary),
-        researchSufficiencyStatus: researchSufficiency.status,
-        claims: currentReview.run.claims,
-        decisions: currentReview.run.decisions,
+  const currentReviewPublicationGate = resolveResearchReviewInventory({
+    reviewRuns: readerReviewRuns, revisionHash: currentReview.revisionHash,
+    researchSufficiencyStatus: researchSufficiency.status,
+  }).gate;
+  const readerReview = projectResearchReviewForReader({
+    status: r.status, creationMethod: r.creationMethod, currentReview,
+    reviewRuns: readerReviewRuns, researchSufficiencyStatus: researchSufficiency.status,
+  });
+  const publicationDisclosure = r.status === 'draft'
+    ? projectResearchReviewForReader({
+        status: 'published', creationMethod: r.creationMethod, currentReview,
+        reviewRuns: readerReviewRuns, researchSufficiencyStatus: researchSufficiency.status,
       })
-    : null;
-  const reviewDisclosure = currentReview.run && currentReviewPublicationGate?.status === 'publish_with_disclosure'
-    ? getReviewDisclosureItems({
-        claims: currentReview.run.claims,
-        decisions: currentReview.run.decisions,
-      })
-    : [];
+    : readerReview;
+  const publicationVersion = researchPublicationVersion(
+    { ...r, reviewRuns: readerReviewRuns }, researchSufficiency.status,
+  );
   return {
     id: r.id,
     type: r.type,
     status: r.status,
     title: r.title,
-    body: r.body,
+    body: cleanResearchArtifact({
+      reportType: r.sourceAiJob?.reportType ?? null,
+      body: r.body,
+    }),
     background: r.background,
     conclusion: r.conclusion,
     risks: r.risks,
+    judgement: r.judgement ?? null,
+    judgementConfidence: r.judgementConfidence ?? null,
+    judgementScope: r.judgementScope ?? null,
+    judgementReviewAt: r.judgementReviewAt?.toISOString() ?? null,
     tags: r.tags,
     authorId: r.authorId,
     creationMethod: r.creationMethod,
@@ -874,13 +949,27 @@ function shapeResearchDetail(r: {
     reviewSummary: r.reviewSummary,
     reviewClaims: r.reviewClaims,
     reviewStartedAt: r.reviewStartedAt?.toISOString() ?? null,
-    reviewRunToken: r.reviewRunToken,
+    reviewRunToken: includeAuditInternals ? r.reviewRunToken : null,
     reviewedAt: r.reviewedAt?.toISOString() ?? null,
-    reviewDetails: r.reviewDetails,
+    reviewDetails: includeAuditInternals ? r.reviewDetails : null,
     // Published AI research must carry the reader-facing consequence of an
     // accepted low/medium-risk exception. This is derived from the exact
     // current run, so it cannot survive an edit as if it still applied.
-    reviewDisclosure,
+    ...readerReview,
+    publicationVersion,
+    publicationHardBlocked: publicationDisclosure.reviewVerification === 'conflicted' || currentReviewPublicationGate?.status === 'blocked',
+    aiJobId: r.sourceAiJob?.id ?? null,
+    researchReportType: r.sourceAiJob?.reportType ?? null,
+    researchObjective: parsedBrief.success ? parsedBrief.data.objective : null,
+    intentCoverage: coerceIntentCoverage(r.publishedIntentCoverage) ?? parseIntCoverage(cleanResearchArtifact({ reportType: r.sourceAiJob?.reportType ?? null, body: r.body })),
+    intentCoverageSnapshot: Boolean(r.publishedIntentCoverage),
+    publishedReviewAcknowledgedAt: r.publishedReviewAcknowledgedAt?.toISOString() ?? null,
+    publishedReviewDisclosure: r.publishedReviewDisclosure,
+    publicationAcknowledgementOutdated: r.status === 'published'
+      && Boolean(r.publishedReviewVersion)
+      && r.publishedReviewVersion !== publicationVersion,
+    publicationDisclosure: publicationDisclosure.reviewDisclosure,
+    publicationDisclosureSummary: publicationDisclosure.reviewDisclosureSummary,
     researchSufficiency,
     // `reviewRuns` is the audit trail. This projection is the single state
     // used by current-version UI decisions, so clients do not need to infer
@@ -917,10 +1006,10 @@ function shapeResearchDetail(r: {
           heartbeatAt: run.heartbeatAt?.toISOString() ?? null,
           completedAt: run.completedAt?.toISOString() ?? null,
           summary: run.summary,
-          claims: run.claims,
-          details: run.details,
+          claims: includeAuditInternals ? run.claims : [],
+          details: includeAuditInternals ? run.details : null,
           triggeredBy: run.triggeredBy,
-          decisions: (run.decisions ?? []).map((decision) => ({
+          decisions: includeAuditInternals ? (run.decisions ?? []).map((decision) => ({
             id: decision.id,
             claimId: decision.claimId,
             revisionHash: decision.revisionHash,
@@ -929,7 +1018,7 @@ function shapeResearchDetail(r: {
             metadata: decision.metadata,
             actorId: decision.actorId,
             createdAt: decision.createdAt.toISOString(),
-          })),
+          })) : [],
           createdAt: run.createdAt.toISOString(),
         }))
       : [],

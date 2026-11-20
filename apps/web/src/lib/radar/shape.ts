@@ -12,6 +12,7 @@ import {
   type DistilledScore,
 } from '@deep-research/shared/schemas';
 import { cleanResearchLabel } from '@/lib/research-markdown-cleanup';
+import { redactsRadarCachedContent } from './visibility';
 
 export type RadarFeedbackCount = {
   useful: number;
@@ -19,6 +20,9 @@ export type RadarFeedbackCount = {
   used: number;
   favorite: number;
   suggest_research: number;
+  read: number;
+  later: number;
+  pilot: number;
 };
 
 export const RADAR_FEEDBACK_TYPES = [
@@ -27,6 +31,9 @@ export const RADAR_FEEDBACK_TYPES = [
   'used',
   'favorite',
   'suggest_research',
+  'read',
+  'later',
+  'pilot',
 ] as const satisfies readonly RadarFeedbackType[];
 
 export type RadarCandidateShape = {
@@ -91,7 +98,16 @@ export type RadarCandidateShape = {
 
 /** 列表默认反馈计数（避免每个候选都 groupBy 一次）。 */
 export function emptyFeedbackCounts(): RadarFeedbackCount {
-  return { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 };
+  return {
+    useful: 0,
+    inaccurate: 0,
+    used: 0,
+    favorite: 0,
+    suggest_research: 0,
+    read: 0,
+    later: 0,
+    pilot: 0,
+  };
 }
 
 function sanitizeOriginalMeta(value: unknown): unknown {
@@ -160,7 +176,11 @@ export function shapeCandidate(input: {
   const counts = input.feedbackCounts ?? emptyFeedbackCounts();
   const mine = input.myFeedbacks ?? [];
   const externalReading = s.tags.includes('external_reading');
-  const excerpt = excerptOf(externalReading ? s.interpretation ?? '' : s.body, 1200);
+  // A public summary does not imply permission to expose its cached source.
+  // Keep this policy at the shared serializer so list/detail/admin consumers
+  // cannot leak the body through an excerpt or enrichment field.
+  const redactCachedContent = redactsRadarCachedContent(s);
+  const excerpt = excerptOf(redactCachedContent ? s.interpretation ?? '' : s.body, 1200);
   const distilledScore = parseDistilledScore(s.distilledScore);
   const highlights = parseHighlights(s.highlights);
   const arxivAnalysis = parseArxivAnalysis(s.arxivAnalysis);
@@ -173,7 +193,7 @@ export function shapeCandidate(input: {
     title: cleanResearchLabel(s.title),
     excerpt,
     excerptDisplay: classifyExcerptDisplay(excerpt),
-    body: input.includeBody === false || externalReading ? null : s.body,
+    body: input.includeBody === false || redactCachedContent ? null : s.body,
     tier: s.distilledTier === 'collection' ? 'deep_read' : s.distilledTier ?? distilledScore?.tier ?? null,
     url: s.url,
     sourceType: s.syncRun?.source?.sourceType ?? (s.source === 'user' ? 'web_share' : null),
@@ -201,27 +221,29 @@ export function shapeCandidate(input: {
     myFeedbacks: mine,
     commentCount: s._count?.comments ?? 0,
     originalKind: s.originalKind ?? null,
-    originalMarkdown: externalReading ? null : s.originalMarkdown ?? null,
-    originalMeta: externalReading ? null : sanitizeOriginalMeta(s.originalMeta ?? null),
+    originalMarkdown: redactCachedContent ? null : s.originalMarkdown ?? null,
+    originalMeta: redactCachedContent ? null : sanitizeOriginalMeta(s.originalMeta ?? null),
     readerQualityStatus: externalReading ? null : s.readerQualityStatus ?? null,
     readerQualityDetails: externalReading ? null : s.readerQualityDetails ?? null,
     contentReviewStatus: externalReading ? null : s.contentReviewStatus ?? null,
-    contentReviewDetails: externalReading ? null : s.contentReviewDetails ?? null,
+    // Review findings carry raw body slices as evidence; hide them whenever
+    // the cached source itself is hidden from this reader.
+    contentReviewDetails: externalReading || redactCachedContent ? null : s.contentReviewDetails ?? null,
     contentReviewRound: externalReading ? 0 : s.contentReviewRound ?? 0,
     renderReviewStatus: externalReading ? null : s.renderReviewStatus ?? null,
     renderReviewRound: externalReading ? 0 : s.renderReviewRound ?? 0,
-    githubItemMeta: externalReading ? null : githubItemMeta,
-    repoSummary: externalReading ? null : s.repoSummary ?? null,
-    highlights: externalReading ? null : highlights,
-    arxivAnalysis: externalReading ? null : arxivAnalysis,
-    tldr: externalReading ? null : s.tldr ?? null,
-    sections: !externalReading && Array.isArray(s.sections)
+    githubItemMeta: redactCachedContent ? null : githubItemMeta,
+    repoSummary: redactCachedContent ? null : s.repoSummary ?? null,
+    highlights: redactCachedContent ? null : highlights,
+    arxivAnalysis: redactCachedContent ? null : arxivAnalysis,
+    tldr: redactCachedContent ? null : s.tldr ?? null,
+    sections: !redactCachedContent && Array.isArray(s.sections)
       ? (s.sections as Array<{ title: string; level: number; startOffset: number; page?: number }>)
       : null,
-    figures: !externalReading && Array.isArray(s.figures)
+    figures: !redactCachedContent && Array.isArray(s.figures)
       ? (s.figures as Array<{ page: number; caption?: string; dataUrl?: string }>)
       : null,
-    authors: !externalReading && Array.isArray(s.authors) ? s.authors : [],
+    authors: !redactCachedContent && Array.isArray(s.authors) ? s.authors : [],
     topics: (s.topicLinks ?? []).map((tl) => tl.topic),
     issues: (s.issueCandidates ?? []).map((ic) => ic.issue),
   };

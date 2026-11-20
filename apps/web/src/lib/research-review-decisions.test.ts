@@ -4,6 +4,7 @@ import {
   decisionResolvesClaim,
   getReviewDisclosureItems,
   getReviewPublicationGate,
+  getReviewPublishDisposition,
   claimIsFactual,
   claimHasCapturedSourceMatch,
   reviewClaimNextAction,
@@ -281,5 +282,69 @@ describe('research review publication decisions', () => {
     });
     expect(gate.status).toBe('research_insufficient');
     expect(gate.researchSufficiencyStatus).toBe('insufficient');
+  });
+});
+
+describe('getReviewPublishDisposition', () => {
+  it('turns an incomplete inventory into a disclosure instead of a hard block', () => {
+    const gate = getReviewPublicationGate({
+      executionStatus: 'completed',
+      outcome: 'attention',
+      coverageStatus: 'insufficient',
+      claims: [unsupported],
+      decisions: [],
+    });
+    const disposition = getReviewPublishDisposition(gate, { claims: [unsupported], decisions: [] });
+    expect(disposition.hardBlocked).toBe(false);
+    expect(disposition.requiresAcknowledgement).toBe(true);
+    expect(disposition.disclosure?.machineIncomplete).toBe(true);
+    expect(disposition.disclosure?.openCount).toBe(1);
+    expect(disposition.disclosure?.items[0]?.claim).toContain('缺少足够证据');
+  });
+
+  it('keeps a high-risk contradiction as the only hard block', () => {
+    const gate = getReviewPublicationGate({
+      executionStatus: 'completed',
+      outcome: 'blocked',
+      coverageStatus: 'complete',
+      claims: [highConflict],
+      decisions: [],
+    });
+    const disposition = getReviewPublishDisposition(gate, { claims: [highConflict], decisions: [] });
+    expect(disposition.hardBlocked).toBe(true);
+  });
+
+  it('does not ask for a second acknowledgement once decisions were disclosed', () => {
+    const gate = getReviewPublicationGate({
+      executionStatus: 'completed',
+      outcome: 'attention',
+      coverageStatus: 'complete',
+      claims: [unsupported],
+      decisions: [{ claimId: 'claim-1', action: 'accept_uncertainty', reason: '待验证' }],
+    });
+    const disposition = getReviewPublishDisposition(gate, {
+      claims: [unsupported],
+      decisions: [{ claimId: 'claim-1', action: 'accept_uncertainty', reason: '待验证' }],
+    });
+    expect(gate.status).toBe('publish_with_disclosure');
+    expect(disposition.requiresAcknowledgement).toBe(false);
+    expect(disposition.hardBlocked).toBe(false);
+  });
+
+  it('leaves a clean or absent gate untouched', () => {
+    expect(getReviewPublishDisposition(null).disclosure).toBeNull();
+    expect(getReviewPublishDisposition({
+      status: 'clear',
+      coverageStatus: 'complete',
+      coverageIncomplete: false,
+      researchSufficiencyStatus: 'sufficient',
+      openCount: 0,
+      highRiskOpenCount: 0,
+      conflictCount: 0,
+      acceptedCount: 0,
+      unsupportedCount: 0,
+      disclosedCount: 0,
+      hardBlockCount: 0,
+    }).requiresAcknowledgement).toBe(false);
   });
 });

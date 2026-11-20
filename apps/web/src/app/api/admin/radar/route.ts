@@ -210,7 +210,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     totalPages: Math.max(1, Math.ceil(total / effectivePerPage)),
     items: finalItems.map((it) => {
       const fb = feedbackMap.get(it.id) ?? {
-        counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
+        counts: {
+          useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0,
+          read: 0, later: 0, pilot: 0,
+        },
         mine: [],
       };
       return shapeCandidate({

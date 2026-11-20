@@ -221,6 +221,16 @@ describe('POST /api/ai-research — V2 brief forwarding', () => {
     expect(upstreamBody.context).toContain('索引差异是什么');
     expect(upstreamBody.context).toContain('团队已用 PG 15');
 
+    // A learning plan must reach the writer as an explicit three-line
+    // contract; otherwise the first screen is left to the model's discretion.
+    const learnBrief = { ...brief, objective: 'learn' as const, question: '学习 PostgreSQL MVCC' };
+    mocks.aiJobCreate.mockResolvedValueOnce({ id: 'job-learn' });
+    await POST(req('http://localhost/api/ai-research', { brief: learnBrief }) as never);
+    const learnCall = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => JSON.parse(String((call[1] as RequestInit).body)) as { topic?: string; context?: string })
+      .find(body => body.topic === '学习 PostgreSQL MVCC')!;
+    const learnBody = learnCall;
+
     // 2. primaryTopicId 触发 TopicFollow upsert
     expect(mocks.topicFollowUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -609,7 +619,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
   beforeEach(() => {
     mocks.transaction.mockImplementation((callback) =>
       callback({
-        research: { update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
+        research: { findUnique: mocks.researchFindUnique, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
         researchAudit: { create: mocks.researchAuditCreate },
         productEvent: { create: mocks.productEventCreate },
         // 注意：不传 researchTopic — 模拟现有 w3 测试里的 tx 形状
@@ -622,7 +632,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
     const { POST } = await import('../researches/[id]/publish/route');
 
     const now1 = new Date('2026-08-19T12:00:00Z');
-    mocks.researchFindUnique.mockResolvedValueOnce({
+    mocks.researchFindUnique.mockResolvedValue({
       id: '55555555-5555-4555-8555-555555555555',
       authorId: USER.id,
       status: 'draft',
@@ -671,7 +681,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
     // 重新 mock: 现在 transaction 提供 researchTopic 与 aiResearchJob.findFirst
     mocks.transaction.mockImplementationOnce((callback) =>
       callback({
-        research: { update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
+        research: { findUnique: mocks.researchFindUnique, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
         researchAudit: { create: mocks.researchAuditCreate },
         productEvent: { create: mocks.productEventCreate },
         researchTopic: { upsert: mocks.researchTopicUpsert },
@@ -681,7 +691,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
       }),
     );
     const now2 = new Date('2026-08-19T12:01:00Z');
-    mocks.researchFindUnique.mockResolvedValueOnce({
+    mocks.researchFindUnique.mockResolvedValue({
       id: '66666666-6666-4666-8666-666666666666',
       authorId: USER.id,
       status: 'draft',

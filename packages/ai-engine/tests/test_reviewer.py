@@ -405,6 +405,69 @@ async def test_review_separates_claim_inventory_from_evidence_adjudication(
 
 
 @pytest.mark.asyncio
+async def test_malformed_inventory_chunk_is_retried_without_losing_siblings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    chunk_one_calls = 0
+
+    async def review(**kwargs: object) -> SimpleNamespace:
+        nonlocal chunk_one_calls
+        operation = str(kwargs["operation"])
+        calls.append(operation)
+        if operation == "research.fact_review.inventory":
+            prompt = str(kwargs["user_prompt"])
+            if "第 1/" in prompt or "chunk1" in prompt:
+                chunk_one_calls += 1
+                if chunk_one_calls == 1:
+                    return SimpleNamespace(text="<think>truncated")
+            return SimpleNamespace(text=json.dumps({
+                "coverage_status": "complete",
+                "claims": [{
+                    "claim_id": "C1",
+                    "claim": "目录包含 Installation",
+                    "claim_type": "external_fact",
+                    "risk": "medium",
+                }],
+            }, ensure_ascii=False))
+        return SimpleNamespace(text=json.dumps({
+            "claims": [{
+                "claim_id": "C1",
+                "claim": "目录包含 Installation",
+                "verdict": "verified",
+                "evidence": {
+                    "source_url": "https://example.com/source",
+                    "excerpt": "Installation",
+                },
+            }],
+            "revision_instructions": [],
+        }, ensure_ascii=False))
+
+    monkeypatch.setattr("ai_engine.reviewer.generate_text", review)
+    monkeypatch.setattr(
+        "ai_engine.reviewer.split_text_by_token_budget",
+        lambda *args: [
+            SimpleNamespace(index=1, start=0, end=10, text="chunk1 目录包含 Installation。"),
+            SimpleNamespace(index=2, start=10, end=20, text="chunk2 目录包含 Installation。"),
+        ],
+    )
+    result = await DefaultResearchReviewer().review(
+        "目录包含 Installation。",
+        (AdapterSource(
+            source_ref={"type": "url", "value": "https://example.com/source"},
+            canonical_key="https://example.com/source",
+            title="source",
+            snippet="Installation",
+            score=1.0,
+            step_captured=AI_JOB_STEP["SEARCH"],  # type: ignore[arg-type]
+        ),),
+        "安装资料",
+    )
+
+    assert chunk_one_calls == 2
+    assert result.status != "review_unavailable"
+
+@pytest.mark.asyncio
 async def test_review_checkpoint_persists_inventory_before_adjudication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -600,8 +663,9 @@ async def test_failed_adjudication_batch_is_unverified_without_discarding_other_
         "部分批次失败",
     )
 
-    # Inventory + batch 1 + failed batch attempt/retry + batch 3.
-    assert len(calls) == 5
+    # Inventory + batch 1 + batch 3, plus retries and recursive splits of
+    # the failing [C3, C4] batch (each singleton is retried too).
+    assert len(calls) >= 7
     verdicts = {claim.claim_id: claim.verdict for claim in result.claims}
     assert verdicts["C1"] == "verified"
     assert verdicts["C2"] == "verified"
@@ -625,16 +689,23 @@ async def test_missing_inventory_coverage_marker_is_not_treated_as_complete(
     calls: list[dict[str, object]] = []
 
     async def review(**kwargs: object) -> SimpleNamespace:
+        # Inventory chunks now run concurrently, so route by prompt instead of
+        # call order: only the first report chunk yields a claim, and neither
+        # chunk declares a coverage marker.
         calls.append(kwargs)
-        if len(calls) == 1:
-            return SimpleNamespace(text=json.dumps({
-                "claims": [{
+        prompt = str(kwargs.get("user_prompt", ""))
+        if "这是报告全文第" in prompt:
+            claims = (
+                [{
                     "claim_id": "C1",
                     "claim": "事实声明",
                     "claim_type": "external_fact",
                     "risk": "medium",
-                }],
-            }, ensure_ascii=False))
+                }]
+                if "第 1/" in prompt
+                else []
+            )
+            return SimpleNamespace(text=json.dumps({"claims": claims}, ensure_ascii=False))
         return SimpleNamespace(text=json.dumps({
             "claims": [{
                 "claim_id": "C1",
@@ -655,9 +726,63 @@ async def test_missing_inventory_coverage_marker_is_not_treated_as_complete(
         "覆盖检查",
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 3  # two inventory chunks + one adjudication batch
     assert result.coverage_status == "insufficient"
     assert result.to_dict()["review_outcome"] == "attention"
+
+
+@pytest.mark.asyncio
+async def test_a_partial_batch_answer_recovers_only_the_missing_claims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.reviewer import ClaimInventoryItem, _adjudicate_batch_with_split
+
+    batch = tuple(
+        ClaimInventoryItem(
+            claim_id=f"C{index}",
+            claim=f"事实{index}",
+            risk="medium",
+            claim_type="external_fact",
+        )
+        for index in range(1, 5)
+    )
+    calls = 0
+
+    async def review(**kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        prompt = str(kwargs.get("user_prompt", ""))
+        ids = [item for item in ("C1", "C2", "C3", "C4") if item in prompt]
+        # First call sees all four but answers only the first two. The recovery
+        # call receives exactly the missing pair.
+        if len(ids) == 4:
+            ids = ["C1", "C2"]
+        return SimpleNamespace(text=json.dumps({"claims": [
+            {
+                "claim_id": claim_id,
+                "claim": f"事实{claim_id[1:]}",
+                "verdict": "unsupported",
+                "risk": "medium",
+            }
+            for claim_id in ids
+        ]}, ensure_ascii=False))
+
+    monkeypatch.setattr("ai_engine.reviewer.generate_text", review)
+    result, error = await _adjudicate_batch_with_split(
+        batch=batch,
+        batch_index=1,
+        batch_count=1,
+        topic="部分批次",
+        report_type="research_report",
+        source_text="source",
+        llm_spec="fake:model",
+    )
+
+    assert error is None
+    assert result is not None
+    assert result.coverage_status == "complete"
+    assert {claim.claim_id for claim in result.claims} == {"C1", "C2", "C3", "C4"}
+    assert calls == 2
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openAdvancedSettings } from './fixtures';
 
 const userId = 'f0500000-0000-4000-8000-000000000008';
 const conversationId = 'f0500000-0000-4000-8000-000000000009';
@@ -42,6 +43,7 @@ async function mockWorkspace(page: Page) {
 test('selected issue and bookmark survive refresh even when search no longer returns them', async ({ page }) => {
   const mock = await mockWorkspace(page);
   await page.goto(`/ai-research?conversation=${conversationId}`);
+  await openAdvancedSettings(page);
   const focus = page.getByRole('textbox', { name: '重点回答' });
   await expect(focus).toHaveValue('先比较成本');
   const details = page.locator('summary').filter({ hasText: '历史资料建议（可选）' });
@@ -54,6 +56,7 @@ test('selected issue and bookmark survive refresh even when search no longer ret
   }, [userId, conversationId])).toBe(2);
   mock.hideSources();
   await page.reload();
+  await openAdvancedSettings(page);
   await expect(focus).toHaveValue('先比较成本');
   const selected = page.getByRole('region', { name: '已选历史资料' });
   await expect(selected).toContainText('专题议题测试来源');
@@ -71,6 +74,7 @@ test('legacy draft keeps references and blocks partial deselection until old sel
   await page.addInitScript(({ user, conversation, saved }) => { const key = `ai-research-draft:v1:${user}:${conversation}`; if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(saved)); }, { user: userId, conversation: conversationId, saved: draft });
   mock.hideSources();
   await page.goto(`/ai-research?conversation=${conversationId}`);
+  await openAdvancedSettings(page);
   const focus = page.getByRole('textbox', { name: '重点回答' });
   await expect(focus).toHaveValue('先比较成本');
   await focus.fill('更新旧草稿重点');
@@ -92,6 +96,7 @@ test('legacy draft keeps references and blocks partial deselection until old sel
   }, [userId, conversationId])).toBe(true);
   await page.reload();
   await expect(start).toBeDisabled();
+  await openAdvancedSettings(page);
   await expect(page.getByRole('alert').filter({ hasText: '旧草稿没有保存资料与来源的对应关系' })).toBeVisible();
   await details.click();
   await page.getByRole('checkbox', { name: `使用资料：旧草稿已选资料 (${bookmarkId})` }).click();
