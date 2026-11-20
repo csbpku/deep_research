@@ -1,3 +1,11 @@
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='RadarFeedbackType' AND e.enumlabel IN ('read','later','pilot')) THEN
+    ALTER TYPE "RadarFeedbackType" ADD VALUE IF NOT EXISTS 'read';
+    ALTER TYPE "RadarFeedbackType" ADD VALUE IF NOT EXISTS 'later';
+    ALTER TYPE "RadarFeedbackType" ADD VALUE IF NOT EXISTS 'pilot';
+  END IF;
+END $$;
 -- P0-4 判断参与排序：把 read/later/pilot/inaccurate 聚合成一个可排序的分值，
 -- 由反馈接口在同一事务内重算，列表无需逐页 join，分页结果保持确定。
 -- 权重：pilot +2 / later +1 / read -1 / inaccurate -2；±20 封顶。
