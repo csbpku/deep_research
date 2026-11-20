@@ -155,6 +155,10 @@ enum RadarFeedbackType {
   used
   favorite
   suggest_research
+  // P0-4 判断落点：轻量判断按钮。仅新增枚举值，历史反馈保持有效。
+  read
+  later
+  pilot
 }
 
 // Week 6 [db]：AI 多轮追问会话状态
@@ -327,6 +331,8 @@ model Summary {
   // tier and must stay skim until the source enrichment contract is ready.
   distilledTargetTier String? @db.VarChar(16)
   distilledProfile   String?  @db.VarChar(16)
+  // 用户判断聚合分：pilot +2 / later +1 / read -1 / inaccurate -2，±20 封顶
+  judgmentScore      Int      @default(0)
   interpretation     String?  @db.VarChar(2000) // AI 一句话解读
   syncRunId          String?  @db.Uuid // radar_sync_runs.id
   sortOrder          Int? // Admin 排列的序号（每日 1-4）

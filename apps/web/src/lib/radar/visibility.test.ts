@@ -10,6 +10,17 @@ const base = {
 
 describe('isRadarSummaryVisible', () => {
   it('shows fully approved deep_read', () => expect(isRadarSummaryVisible(base, false)).toBe(true));
+  it.each([
+    { contentReviewStatus: null, renderReviewStatus: null },
+    { contentReviewStatus: 'needs_manual_review', renderReviewStatus: 'approved' },
+  ])('keeps summary-only readable rows visible to shared consumers: %j', (review) => {
+    expect(isRadarSummaryVisible({ ...base, ...review }, false)).toBe(true);
+    // Chat reads the cached source, whereas a bookmark only needs the summary.
+    expect(canSeedChatFromSummary({ ...base, ...review, status: 'candidate' }, false)).toBe(false);
+  });
+  it('still hides a manual-review row without render approval', () => {
+    expect(isRadarSummaryVisible({ ...base, contentReviewStatus: 'needs_manual_review' }, false)).toBe(false);
+  });
   it('hides unscored for members, not admins', () => {
     const s = { ...base, distilledScore: null };
     expect(isRadarSummaryVisible(s, false)).toBe(false);
@@ -33,7 +44,7 @@ describe('canSeedChatFromSummary', () => {
     expect(canSeedChatFromSummary({ ...seed, status: 'archived' }, true)).toBe(false);
     expect(canSeedChatFromSummary({ ...seed, distilledScore: null }, false)).toBe(false);
     expect(canSeedChatFromSummary({ ...seed, distilledTier: 'noise' }, false)).toBe(false);
-    expect(canSeedChatFromSummary({ ...seed, contentReviewStatus: null }, false)).toBe(false);
+    expect(canSeedChatFromSummary({ ...seed, contentReviewStatus: 'pending' }, false)).toBe(false);
   });
   it('allows published non-radar summaries only when published', () => {
     const plain = { ...seed, source: 'manual', syncRunId: null };
