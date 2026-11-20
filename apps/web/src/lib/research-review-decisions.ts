@@ -563,3 +563,95 @@ export function isReviewDecisionAction(value: string): value is ReviewDecisionAc
     || value === 'mark_not_fact'
     || value === 'request_verification';
 }
+
+export interface ReviewPublishDisclosureItem {
+  claimId: string;
+  claim: string;
+  risk: string | null;
+  evidenceStatus: ReviewClaimEvidenceStatus;
+  label: string;
+}
+
+export interface ReviewPublishDisclosure {
+  coverageStatus: ReviewCoverageStatus | null;
+  researchSufficiencyStatus: ReviewPublicationGate['researchSufficiencyStatus'];
+  openCount: number;
+  unsupportedCount: number;
+  conflictCount: number;
+  highRiskOpenCount: number;
+  disclosedCount: number;
+  items: ReviewPublishDisclosureItem[];
+  /** True when the run itself never produced a trustworthy inventory. */
+  machineIncomplete: boolean;
+}
+
+export interface ReviewPublishDisposition {
+  hardBlocked: boolean;
+  /** The author must explicitly acknowledge the residual uncertainty. */
+  requiresAcknowledgement: boolean;
+  disclosure: ReviewPublishDisclosure | null;
+}
+
+/**
+ * Publishing is a team action, not a certificate. The gate therefore has
+ * exactly one hard stop: a high-risk claim contradicted by captured evidence.
+ * Everything else (incomplete inventory, unverified claims, a thin research
+ * contract) is publishable once the author acknowledges it and the reader sees
+ * the same disclosure.
+ */
+export function getReviewPublishDisposition(
+  gate: ReviewPublicationGate | null,
+  input?: { claims?: unknown; decisions?: ReviewDecisionRecord[] | null },
+): ReviewPublishDisposition {
+  if (!gate) return { hardBlocked: false, requiresAcknowledgement: false, disclosure: null };
+  if (gate.status === 'blocked' || gate.hardBlockCount > 0) {
+    return { hardBlocked: true, requiresAcknowledgement: false, disclosure: null };
+  }
+  if (gate.status === 'clear') {
+    return { hardBlocked: false, requiresAcknowledgement: false, disclosure: null };
+  }
+  if (gate.status === 'unavailable') {
+    return { hardBlocked: false, requiresAcknowledgement: true, disclosure: null };
+  }
+
+  const claims = asReviewClaims(input?.claims);
+  const latest = latestDecisions(input?.decisions);
+  const items: ReviewPublishDisclosureItem[] = [];
+  for (const claim of claims) {
+    if (!claimIsFactual(claim)) continue;
+    const claimId = reviewClaimId(claim);
+    if (!claimId) continue;
+    const status = claimEvidenceStatus(claim);
+    if (status === 'supported') continue;
+    if (latest.get(claimId) && decisionResolvesClaim(claim, latest.get(claimId))) continue;
+    items.push({
+      claimId,
+      claim: (claim.claim ?? '未命名声明').trim().slice(0, 600),
+      risk: claim.risk?.trim().toLowerCase() || null,
+      evidenceStatus: status,
+      label: status === 'contradicted' ? '来源存在冲突' : '未经核验',
+    });
+    if (items.length >= 20) break;
+  }
+
+  const disclosure: ReviewPublishDisclosure = {
+    coverageStatus: gate.coverageStatus,
+    researchSufficiencyStatus: gate.researchSufficiencyStatus,
+    openCount: gate.openCount,
+    unsupportedCount: gate.unsupportedCount,
+    conflictCount: gate.conflictCount,
+    highRiskOpenCount: gate.highRiskOpenCount,
+    disclosedCount: gate.disclosedCount,
+    items,
+    machineIncomplete: gate.status === 'coverage_insufficient'
+      || gate.coverageStatus === 'insufficient',
+  };
+
+  return {
+    hardBlocked: false,
+    // publish_with_disclosure already means every remaining claim has an
+    // explicit author decision, so it does not need a second blanket click.
+    requiresAcknowledgement: gate.status !== 'publish_with_disclosure',
+    disclosure,
+  };
+}

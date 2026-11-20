@@ -473,6 +473,17 @@ model Research {
   // 已发布 AI 研究是稳定的、经过审核的版本；后续编辑创建新的私有草稿。
   supersedesResearchId String?       @db.Uuid
   reviewStatus        String?        @db.VarChar(32)
+  // 发布时确认的审核快照：版本、revision、披露内容与确认时间。
+  publishedReviewVersion        String?   @db.Char(64)
+  publishedReviewRevisionHash   String?   @db.Char(64)
+  publishedReviewDisclosure     Json?     @db.JsonB
+  publishedReviewAcknowledgedAt DateTime? @db.Timestamptz(3)
+  publishedIntentCoverage      Json?     @db.JsonB
+  // 知识卡判断：发布时必须给出可复用结论，而不是原始笔记。
+  judgement           String?   @db.VarChar(500)
+  judgementConfidence String?   @db.VarChar(16)
+  judgementScope      String?   @db.VarChar(500)
+  judgementReviewAt   DateTime? @db.Timestamptz(3)
   reviewAttempts      Int            @default(0)
   // Current review run lease.  A late reviewer result must never overwrite
   // a newer revision or a newer manual/queued review.
