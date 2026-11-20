@@ -44,6 +44,7 @@ import { POST as researchPost } from '../researches/route';
 import { researchListOrderBy, researchListWhereLegacy } from '../../../lib/research-list-where';
 import { DELETE as researchDelete } from '../researches/[id]/route';
 import { POST as publishPost } from '../researches/[id]/publish/route';
+import { researchPublicationVersion } from '../../../lib/research-publication-version';
 import { CreateResearchInput } from '../../../lib/schemas';
 
 function request(content: string, filename: string, mimeType: string): Request {
@@ -58,7 +59,7 @@ beforeEach(() => {
   mocks.writeFile.mockResolvedValue(undefined);
   mocks.unlink.mockResolvedValue(undefined);
   mocks.transaction.mockImplementation((callback) => callback({
-    research: { create: mocks.researchCreate, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany, delete: mocks.researchDelete },
+    research: { findUnique: mocks.researchFindUnique, create: mocks.researchCreate, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany, delete: mocks.researchDelete },
     aiResearchJob: { delete: mocks.aiJobDelete },
     researchAudit: { create: mocks.auditCreate },
     productEvent: { create: mocks.eventCreate },
@@ -198,6 +199,265 @@ describe('research provenance input', () => {
     expect(mocks.researchUpdate.mock.calls[0][0].data.aiAssisted).toBe(true);
   });
 
+  it('publishes an AI draft with acknowledged disclosure when no current verdict exists', async () => {
+    const now = new Date();
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'AI draft', body: 'AI output', background: '研究背景', conclusion: '研究结论',
+      risks: '风险与待验证项', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [],
+    });
+    mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
+      id: '22222222-2222-2222-2222-222222222222', type: 'research', status: 'published',
+      title: 'AI draft', body: 'AI output', background: '研究背景', conclusion: '研究结论',
+      risks: '风险与待验证项', tags: [], authorId: '11111111-1111-1111-1111-111111111111',
+      creationMethod: 'ai_research', aiAssisted: data.aiAssisted, publishedAt: now,
+      createdAt: now, updatedAt: now,
+      author: { id: '11111111-1111-1111-1111-111111111111', name: 'User', email: 'u@test' },
+    }));
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ acknowledgeDisclosure: true, publicationVersion: researchPublicationVersion(await mocks.researchFindUnique(), 'not_assessed') }),
+      }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).status).toBe('published');
+    const published = mocks.researchUpdate.mock.calls[0][0].data;
+    expect(published.publishedReviewVersion).toMatch(/^[a-f0-9]{64}$/);
+    expect(published.publishedReviewAcknowledgedAt).toBeInstanceOf(Date);
+    expect(published.publishedReviewDisclosure).toBeTruthy();
+  });
+
+  it('rejects a learning path whose concept map has fewer than four concepts', async () => {
+    const body = `# 学习
+
+## 90 秒回答
+回答。
+
+## 概念图
+
+| 概念 | 含义 | 关系 |
+|---|---|---|
+| A | a | 指向 B |
+| B | b | 被 A 引用 |
+
+## 分层解释
+解释。
+
+## 可运行示例
+示例。
+
+## 常见误区
+误区。
+
+## 自检
+问题。
+`;
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '33333333-3333-3333-3333-333333333333',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'Learn', body, background: '背景', conclusion: '结论',
+      risks: '风险', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [],
+      sourceAiJob: { reportType: 'learning_path', brief: null, sourcePolicy: 'prefer_user_sources', aiResearchSources: [] },
+    });
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }) as never,
+      { params: Promise.resolve({ id: '33333333-3333-3333-3333-333333333333' }) },
+    );
+    const payload = await response.json();
+    expect(response.status).toBe(400);
+    expect(payload.details.requiresLearningPathStructure).toBe(true);
+  });
+
+  it('rejects a comparison matrix cell that has neither evidence nor an explicit gap', async () => {
+    const body = '# 对比\n\n## 对比矩阵\n\n| 方案 | 并发安全 |\n|---|---|\n| A | 性能更好，无需锁。 |\n';
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'Compare', body, background: '背景', conclusion: '结论',
+      risks: '风险', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [],
+      sourceAiJob: { reportType: 'comparison_matrix', brief: null, sourcePolicy: 'prefer_user_sources', aiResearchSources: [] },
+    });
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).details.requiresComparisonEvidence).toBe(true);
+  });
+
+  it('snapshots intent coverage when publishing an AI draft', async () => {
+    const now = new Date();
+    const body = 'AI output\n\n## 覆盖检查\n\n| 必答问题 | 状态 | 依据 |\n|---|---|---|\n| 核心机制是什么？ | 有证据 | [S1] |\n\n## 自检\n'.replace(/\n/g, '\n');
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'AI draft', body, background: '研究背景', conclusion: '研究结论',
+      risks: '风险与待验证项', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [],
+    });
+    mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
+      id: '22222222-2222-2222-2222-222222222222', type: 'research', status: 'published',
+      title: 'AI draft', body, background: '研究背景', conclusion: '研究结论',
+      risks: '风险与待验证项', tags: [], authorId: '11111111-1111-1111-1111-111111111111',
+      creationMethod: 'ai_research', aiAssisted: data.aiAssisted, publishedAt: now,
+      createdAt: now, updatedAt: now,
+      author: { id: '11111111-1111-1111-1111-111111111111', name: 'User', email: 'u@test' },
+    }));
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ acknowledgeDisclosure: true, publicationVersion: researchPublicationVersion(await mocks.researchFindUnique(), 'not_assessed') }),
+      }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+    expect(response.status).toBe(200);
+    const published = mocks.researchUpdate.mock.calls[0][0].data;
+    expect(published.publishedIntentCoverage).toMatchObject({ present: true, counts: { evidence: 1, unknown: 0, conflict: 0 } });
+  });
+
+  it('requires an acknowledgement for partial must-answer coverage', async () => {
+    const id = '66666666-6666-4666-8666-666666666666';
+    const authorId = '11111111-1111-1111-1111-111111111111';
+    const body = `AI output
+
+## 覆盖检查
+
+| 必答问题 | 状态 | 依据 |
+|---|---|---|
+| 核心机制是什么？ | 有证据 | [S1] |
+| 边界是什么？ | 有证据 | 只覆盖了部分边界 |
+`;
+    mocks.researchFindUnique.mockResolvedValue({
+      id, authorId, status: 'draft', title: 'AI draft', body,
+      background: '研究背景', conclusion: '研究结论', risks: '风险', tags: [],
+      creationMethod: 'ai_research', reviewStatus: null, reviewRuns: [],
+    });
+
+    const noAck = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ publicationVersion: researchPublicationVersion(await mocks.researchFindUnique(), 'not_assessed') }),
+      }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+    expect(noAck.status).toBe(400);
+    const payload = await noAck.json();
+    expect(payload.details.requiresIntentCoverageAcknowledgement).toBe(true);
+    expect(payload.details.intentCoverage.counts.partial).toBe(1);
+  });
+
+  it('publishes a learning path without the report summary sections', async () => {
+    const id = '55555555-5555-4555-8555-555555555555';
+    const authorId = '11111111-1111-1111-1111-111111111111';
+    const now = new Date();
+    const body = `# 学习
+
+## 概念图
+
+| 概念 | 含义 | 关系 |
+|---|---|---|
+| A | a | 指向 B |
+| B | b | 被 A 引用 |
+| C | c | 与 A 并列 |
+| D | d | 依赖 C |
+
+## 自检
+问题。
+`;
+    mocks.researchFindUnique.mockResolvedValue({
+      id, type: 'research', authorId, status: 'draft', title: 'Learn', body,
+      background: null, conclusion: null, risks: null, tags: [], creationMethod: 'ai_research',
+      reviewStatus: null, reviewRuns: [], updatedAt: now,
+      sourceAiJob: { reportType: 'learning_path', brief: null, sourcePolicy: 'prefer_user_sources', aiResearchSources: [] },
+    });
+    mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
+      id, type: 'research', status: 'published', title: 'Learn', body,
+      background: null, conclusion: null, risks: null, tags: [], authorId,
+      creationMethod: 'ai_research', aiAssisted: data.aiAssisted, publishedAt: now,
+      createdAt: now, updatedAt: now,
+      author: { id: authorId, name: 'User', email: 'u@test' },
+    }));
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ acknowledgeDisclosure: true, publicationVersion: researchPublicationVersion(await mocks.researchFindUnique(), 'attention') }),
+      }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+    expect((await response.json()).details?.missing).toBeUndefined();
+    expect(response.status).not.toBe(400);
+  });
+
+  it('publishes a knowledge card without research-report summary sections', async () => {
+    const id = '44444444-4444-4444-8444-444444444444';
+    const authorId = '11111111-1111-1111-1111-111111111111';
+    const now = new Date();
+    mocks.researchFindUnique.mockResolvedValue({
+      id,
+      type: 'knowledge',
+      authorId,
+      status: 'draft',
+      title: 'A useful excerpt',
+      body: 'Source excerpt and my note.',
+      background: null,
+      conclusion: null,
+      risks: null,
+      tags: ['playwright'],
+      creationMethod: 'manual',
+      knowledgeIndexText: null,
+      judgement: 'GitNexus 更适合跨仓库查调用关系。',
+      judgementConfidence: 'medium',
+      judgementScope: '仅限已建索引的仓库',
+      judgementReviewAt: new Date('2027-02-01'),
+      reviewStatus: null,
+      reviewRuns: [],
+      sourceAiJob: null,
+    });
+    mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
+      id,
+      type: 'knowledge',
+      status: 'published',
+      title: 'A useful excerpt',
+      body: 'Source excerpt and my note.',
+      background: null,
+      conclusion: null,
+      risks: null,
+      tags: ['playwright'],
+      authorId,
+      creationMethod: 'manual',
+      aiAssisted: data.aiAssisted,
+      publishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      author: { id: authorId, name: 'User', email: 'u@test' },
+    }));
+
+    const response = await publishPost(
+      new Request(`http://localhost/api/researches/${id}/publish`, { method: 'POST' }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).status).toBe('published');
+  });
+
   it('queues private index cleanup when a knowledge draft is published', async () => {
     const id = '33333333-3333-4333-8333-333333333333';
     const authorId = '11111111-1111-1111-1111-111111111111';
@@ -215,6 +475,10 @@ describe('research provenance input', () => {
       tags: [],
       creationMethod: 'manual',
       knowledgeIndexText: 'Confirmed judgment text.',
+      judgement: '把私有向量排除在公共知识面之外。',
+      judgementConfidence: 'high',
+      judgementScope: '仅适用于团队共享的知识库',
+      judgementReviewAt: new Date('2027-03-01'),
       reviewStatus: null,
       reviewRuns: [],
       sourceAiJob: null,
@@ -244,16 +508,22 @@ describe('research provenance input', () => {
     );
 
     expect(response.status).toBe(200);
+    const indexed = (mocks.researchUpdate.mock.calls as unknown as Array<[unknown]>)
+      .map(([arg]) => arg as { data?: { knowledgeIndexText?: string } })
+      .map(arg => arg.data?.knowledgeIndexText)
+      .filter((value): value is string => typeof value === 'string')
+      .find(value => value.includes('把私有向量排除在公共知识面之外。'));
+    expect(indexed).toContain('仅适用于团队共享的知识库');
     expect(mocks.personalKnowledgeIndexUpsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { researchId: id },
       create: expect.objectContaining({
         ownerId: authorId,
         researchId: id,
-        operation: 'delete',
+        operation: 'upsert',
         status: 'queued',
         generation: 1,
       }),
-      update: expect.objectContaining({ operation: 'delete', status: 'queued' }),
+      update: expect.objectContaining({ operation: 'upsert', status: 'queued' }),
     }));
   });
 
@@ -319,7 +589,8 @@ describe('research provenance input', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       code: 'VALIDATION_FAILED',
-      message: '事实审核尚未完成，审核通过后才能发布 AI 调研',
+      message: '这份调研还有未完成核验的内容；确认带披露发布后才能继续',
+      details: expect.objectContaining({ requiresDisclosureAcknowledgement: true }),
     });
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
@@ -344,7 +615,8 @@ describe('research provenance input', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       code: 'VALIDATION_FAILED',
-      message: '事实审核尚未完成，审核通过后才能发布 AI 调研',
+      message: '这份调研还有未完成核验的内容；确认带披露发布后才能继续',
+      details: expect.objectContaining({ requiresDisclosureAcknowledgement: true }),
     });
     expect(mocks.transaction).not.toHaveBeenCalled();
   });

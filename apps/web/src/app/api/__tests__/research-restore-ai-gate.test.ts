@@ -36,7 +36,7 @@ function archivedAi(body: string, runs: Array<Record<string, unknown>>) {
 }
 const passingRun = {
   id: 'run-1', revisionHash: hashResearchRevision(fields), executionStatus: 'completed', outcome: 'clear',
-  attempt: 1, summary: { coverage: { status: 'sufficient' } }, claims: [], decisions: [], createdAt: new Date(),
+  attempt: 1, summary: { coverage_status: 'complete' }, claims: [], decisions: [], createdAt: new Date(),
 };
 
 const restore = () => POST(

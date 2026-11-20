@@ -31,6 +31,7 @@ export function SectionCard({
   children,
   className,
   bodyClassName,
+  id,
   bodySpacing = 'normal',
   variant = 'outlined',
   tone = 'default',
@@ -41,6 +42,7 @@ export function SectionCard({
   children: React.ReactNode;
   className?: string;
   bodyClassName?: string;
+  id?: string;
   bodySpacing?: 'normal' | 'none' | 'top';
   variant?: 'outlined' | 'reading';
   tone?: 'default' | 'muted' | 'accent' | 'info' | 'success' | 'warning' | 'destructive';
@@ -50,7 +52,7 @@ export function SectionCard({
   const ToneIcon = icon ?? TONE_DEFAULT_ICON[tone];
   const appearance = domainAppearance(TONE_PALETTE[tone]);
   return (
-    <Paper component="section" variant="outlined"
+    <Paper component="section" variant="outlined" id={id}
       data-section-tone={tone} data-section-variant={variant}
       className={[styles.sectionCard, 'material-surface', className].filter(Boolean).join(' ')}
       style={{ '--section-accent': appearance.color, '--section-background': appearance.backgroundColor } as React.CSSProperties}
