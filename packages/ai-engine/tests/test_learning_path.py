@@ -292,6 +292,16 @@ def test_a_limitation_is_not_accepted_as_a_boundary() -> None:
     assert "不会立即把磁盘空间归还" not in bounded.split("## 概念图")[0]
 
 
+def test_the_word_wraparound_is_not_itself_a_negative_outcome() -> None:
+    text = _doc_with_third_bullet(
+        "PostgreSQL 的 autovacuum 由死行、插入行和未冻结行龄驱动，阈值可触发防回卷。[S5]"
+    )
+    bounded = enforce_learning_budget(text)
+    opening = bounded.split("## 概念图")[0]
+    assert "本轮未确认（证据缺口）" in opening
+    assert "未冻结行龄驱动" not in opening
+
+
 def test_a_conditional_boundary_survives() -> None:
     text = _doc_with_third_bullet("当长事务阻塞 xmin 视界时，不要继续提高 autovacuum 力度。")
     bounded = enforce_learning_budget(text)

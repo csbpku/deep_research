@@ -405,7 +405,7 @@ _DIRECT_PROHIBITION = re.compile(
 )
 # A condition ("when X") is only a boundary when it leads to a negative
 # outcome. "在表内容变化时更新统计" is normal operation, not an abstention.
-_NEGATIVE_OUTCOME = re.compile(r"无效|无法|不能|失败|回卷|不要|不应|不宜|不建议|仅适合|只适合")
+_NEGATIVE_OUTCOME = re.compile(r"无效|无法|不能|失败|不要|不应|不宜|不建议|仅适合|只适合")
 
 
 def is_boundary_statement(claim: str) -> bool:
@@ -652,7 +652,14 @@ def _trim_concept_map(content: str) -> str:
     lines = content.splitlines()
     table = [line for line in lines if line.strip().startswith("|")]
     if len(table) < 4:
-        return _trim_section(content, SECTION_CAPS["概念图"])
+        # A bare header is worse than a stated gap: the reader sees an empty
+        # table and the publish gate blocks the whole artifact. Keep whatever
+        # concept the writer did produce and say the map is incomplete.
+        kept_low = table[:4]
+        note = (
+            f"本轮未确认（概念图未生成：本轮只识别出 {max(0, len(table) - 2)} 个核心概念）。"
+        )
+        return "\n\n" + "\n".join(kept_low) + "\n\n" + note + "\n"
     kept = table[:8]  # header + separator + up to 6 concepts
     rest = [line for line in lines if not line.strip().startswith("|")]
     prefix = "\n\n" if content.startswith("\n") else ""
