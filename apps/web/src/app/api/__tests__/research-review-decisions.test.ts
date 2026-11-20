@@ -95,6 +95,7 @@ beforeEach(() => {
     createdAt: new Date('2026-09-07T10:00:00.000Z'),
   }));
   mocks.transaction.mockImplementation((callback: (tx: unknown) => Promise<unknown>) => callback({
+    $executeRaw: vi.fn(),
     research: { findUnique: mocks.txResearchFindUnique, update: mocks.txResearchUpdate },
     researchReviewRun: { findUnique: mocks.txRunFindUnique, create: mocks.txRunCreate },
     aiResearchJob: { update: mocks.txJobUpdate },

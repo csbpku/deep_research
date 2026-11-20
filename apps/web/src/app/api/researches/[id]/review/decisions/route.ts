@@ -138,7 +138,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   });
   if (
     !research
-    || research.status !== 'draft'
+    || (research.status !== 'draft' && research.status !== 'published')
     || (research.authorId !== user.id && user.role !== 'admin')
   ) {
     return toApiErrorResponse({
@@ -243,6 +243,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   }
 
   const result = await prisma.$transaction(async (tx) => {
+    // Serialize decisions for one run so two requests cannot both append the
+    // same claim and inflate the accepted count.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${run.id}))`;
     // Re-read the run inside the transaction. This prevents a decision from
     // being attached after an edit has already made the run stale.
     const freshResearch = await tx.research.findUnique({
@@ -301,13 +304,16 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
     if (
       !freshResearch
-      || freshResearch.status !== 'draft'
+      || (freshResearch.status !== 'draft' && freshResearch.status !== 'published')
       || !freshRun
       || freshRun.executionStatus !== 'completed'
       || freshRun.revisionHash !== hashResearchRevision(freshResearch)
       || freshRun.revisionHash !== revisionHash
     ) {
       throw new Error('REVIEW_DECISION_STALE');
+    }
+    if (!workflowAction && freshRun.decisions.some((item) => item.claimId === input.claimId)) {
+      throw new Error('REVIEW_DECISION_EXISTS');
     }
     // A verification request is a workflow command, not an author's
     // publication decision. Persist it on the replacement run's workflow
@@ -519,12 +525,23 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     return { decision, gate, queuedReview };
   }).catch((error: unknown) => {
     if (error instanceof Error && error.message === 'REVIEW_DECISION_STALE') return null;
+    if (error instanceof Error && error.message === 'REVIEW_DECISION_EXISTS') return 'REVIEW_DECISION_EXISTS' as const;
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       return 'REVIEW_ALREADY_RUNNING' as const;
     }
     throw error;
   });
 
+  if (result === 'REVIEW_DECISION_EXISTS') {
+    return NextResponse.json(
+      {
+        code: ERROR_CODES.AI_REVIEW_CONFLICT,
+        message: '这条声明已经处理过，请刷新页面查看结果。',
+        requestId,
+      },
+      { status: 409 },
+    );
+  }
   if (result === 'REVIEW_ALREADY_RUNNING') {
     return NextResponse.json(
       {
