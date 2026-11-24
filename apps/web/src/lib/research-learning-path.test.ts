@@ -40,8 +40,12 @@ describe('checkLearningPath', () => {
     expect(check.issues.some(issue => issue.includes('关系'))).toBe(true);
   });
 
-  it('returns absent outside a learning path', () => {
-    expect(checkLearningPath('# 报告\n\n## 结论\n')).toEqual({ present: false, concepts: 0, issues: [] });
+  it('flags a learning path with no concept map instead of passing it', () => {
+    expect(checkLearningPath('# 报告\n\n## 结论\n')).toEqual({
+      present: false,
+      concepts: 0,
+      issues: ['缺少「## 概念图」章节'],
+    });
   });
 });
 

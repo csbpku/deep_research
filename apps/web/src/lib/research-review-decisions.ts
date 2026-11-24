@@ -649,9 +649,10 @@ export function getReviewPublishDisposition(
 
   return {
     hardBlocked: false,
-    // publish_with_disclosure already means every remaining claim has an
-    // explicit author decision, so it does not need a second blanket click.
-    requiresAcknowledgement: gate.status !== 'publish_with_disclosure',
+    // Every non-clear gate needs the author to confirm what the reader will
+    // see. `publish_with_disclosure` used to skip it, which stored a JsonNull
+    // disclosure together with an acknowledgement timestamp.
+    requiresAcknowledgement: true,
     disclosure,
   };
 }

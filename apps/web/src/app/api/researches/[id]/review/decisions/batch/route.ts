@@ -234,8 +234,10 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       reportContent: freshResearch.body,
       sourcePolicy: freshResearch.sourceAiJob?.sourcePolicy ?? (brief.success ? brief.data.sourcePolicy : null),
     });
+    // A fork copies title/body/summary verbatim, so revisionHash alone would
+    // pull another research's runs into this gate.
     const revisionRuns = await tx.researchReviewRun.findMany({
-      where: { revisionHash },
+      where: { revisionHash, researchId: research.id },
       select: {
         id: true,
         revisionHash: true,
@@ -252,6 +254,21 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       revisionHash,
       researchSufficiencyStatus: sufficiency.status,
     }).gate;
+    // Keep the row-level mirror in step with the single-decision path; the
+    // list filters read it, so a cleared batch would otherwise still look
+    // like it needs action.
+    const reviewStatus = !gate
+      ? 'needs_revision'
+      : gate.status === 'clear' || gate.status === 'publish_with_disclosure'
+        ? 'passed'
+        : gate.status === 'blocked'
+          ? 'blocked'
+          : gate.status === 'needs_action'
+            || gate.status === 'coverage_insufficient'
+            || gate.status === 'research_insufficient'
+            ? 'needs_action'
+            : 'needs_revision';
+    await tx.research.update({ where: { id: research.id }, data: { reviewStatus } });
     return { acceptedCount: records.length, alreadyAcceptedCount: claimIds.length - records.length, gate };
   }).catch((error: unknown) => {
     if (error instanceof Error && error.message === 'REVIEW_DECISION_STALE') return null;

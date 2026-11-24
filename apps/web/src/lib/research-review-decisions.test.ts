@@ -314,7 +314,7 @@ describe('getReviewPublishDisposition', () => {
     expect(disposition.hardBlocked).toBe(true);
   });
 
-  it('does not ask for a second acknowledgement once decisions were disclosed', () => {
+  it('still asks once when disclosed decisions must be confirmed on publish', () => {
     const gate = getReviewPublicationGate({
       executionStatus: 'completed',
       outcome: 'attention',
@@ -327,7 +327,9 @@ describe('getReviewPublishDisposition', () => {
       decisions: [{ claimId: 'claim-1', action: 'accept_uncertainty', reason: '待验证' }],
     });
     expect(gate.status).toBe('publish_with_disclosure');
-    expect(disposition.requiresAcknowledgement).toBe(false);
+    // The acknowledgement is what makes the stored snapshot match what the
+    // reader sees; skipping it used to persist JsonNull with an ack timestamp.
+    expect(disposition.requiresAcknowledgement).toBe(true);
     expect(disposition.hardBlocked).toBe(false);
   });
 

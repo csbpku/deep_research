@@ -279,18 +279,23 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const isLearningPath = existing.creationMethod === 'ai_research'
     && existing.sourceAiJob?.reportType === 'learning_path';
   const intentCoverage = parseIntCoverage(existing.body);
-  // Partial coverage means the evidence exists but is qualified; it is
-  // disclosed, not silently accepted. Unknown/conflict remain the hard cases,
-  // but all three require the same explicit acknowledgement.
+  // A missing coverage table is only an intent-artifact problem: older
+  // research reports predate the contract and must not need a second click.
+  // A present table with any partial/unknown/conflict row always needs one.
+  const requiresCoverageAck = intentCoverage
+    ? hasDisclosableIntentCoverage(intentCoverage)
+    : isLearningPath || existing.sourceAiJob?.reportType === 'comparison_matrix';
   if (
     existing.creationMethod === 'ai_research'
-    && hasDisclosableIntentCoverage(intentCoverage)
+    && requiresCoverageAck
     && !acknowledgeDisclosure
   ) {
-    const counts = intentCoverage!.counts;
+    const counts = intentCoverage?.counts;
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: `必答问题里还有 ${counts.unknown} 个未知、${counts.conflict} 个冲突、${counts.partial} 个部分覆盖；确认披露后才能继续发布`,
+      message: counts
+        ? `必答问题里还有 ${counts.unknown} 个未知、${counts.conflict} 个冲突、${counts.partial} 个部分覆盖；确认披露后才能继续发布`
+        : '这份调研没有「必答问题覆盖」表；确认带披露发布后才能继续',
       requestId,
       details: {
         requiresIntentCoverageAcknowledgement: true,
@@ -433,13 +438,16 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           // changes what the reader would see today.
           publishedReviewVersion: version,
           publishedReviewRevisionHash: hashResearchRevision(existing),
-          publishedReviewDisclosure: acknowledgeDisclosure && freshReview.disposition.disclosure
+          // The snapshot records what the author was shown, regardless of
+          // whether the gate forced an acknowledgement. A `clear` gate has no
+          // disclosure; a disclosure gate always does.
+          publishedReviewDisclosure: freshReview.disposition.disclosure
             ? (freshReview.disposition.disclosure as unknown as Prisma.InputJsonValue)
             : Prisma.JsonNull,
           publishedIntentCoverage: parseIntCoverage(fresh.body)
             ? (parseIntCoverage(fresh.body) as unknown as Prisma.InputJsonValue)
             : Prisma.JsonNull,
-          publishedReviewAcknowledgedAt: publishedAt,
+          publishedReviewAcknowledgedAt: acknowledgeDisclosure ? publishedAt : null,
           ...(fresh.type === 'knowledge' ? {
             judgement: (body.data.judgement ?? fresh.judgement)?.trim() || null,
             judgementConfidence: body.data.judgementConfidence ?? fresh.judgementConfidence,

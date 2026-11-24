@@ -77,7 +77,16 @@ function firstTableLines(lines: string[], start: number): string[] {
 export function checkComparisonMatrix(body: string): ComparisonMatrixCheck {
   const lines = String(body ?? '').split(/\r?\n/u);
   const start = lines.findIndex(line => /^##\s+对比矩阵\s*$/u.test(line.trim()));
-  if (start < 0) return { present: false, rows: 0, columns: 0, unmarked: [] };
+  if (start < 0) {
+    // A missing section is not "nothing to check": without this the publish
+    // route's `unmarked.length > 0` test passes a truncated artifact.
+    return {
+      present: false,
+      rows: 0,
+      columns: 0,
+      unmarked: [{ row: '对比矩阵', column: '章节', text: '缺少「## 对比矩阵」章节' }],
+    };
+  }
 
   const table = firstTableLines(lines, start);
   let header: string[] | null = null;
@@ -99,6 +108,9 @@ export function checkComparisonMatrix(body: string): ComparisonMatrixCheck {
       if (HAS_EVIDENCE.test(cell) || EXPLICIT_GAP.test(cell)) continue;
       unmarked.push({ row: row[0] || `第 ${rows} 行`, column: label, text: cell.slice(0, 120) });
     }
+  }
+  if (rows === 0) {
+    unmarked.push({ row: '对比矩阵', column: '方案', text: '矩阵没有数据行' });
   }
   return { present: true, rows, columns: Math.max(0, (header?.length ?? 0) - 1), unmarked };
 }

@@ -97,7 +97,7 @@ beforeEach(() => {
   mocks.createMany.mockResolvedValue({ count: 2 });
   mocks.transaction.mockImplementation((callback: (tx: unknown) => Promise<unknown>) => callback({
     $executeRaw: vi.fn(),
-    research: { findUnique: mocks.txResearchFindUnique },
+    research: { findUnique: mocks.txResearchFindUnique, update: vi.fn() },
     researchReviewRun: { findUnique: mocks.txRunFindUnique, findMany: mocks.runFindMany },
     researchReviewDecision: { createMany: mocks.createMany, findMany: mocks.findMany },
   }));
@@ -171,7 +171,7 @@ describe('batch review claim decisions', () => {
     const lock = vi.fn().mockResolvedValue(1);
     mocks.transaction.mockImplementation((callback: (tx: unknown) => Promise<unknown>) => callback({
       $executeRaw: lock,
-      research: { findUnique: mocks.txResearchFindUnique },
+      research: { findUnique: mocks.txResearchFindUnique, update: vi.fn() },
       researchReviewRun: { findUnique: mocks.txRunFindUnique, findMany: mocks.runFindMany },
       researchReviewDecision: { createMany: mocks.createMany, findMany: mocks.findMany },
     }));

@@ -34,7 +34,11 @@ function relationIsSpecific(row: string[]): boolean {
 
 export function checkLearningPath(body: string): LearningPathCheck {
   const table = rows(body);
-  if (table.length === 0) return { present: false, concepts: 0, issues: [] };
+  if (table.length === 0) {
+    // Fail closed: a body with no concept map must not pass because the route
+    // only inspects `issues.length`.
+    return { present: false, concepts: 0, issues: ['缺少「## 概念图」章节'] };
+  }
   const data = table.slice(1);
   const issues: string[] = [];
   if (data.length < 4 || data.length > 6) issues.push(`概念图需要 4–6 个概念，当前 ${data.length} 个`);

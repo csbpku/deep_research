@@ -89,7 +89,11 @@ export function hasBlockingIntentCoverage(
 export function hasDisclosableIntentCoverage(
   coverage: IntentCoverage | null | undefined,
 ): boolean {
-  return Boolean(coverage && (coverage.counts.unknown + coverage.counts.conflict + coverage.counts.partial > 0));
+  // A missing table is not a disclosure by itself: legacy research reports
+  // predate the contract. Intent artifacts, which must have it, handle that
+  // case in the publish route.
+  if (!coverage) return false;
+  return coverage.counts.unknown + coverage.counts.conflict + coverage.counts.partial > 0;
 }
 
 /** Accept a coverage snapshot read back from JSON without trusting its shape. */
