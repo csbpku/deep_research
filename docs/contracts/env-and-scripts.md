@@ -106,6 +106,11 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `RADAR_FETCH_RETRIES` | int | 来源与候选传输失败后的额外重试次数 | `2` |
 | `RADAR_FETCH_RETRY_BACKOFF_SECONDS` | float | 传输重试的初始退避秒数（指数增长） | `0.5` |
 | `RADAR_LLM_CONCURRENCY` | int | 全局 LLM 调用上限，sync/enrichment 共用 | `8` |
+| `LLM_RUNTIME_ENV` | `development` / `production` | 本地默认 development；生产 Compose 显式 production。本地真实调用还须启用开关与正数日预算 | `development` |
+| `LLM_ALLOW_LIVE_CALLS` | bool | 本地真实模型显式开关；使用独立测试凭据，并设置正数 `LLM_TOKEN_BUDGET_PLATFORM_DAILY_LIMIT`。fake adapter不需要 | `0` |
+| `RADAR_ARTICLE_MAX_CALLS` / `RADAR_ARTICLE_MAX_TOKENS` | positive int | 单篇所有阶段及重试的调用/token预留上限 | `8` / `48000` |
+| `RADAR_SOURCE_MAX_CALLS` / `RADAR_SOURCE_MAX_TOKENS` | positive int | 单个来源run共享预算，包含并发候选及失败工作 | `100` / `160000` |
+| `RADAR_RUN_MAX_CALLS` / `RADAR_RUN_MAX_TOKENS` | positive int | 整个pipeline及其来源重试共用预算；直接sync也有同样保护 | `160` / `250000` |
 | `LLM_QUOTA_COOLDOWN_SECONDS` | float | 供应商硬额度耗尽后的进程内共享冷却（至少 60 秒）；按端点和凭据隔离，不消耗模型请求探测；重启会清除冷却 | `3600` |
 | `LLM_QUOTA_STATUS_QUERY_ENABLED` | bool | 国内 MiniMax 官方端点发生硬额度错误时，使用官方只读余量 API 对齐 5 小时/周窗口；冷却期间最多每 5 分钟查询一次以发现充值/升级恢复，禁用或查询失败时使用上述冷却值；代理和国际端点不转发凭据到国内余量 API | `1` |
 | `RADAR_SCORING_CONCURRENCY` | int | Distilled 评分额外上限 | `8` |

@@ -40,6 +40,8 @@ from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_ad
 from ai_engine.contracts.errors import ERROR_CODES
 from ai_engine.contracts.states import AI_JOB_STATUS
 from ai_engine.llm.client import is_quota_exhausted_error
+from ai_engine.llm.work_budget import WorkBudgetExceeded, budgeted, current_work_budget
+from ai_engine.radar.shared_evidence import prepare_shared_evidence
 from ai_engine.fetcher.safe_fetch import (
     FetchedDocument,
     SafeFetchError,
@@ -49,6 +51,7 @@ from ai_engine.fetcher.safe_fetch import (
 )
 from ai_engine.ingestion.pipeline import _generate_brief, canonicalize_url
 from ai_engine.markdown_pipeline import normalize_markdown
+from ai_engine.text_chunking import count_text_tokens
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.candidate_filter import filter_candidate
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
@@ -433,6 +436,7 @@ def _is_retryable_source_result(result: SourceRunResult) -> bool:
         "CONTENT_TYPE_REJECTED",
         "UPSTREAM_AUTH_REQUIRED",
         "WEWE_AUTH_CONFIG_INVALID",
+        "MODEL_WORK_BUDGET_EXCEEDED",
         "DATABASE_UNAVAILABLE",
     }
 
@@ -1370,7 +1374,7 @@ def _build_score_reason(
         )[:500]
     elif metadata_only_fallback and distilled is not None:
         reason = (
-            "来源摘要初筛：未能取得原文正文，评分仅供发现排序；请打开原文复核。"
+            "来源摘要初筛：本次仅依据来源摘要或有限证据，评分仅供发现排序；请打开原文复核。"
             + reason
         )[:500]
     elif limited_score and external_reading and distilled is not None:
@@ -1691,6 +1695,8 @@ async def _generate_brief_with_retry(
                 timeout_seconds=remaining,
                 context_max_chars=context_max_chars,
             )
+            if getattr(brief, "error_code", None) == WorkBudgetExceeded.error_code:
+                raise WorkBudgetExceeded("radar", getattr(brief, "error_message", None))
             if (brief.status == AI_JOB_STATUS["SUCCEEDED"] and brief.output_text
                     and is_unavailable_brief(_strip_reasoning_markup(brief.output_text))):
                 raise _BriefGenerationError(
@@ -1898,6 +1904,7 @@ def _snippet_document(url: str, snippet: str) -> FetchedDocument:
     )
 
 
+@budgeted("radar_source")
 async def _run_source(
     pool: Any,
     *,
@@ -1925,6 +1932,7 @@ async def _run_source(
     skipped_conflict = 0
     quota_deferred = 0
     quota_tripped_here = False
+    budget_deferred = 0
     token_in = token_out = 0
     cost_usd = 0.0
     first_error_code: str | None = None
@@ -1956,11 +1964,12 @@ async def _run_source(
             max(1, candidate_concurrency or RADAR_CANDIDATE_CONCURRENCY)
         )
 
+        @budgeted("radar_article")
         async def _process_candidate(raw_candidate: RadarCandidate) -> None:
             nonlocal total_new, total_skipped, total_failed
             nonlocal fallback_count, skipped_existing, skipped_rule_noise
             nonlocal skipped_distilled_noise, skipped_conflict
-            nonlocal quota_deferred, quota_tripped_here
+            nonlocal quota_deferred, quota_tripped_here, budget_deferred
             nonlocal token_in, token_out, cost_usd, first_error_code
 
             feed_excerpt_fallback = False
@@ -2060,12 +2069,16 @@ async def _run_source(
                         )
                         total_skipped += 1
                         return
-                    metadata_only_fallback = entry_snapshot
+                    abstract_first = (
+                        browser_reading_mode_enabled() and source.source_type == "arxiv"
+                        and len(raw_candidate.snippet.strip()) >= MIN_LIMITED_SCORE_CONTENT_CHARS
+                    )
+                    metadata_only_fallback = entry_snapshot or abstract_first
                     feed_excerpt_fallback = False
                     document_host = _host(raw_candidate.url)
-                    # Full source text is an ephemeral scoring input in both
-                    # reading modes. Browser mode only suppresses persistence
-                    # and downstream enrichment, not this bounded sync fetch.
+                    # Browser discovery prefers the official arXiv abstract.
+                    # Other originals stay transient and feed a shared bounded
+                    # evidence extraction, never a persisted full-text cache.
                     async with unavailable_hosts_lock:
                         host_unavailable = document_host in unavailable_hosts
                     if host_unavailable:
@@ -2091,7 +2104,7 @@ async def _run_source(
                         )
                         return
                     try:
-                        if entry_snapshot:
+                        if entry_snapshot or abstract_first:
                             markdown = raw_candidate.snippet.strip()[:8000]
                             fetched = _snippet_document(raw_candidate.url, markdown)
                         else:
@@ -2291,7 +2304,8 @@ async def _run_source(
                     else:
                         brief_context = markdown or normalized.snippet
 
-                    if feed_excerpt_fallback and await _source_excerpt_noise_pending(
+                    if (metadata_only_fallback or (browser_reading_mode_enabled()
+                            and count_text_tokens(brief_context) > 18000)) and await _source_excerpt_noise_pending(
                         pool, source, raw_candidate, normalized.canonical_url,
                     ):
                         # Keep retrying the original on later syncs without
@@ -2332,11 +2346,26 @@ async def _run_source(
                         persisted_candidate_url,
                         github_repo_candidate=github_repo_candidate,
                     )
+                    shared = None
+                    if browser_reading_mode_enabled() and not low_quality and not short_entry:
+                        shared = await prepare_shared_evidence(
+                            normalized.title, brief_context, is_excerpt=metadata_only_fallback,
+                        )
+                        if shared.is_excerpt:
+                            metadata_only_fallback = True
+                        logger.info(
+                            "ai-engine.radar.shared_evidence",
+                            extra={"request_id": run_id, "url": persisted_candidate_url,
+                                   "source_chunks": shared.source_chunks,
+                                   "selected_chunks": shared.selected_chunks,
+                                   "is_excerpt": shared.is_excerpt},
+                        )
                     brief_generated = False
                     item = {
                         "title": normalized.title,
-                        "snippet": brief_context,
-                        "context_is_source_snapshot": entry_snapshot,
+                        "snippet": shared.text if shared is not None else brief_context,
+                        "context_is_source_snapshot": entry_snapshot or shared is not None,
+                        "context_is_evidence": shared is not None and shared.source_chunks > 1,
                         "context_is_source_excerpt": metadata_only_fallback,
                         "brief_kind": brief_kind,
                     }
@@ -2384,6 +2413,8 @@ async def _run_source(
                                 # let the captured article become the visible body.
                                 interpretation = ""
                         except Exception as brief_exc:
+                            if isinstance(brief_exc, WorkBudgetExceeded):
+                                raise
                             if _is_quota_exhausted_brief(exc=brief_exc):
                                 quota_tripped_here = True
                                 quota_circuit.trip()
@@ -2499,6 +2530,10 @@ async def _run_source(
                                 distilled_scorer, "content_is_source_excerpt"
                             ):
                                 scorer_kwargs["content_is_source_excerpt"] = True
+                            if shared is not None and shared.source_chunks > 1 and _accepts_keyword(
+                                distilled_scorer, "source_evidence"
+                            ):
+                                scorer_kwargs["source_evidence"] = shared.text
                             distilled_result = await distilled_scorer(
                                 normalized.title,
                                 cleaned,
@@ -2533,6 +2568,10 @@ async def _run_source(
                     extra_tags_list = ["pr_soft"] if filter_result.is_pr else []
                     if browser_reading_mode_enabled():
                         extra_tags_list.append("external_reading")
+                    if abstract_first:
+                        extra_tags_list.append("evidence_source_abstract")
+                    elif shared is not None and shared.is_excerpt:
+                        extra_tags_list.append("evidence_source_excerpt")
                     if feed_excerpt_fallback:
                         extra_tags_list.append("evidence_feed_excerpt")
                     if brief_kind is not None and brief_generated and interpretation:
@@ -2544,7 +2583,9 @@ async def _run_source(
                             extra_tags_list.append("github_content_pending")
                     # Confirmed noise never enters summaries. A minimal identity
                     # receipt prevents rediscovery from paying for the same work.
-                    if (feed_excerpt_fallback and distilled_result is not None
+                    if ((feed_excerpt_fallback or abstract_first
+                            or (shared is not None and shared.selected_chunks < shared.source_chunks))
+                            and distilled_result is not None
                             and not getattr(distilled_result, "is_default", False)
                             and getattr(distilled_result, "tier", None) == "noise"):
                         # Incomplete source evidence cannot establish that the
@@ -2554,9 +2595,9 @@ async def _run_source(
                             pool, source=source, run_id=run_id,
                             candidate=raw_candidate, canonical_url=persisted_candidate_url,
                             kind="filtered", reason_code="SOURCE_EXCERPT_NOISE_PENDING",
-                            reason_message="来源片段评分不足以判断全文；等待原文恢复后重新核验。",
+                            reason_message="有限来源证据不足以将全文判为噪声；保留待显式全文核验。",
                             markdown=markdown,
-                            feed_excerpt_fallback=True,
+                            feed_excerpt_fallback=feed_excerpt_fallback,
                         )
                         total_skipped += 1
                         return
@@ -2654,6 +2695,16 @@ async def _run_source(
                             "redirects": fetched.redirect_count,
                         },
                     )
+                except WorkBudgetExceeded as exc:
+                    budget_deferred += 1
+                    total_skipped += 1
+                    await _record_sync_diagnostic(
+                        pool, source=source, run_id=run_id, candidate=raw_candidate,
+                        canonical_url=normalize_candidate(raw_candidate, source_type=source.source_type).canonical_url,
+                        kind="filtered", reason_code=exc.error_code,
+                        reason_message=f"{exc}; no automatic replay in this pipeline",
+                        body=raw_candidate.snippet,
+                    )
                 except Exception as exc:
                     total_failed += 1
                     error_code = _safe_error_code(exc)
@@ -2730,6 +2781,10 @@ async def _run_source(
                 if error_message
                 else _MODEL_QUOTA_STOPPED_MESSAGE
             )
+        if budget_deferred:
+            run_status = "partial"
+            first_error_code = WorkBudgetExceeded.error_code
+            error_message = f"{budget_deferred} candidates deferred by model work budget"
         if source_diagnostic is not None:
             diagnostic_code, diagnostic_message = source_diagnostic
             first_error_code = first_error_code or diagnostic_code
@@ -2759,6 +2814,16 @@ async def _run_source(
             first_error_code,
             type(exc).__name__,
             source_detail[:160] if source_detail.startswith("arxiv_") else "omitted",
+        )
+    usage = current_work_budget("radar_source")
+    if usage is not None and usage.calls:
+        # Includes scoring, evidence, truncations and paid chunks of failures.
+        token_in, token_out = usage.input_tokens, usage.output_tokens
+        logger.info(
+            "ai-engine.radar.work_usage",
+            extra={"request_id": run_id, "calls": usage.calls,
+                   "charged_tokens": usage.charged_tokens,
+                   "input_tokens": token_in, "output_tokens": token_out},
         )
     elapsed_ms = int((time.monotonic() - started) * 1000)
     await _finish_run(
@@ -2801,6 +2866,7 @@ async def _run_source(
     )
 
 
+@budgeted("radar_run")
 async def run_radar_sync(
     pool: Any,
     *,
@@ -2868,6 +2934,7 @@ async def run_radar_sync(
     )
 
 
+@budgeted("radar_run")
 async def run_radar_pipeline(
     pool: Any,
     *,

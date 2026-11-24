@@ -58,6 +58,7 @@ from ai_engine.scoring.scoring_profiles import (
 from ai_engine.llm.config import resolve_spec
 from ai_engine.llm.usage_audit import record_llm_degraded
 from ai_engine.llm.input_text import model_readable_text
+from ai_engine.llm.work_budget import WorkBudgetExceeded
 from ai_engine.text_chunking import TextChunk, count_text_tokens, split_text_by_token_budget
 
 logger = logging.getLogger("ai_engine.radar.distilled_scorer")
@@ -888,6 +889,7 @@ async def anthropic_scorer(
     review_instruction: str | None = None,
     verified_arxiv_title: bool = False,
     content_is_source_excerpt: bool = False,
+    source_evidence: str | None = None,
 ) -> str:
     scoring_run_id = uuid4().hex[:12]
     metrics: dict[str, int] = {}
@@ -908,6 +910,7 @@ async def anthropic_scorer(
             review_instruction=review_instruction,
             verified_arxiv_title=verified_arxiv_title,
             content_is_source_excerpt=content_is_source_excerpt,
+            source_evidence=source_evidence,
         )
     except BaseException as exc:
         error_kind = _scoring_response_error_kind(exc)
@@ -952,6 +955,7 @@ async def _anthropic_scorer_impl(
     review_instruction: str | None = None,
     verified_arxiv_title: bool = False,
     content_is_source_excerpt: bool = False,
+    source_evidence: str | None = None,
 ) -> str:
     """Call the configured light LLM to score article dimensions.
 
@@ -968,7 +972,7 @@ async def _anthropic_scorer_impl(
             source_type=source_type,
             url=url,
         )
-        chunks = split_text_by_token_budget(
+        chunks = [] if source_evidence is not None else split_text_by_token_budget(
             content_for_scoring,
             SCORING_CHUNK_TOKEN_BUDGET,
         )
@@ -980,10 +984,11 @@ async def _anthropic_scorer_impl(
         _SCORING_RUN_ID.get() or "untracked",
         len(chunks),
     )
-    if len(chunks) == 1:
+    if source_evidence is not None or len(chunks) == 1:
         prompt = build_user_prompt(
             title,
-            content_for_scoring,
+            source_evidence if source_evidence is not None else content_for_scoring,
+            content_is_chunk_evidence=source_evidence is not None,
             profile=profile,
             source_type=source_type,
             url=url,
@@ -1214,7 +1219,14 @@ async def _reduce_scoring_evidence(
                 original_content=original_content,
             )
 
-        packets = await asyncio.gather(*(reduce_group(group) for group in groups))
+        tasks = [asyncio.create_task(reduce_group(group)) for group in groups]
+        try:
+            packets = list(await asyncio.gather(*tasks))
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
     return packets
 
 
@@ -2125,6 +2137,7 @@ async def score_with_llm(
     structured_signals: dict[str, Any] | None = None,
     raise_on_error: bool = False,
     content_is_source_excerpt: bool = False,
+    source_evidence: str | None = None,
 ) -> DistilledScore:
     """Score an article using the LLM dimension scorer.
 
@@ -2174,6 +2187,8 @@ async def score_with_llm(
             excerpt_kwargs: dict[str, Any] = (
                 {"content_is_source_excerpt": True} if content_is_source_excerpt else {}
             )
+            if source_evidence is not None:
+                excerpt_kwargs["source_evidence"] = source_evidence
             return await anthropic_scorer(
                 t, c,
                 profile=profile,
@@ -2220,6 +2235,11 @@ async def score_with_llm(
                     "只有明确属于不同主题时才使用 title_content_mismatch；"
                     "若内容相符，应正常返回完整七维评分，证据不足的维度给低分。"
                 )
+                correction_kwargs: dict[str, Any] = {}
+                if content_is_source_excerpt:
+                    correction_kwargs["content_is_source_excerpt"] = True
+                if source_evidence is not None:
+                    correction_kwargs["source_evidence"] = source_evidence
                 async with _score_semaphore():
                     if scorer is None:
                         corrected_raw = await anthropic_scorer(
@@ -2232,7 +2252,7 @@ async def score_with_llm(
                             structured_signals=structured_signals,
                             review_instruction=correction,
                             verified_arxiv_title=verified_arxiv_title,
-                            **({"content_is_source_excerpt": True} if content_is_source_excerpt else {}),
+                            **correction_kwargs,
                         )
                     else:
                         corrected_raw = await active_scorer(
@@ -2265,6 +2285,8 @@ async def score_with_llm(
                 return await reject_empty_verified_score(corrected_result)
             return await reject_empty_verified_score(result)
         except Exception as exc:
+            if isinstance(exc, WorkBudgetExceeded):
+                raise
             from ai_engine.llm.client import is_quota_exhausted_error
 
             # Latch: a later, different error must not clear a quota signal.
