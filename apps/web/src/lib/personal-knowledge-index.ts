@@ -10,12 +10,44 @@ export function readingKnowledgeIndexText(note: string, aiAnswer?: string | null
   return sections.length ? sections.join('\n\n') : null;
 }
 
+export function knowledgeCardIndexText(input: {
+  title: string;
+  body: string;
+  conclusion?: string | null;
+  judgement?: string | null;
+  judgementScope?: string | null;
+  judgementConfidence?: string | null;
+}): string {
+  // Reader-saved cards start with the quoted source. That quote must not be
+  // copied into the personal index, so prefer the confirmed note/AI sections.
+  const note = readingKnowledgeIndexTextFromBody(input.body) ?? input.body.trim();
+  return confirmedKnowledgeIndexText({
+    title: input.title,
+    body: note,
+    conclusion: input.conclusion,
+    judgement: input.judgement,
+    judgementScope: input.judgementScope,
+    judgementConfidence: input.judgementConfidence,
+  });
+}
+
 export function confirmedKnowledgeIndexText(input: {
   title: string;
   body: string;
   conclusion?: string | null;
+  judgement?: string | null;
+  judgementScope?: string | null;
+  judgementConfidence?: string | null;
 }): string {
-  return [input.title.trim(), input.conclusion?.trim(), input.body.trim()]
+  // The judgement is the reusable claim; it must be searchable on its own.
+  const judgement = input.judgement?.trim()
+    ? [
+        `判断（置信度 ${input.judgementConfidence ?? 'unknown'}）`,
+        input.judgement.trim(),
+        input.judgementScope?.trim() ? `适用边界：${input.judgementScope.trim()}` : '',
+      ].filter(Boolean).join('\n')
+    : '';
+  return [input.title.trim(), judgement, input.conclusion?.trim(), input.body.trim()]
     .filter(Boolean)
     .join('\n\n');
 }

@@ -239,10 +239,10 @@ describe('buildSearchSql', () => {
     });
     // 不强制正则在多行 SQL 上的贪婪匹配；改为分段断言
     expect(rowsSql).toContain('ORDER BY');
-    expect(rowsSql).toContain('rank DESC');
+    expect(rowsSql).toContain('(rank + boost) DESC');
     expect(rowsSql).toContain('"publishedAt" DESC');
-    // rank 必须在 publishedAt 之前（rank DESC 是第一排序键）
-    const rankIdx = rowsSql.indexOf('rank DESC');
+    // rank + boost 必须在 publishedAt 之前（第一排序键）
+    const rankIdx = rowsSql.indexOf('(rank + boost) DESC');
     const pubIdx = rowsSql.indexOf('"publishedAt" DESC');
     expect(rankIdx).toBeGreaterThan(0);
     expect(pubIdx).toBeGreaterThan(rankIdx);
@@ -389,5 +389,37 @@ describe('search highlight sanitization', () => {
     expect(sanitizeSearchHighlight('<script>alert(1)</script><mark>RAG</mark>')).toBe(
       '&lt;script&gt;alert(1)&lt;/script&gt;<mark>RAG</mark>',
     );
+  });
+});
+
+describe('shapeSearchRow match reason', () => {
+  it('marks a knowledge row as a judgement match when the API supplies one', () => {
+    const shaped = shapeSearchRow({
+      id: 'private:1',
+      type: 'knowledge',
+      refId: 'r1',
+      title: 'Card',
+      snippet: 's',
+      highlighted: '',
+      judgementMatch: ' 跨仓库查调用关系时应先用 GitNexus 建索引。 ',
+      publishedAt: new Date(),
+      rank: 1,
+    });
+    expect(shaped.matchReason).toBe('judgement');
+    expect(shaped.judgementMatch).toBe('跨仓库查调用关系时应先用 GitNexus 建索引。');
+  });
+
+  it('leaves matchReason null when the row matched only its snippet', () => {
+    const shaped = shapeSearchRow({
+      id: 'private:1',
+      type: 'knowledge',
+      refId: 'r1',
+      title: 'Card',
+      snippet: 's',
+      highlighted: '',
+      publishedAt: new Date(),
+      rank: 1,
+    });
+    expect(shaped.matchReason).toBeNull();
   });
 });

@@ -21,13 +21,14 @@ from ai_engine.contracts.states import AI_JOB_STEP
 from ai_engine.reviewer import ReviewResult
 
 
-def _make_job(report_length: str | None, max_urls: int | None = None):
+def _make_job(report_length: str | None, max_urls: int | None = None, report_type: str = "research_report"):
     """Build a minimal _Job stub with just enough state for the ceiling."""
 
     class _StubRequest:
         def __init__(self, report_length: str | None, max_urls: int | None) -> None:
             self.report_length = report_length
             self.max_urls_to_scrape = max_urls
+            self.report_type = report_type
 
     class _StubJob:
         def __init__(self, request: _StubRequest) -> None:
@@ -321,3 +322,60 @@ def test_slides_contract_respects_requested_total_page_count() -> None:
     contract = _report_output_contract("比较 asyncio.gather 和 TaskGroup，用5页提纲说明", report_type="slides")
     assert "总共 5 页" in contract
     assert "封面和收尾页计入总页数" in contract
+
+
+def test_learning_path_caps_scrape_at_standard_envelope() -> None:
+    job = _make_job(report_length="deep", report_type="learning_path")
+    ceiling = _resolve_run_ceiling(job)
+    assert ceiling["total_words"] == _REPORT_LENGTH_PRESETS["deep"]["total_words"]
+    assert ceiling["max_urls"] == _REPORT_LENGTH_PRESETS["standard"]["max_urls"]
+    assert ceiling["max_search_results"] == _REPORT_LENGTH_PRESETS["standard"]["max_search_results"]
+
+
+def test_learning_path_keeps_an_explicit_user_override() -> None:
+    job = _make_job(report_length="deep", max_urls=6, report_type="learning_path")
+    assert _resolve_run_ceiling(job)["max_urls"] == 6
+
+
+def test_must_answer_questions_only_reads_that_block() -> None:
+    from ai_engine.adapters.gpt_researcher import _must_answer_questions
+
+    assert _must_answer_questions(
+        "必须回答的问题：\n- 概念是什么？\n- 什么时候不该用？\n- 用户定义的完成标准：\n- 能解释\n"
+    ) == ["概念是什么？", "什么时候不该用？"]
+
+
+def test_intent_question_lanes_become_the_first_query_pass() -> None:
+    import asyncio
+
+    from ai_engine.adapters.gpt_researcher import _install_intent_question_queries
+
+    class Deep:
+        async def generate_search_queries(self, query: str, num_queries: int = 3):
+            return [{"query": "vendor"}]
+
+    deep = Deep()
+    assert _install_intent_question_queries(deep, "VACUUM", "必须回答的问题：\n- 什么情况下不该用？\n") == 1
+    lanes = asyncio.run(deep.generate_search_queries("ignored", 3))
+    assert lanes[0]["query"] == "VACUUM 什么情况下不该用？"
+
+
+def test_standard_path_uses_the_questions_as_first_sub_queries() -> None:
+    import asyncio
+
+    from ai_engine.adapters.gpt_researcher import _install_standard_intent_questions
+
+    class Conductor:
+        async def plan_research(self, query, query_domains=None):
+            return ["vendor query"]
+
+    conductor = Conductor()
+    n = _install_standard_intent_questions(
+        conductor, "VACUUM", "必须回答的问题：\n- 什么情况下不该用？\n"
+    )
+    assert n == 1
+    assert asyncio.run(conductor.plan_research("ignored")) == [
+        "vendor query",
+        "VACUUM 什么情况下不该用？",
+        "VACUUM 故障排查 限制 不适用 官方文档",
+    ]

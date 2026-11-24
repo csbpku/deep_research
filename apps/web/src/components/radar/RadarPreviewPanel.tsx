@@ -1,40 +1,22 @@
 'use client';
 
-import Link from 'next/link';
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { BookOpen, ExternalLink, Github, Sparkles, X } from 'lucide-react';
+import React, { useEffect, useLayoutEffect, useRef } from 'react';
+import { Sparkles, X } from 'lucide-react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import Chip from '@mui/material/Chip';
 import { space, tokens } from '@deep-research/design-system';
-import { AppButton, AppIconButton } from '@/components/material/AppButton';
+import { AppIconButton } from '@/components/material/AppButton';
 
-import { DistilledScorePanel } from './DistilledScorePanel';
-import {
-  cleanRadarTags,
-  externalReaderUrl,
-  formatRadarDetailDate,
-  radarSummaryParts,
-  type ExternalReadingDetail,
-} from './RadarExternalReadingLanding';
-import { formatRadarContentKind, formatSourceType } from '@/lib/radar/source-labels';
-import { TIER_LABELS, readingTierColor } from '@/components/domain/ScoreBar';
-import { effectiveOriginalKind, zreadRepositoryUrl } from './radar-repository';
-import { RadarSourceChip } from './RadarSourceChip';
-import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
-import { ReaderSourcePrompt } from './ReaderSourcePrompt';
-import { READER_STORE_URL } from '@/lib/reader-install';
-import { radarEvidenceNotice } from '@/lib/radar/evidence';
+import { RadarReadingActions, RadarReadingOverview } from './RadarReadingOverview';
+import type { ExternalReadingDetail } from './radar-reading-detail';
 
-function isHttpUrl(value: string): boolean {
-  try {
-    const protocol = new URL(value).protocol;
-    return protocol === 'http:' || protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
+/**
+ * 雷达列表右侧的阅读概览面板。
+ *
+ * 内容全部来自 `RadarReadingOverview`，这里只保留面板外壳：尺寸约束、
+ * 滚动容器、关闭按钮，以及固定在底部的操作区（避免在嵌套滚动容器里再套
+ * 一层滚动）。操作区由共享组件渲染，因此预览与详情页的 CTA 集合一致。
+ */
 export function RadarPreviewPanel({
   detail,
   onClose,
@@ -47,8 +29,6 @@ export function RadarPreviewPanel({
   /** 父级用它做焦点交接（打开时聚焦标题，关闭时还焦点）。 */
   panelRef?: React.RefObject<HTMLElement | null>;
 }) {
-  const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
-  const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
   const localPanelRef = useRef<HTMLElement>(null);
   const panelRef = panelRefProp ?? localPanelRef;
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -122,99 +102,64 @@ export function RadarPreviewPanel({
   }, []);
 
   useEffect(() => {
-    setPlatformOrigin(window.location.origin);
-  }, []);
-
-  useEffect(() => {
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, [detail.id]);
 
-  const sourceLabel = formatSourceType(detail.sourceType);
-  const sourceName = detail.sourceName?.trim() || sourceLabel.short;
-  const originalKind = effectiveOriginalKind(detail.originalKind, detail.url);
-  const contentLabel = formatRadarContentKind(originalKind, detail.sourceType, detail.url);
-  const publishedLabel = formatRadarDetailDate(detail.publishedAt);
-  const { lead, supportingExcerpt } = radarSummaryParts(detail);
-  const tier = detail.tier ?? detail.distilledScore?.tier ?? null;
-  const tierLabel = tier ? (TIER_LABELS[tier] ?? tier) : '待判断';
-  const tags = cleanRadarTags(detail.tags);
-  const sourceUrlAvailable = isHttpUrl(detail.url);
-  const zreadUrl = originalKind === 'github_repo'
-    ? zreadRepositoryUrl(detail.url)
-    : null;
-  const readerUrl = externalReaderUrl(detail.url, detail.id, platformOrigin);
-
   return (
-    <Box ref={panelRef ?? localPanelRef} component="aside" data-radar-knowledge-id={detail.id} className={className} aria-label="文章概览" sx={{
-      display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden',
-      overflowWrap: 'anywhere',
-      border: 1, borderColor: 'divider', borderRadius: tokens['radius-medium'], bgcolor: 'background.paper',
-      maxHeight: { xs: '90dvh', lg: 'var(--radar-preview-available-height, calc(100dvh - 8rem))' },
-    }}>
-      <Box component="header" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: space.md, borderBottom: 1, borderColor: 'divider', padding: space.lg, flexShrink: 0 }}>
+    <Box
+      ref={panelRef ?? localPanelRef}
+      component="aside"
+      data-radar-knowledge-id={detail.id}
+      className={className}
+      aria-label="文章概览"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        minWidth: 0,
+        overflow: 'hidden',
+        overflowWrap: 'anywhere',
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: tokens['radius-medium'],
+        bgcolor: 'background.paper',
+        maxHeight: { xs: '90dvh', lg: 'var(--radar-preview-available-height, calc(100dvh - 8rem))' },
+      }}
+    >
+      <Box
+        component="header"
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: space.md,
+          borderBottom: 1,
+          borderColor: 'divider',
+          padding: space.lg,
+          flexShrink: 0,
+        }}
+      >
         <Typography variant="control" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: space.sm }}>
           <Sparkles size={16} aria-hidden />文章概览
         </Typography>
-        <AppIconButton type="button" onClick={onClose} aria-label="关闭预览" title="关闭预览"><X size={18} aria-hidden /></AppIconButton>
+        <AppIconButton type="button" onClick={onClose} aria-label="关闭预览" title="关闭预览">
+          <X size={18} aria-hidden />
+        </AppIconButton>
       </Box>
-      <Box ref={scrollContainerRef} data-radar-preview-body sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overscrollBehaviorY: 'contain', padding: space.lg }}>
-        <Typography component="div" variant="metadata" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: space.sm, rowGap: space.xs }}>
-          <RadarSourceChip sourceType={detail.sourceType} sourceName={detail.sourceName} label={sourceName} /><span aria-hidden>·</span><span>{contentLabel.short}</span>
-          {publishedLabel ? <><span aria-hidden>·</span><span>发布 {publishedLabel}</span></> : null}
-        </Typography>
-        <Typography component="h2" variant="panelTitle" sx={{ marginTop: space.md, overflowWrap: 'anywhere' }}>{detail.title}</Typography>
-        <Box component="section" aria-labelledby="radar-preview-summary" sx={{ marginTop: space.section, borderLeft: 2, borderColor: 'primary.main', paddingLeft: space.md }}>
-          <Typography component="h3" id="radar-preview-summary" variant="fieldTitle">为什么值得看</Typography>
-          <Typography component="p" variant="reading" sx={{ marginTop: space.sm, whiteSpace: 'pre-line' }}>{lead}</Typography>
-          {supportingExcerpt ? (
-            <Box sx={{ marginTop: space.md, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>
-              <Typography component="h3" variant="fieldTitle">原文补充</Typography>
-              <Typography component="p" variant="reading" color="text.secondary" sx={{ marginTop: space.sm, display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-line' }}>{supportingExcerpt}</Typography>
-            </Box>
-          ) : null}
-          <Typography component="p" variant="metadata" color="text.secondary" sx={{ marginTop: space.md }}>
-            {radarEvidenceNotice(detail)}
-          </Typography>
-        </Box>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, marginTop: space.lg, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>
-          <Chip size="small" variant="outlined" label={tierLabel} sx={{ color: readingTierColor(tier), borderColor: 'currentColor' }} />
-          {tags.map(tag => <Chip key={tag} size="small" variant="outlined" label={`#${tag}`} />)}
-        </Box>
-        <PreviousJudgments radarSummaryId={detail.id} enabled={Boolean(detail.isAuthenticated)} />
-        {detail.distilledScore ? (
-          <Box component="details" sx={{ marginTop: space.lg, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>
-            <Typography component="summary" variant="control" sx={{ cursor: 'pointer', color: 'text.secondary' }}>查看评分依据</Typography>
-            <Box sx={{ paddingTop: space.md }}><DistilledScorePanel score={detail.distilledScore} effectiveTier={tier} embedded /></Box>
-          </Box>
-        ) : null}
+      <Box
+        ref={scrollContainerRef}
+        data-radar-preview-body
+        sx={{
+          flex: '1 1 auto',
+          minHeight: 0,
+          overflowY: 'auto',
+          overscrollBehaviorY: 'contain',
+          padding: space.lg,
+        }}
+      >
+        <RadarReadingOverview detail={detail} variant="panel" actions="none" />
       </Box>
-      <Box component="footer" sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: space.sm, borderTop: 1, borderColor: 'divider', padding: space.lg, flexShrink: 0, '& > .MuiButton-root': { minWidth: 0, minHeight: 44, width: '100%' } }}>
-        <RadarKnowledgeActions key={detail.id} detail={detail} />
-        {sourceUrlAvailable ? (
-          <AppButton component="a" variant="contained" href={detail.url} target="_blank" rel="noopener noreferrer">
-            {zreadUrl ? <Github aria-hidden /> : <ExternalLink aria-hidden />}{zreadUrl ? '打开 GitHub' : '打开原文'}
-          </AppButton>
-        ) : null}
-        {sourceUrlAvailable ? (
-          // The installed extension intercepts this link; without it the link opens the store.
-          <AppButton
-            component="a"
-            variant="outlined"
-            href={READER_STORE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-reader-launch-source={readerUrl}
-            onClick={(event) => { event.preventDefault(); setSourcePromptOpen(true); }}
-          >
-            <BookOpen aria-hidden />用 Reader 阅读
-          </AppButton>
-        ) : null}
-        {zreadUrl ? (
-          <AppButton component="a" variant="outlined" href={zreadUrl} target="_blank" rel="noopener noreferrer"><BookOpen aria-hidden />打开 Zread</AppButton>
-        ) : null}
-        <AppButton component={Link} href={`/ai-research?seed=${encodeURIComponent(detail.id)}`} prefetch={false} variant="outlined"><Sparkles aria-hidden />深入调研</AppButton>
-      </Box>
-      <ReaderSourcePrompt key={detail.id} open={sourcePromptOpen} onClose={() => setSourcePromptOpen(false)} readerUrl={readerUrl} sourceUrl={detail.url} articleTitle={detail.title} />
+      <RadarReadingActions detail={detail} variant="panel" />
     </Box>
   );
 }

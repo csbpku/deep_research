@@ -98,6 +98,18 @@ beforeEach(() => {
 });
 
 describe('POST /api/radar/[id]/transform', () => {
+  it.each([null, 'needs_manual_review'])('does not process hidden cached content for a summary-only row: %s', async (contentReviewStatus) => {
+    mocks.summaryFindUnique.mockResolvedValueOnce({
+      id: SUMMARY_ID, title: 'Summary only', body: 'PRIVATE-CACHED-TEXT', originalMarkdown: 'PRIVATE-CACHED-TEXT',
+      source: 'daily', syncRunId: 'run-1', distilledTier: 'deep_read', tags: [], shareSource: null,
+      ...VISIBLE, contentReviewStatus, renderReviewStatus: 'approved',
+    });
+    const response = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
+    expect(response.status).toBe(400);
+    expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
+    expect(mocks.summaryUpdate).not.toHaveBeenCalled();
+  });
+
   it('does not transform an external-reading metadata summary as if it were full text', async () => {
     mocks.summaryFindUnique.mockResolvedValueOnce({
       id: SUMMARY_ID,

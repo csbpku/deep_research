@@ -92,6 +92,17 @@ describe('admin comment promote/dismiss', () => {
     expect(mocks.researchCreate).not.toHaveBeenCalled();
   });
 
+  it('creates the promoted knowledge card as a draft so it must pass the judgement gate', async () => {
+    mocks.commentFind.mockResolvedValue(comment);
+    mocks.commentUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.researchCreate.mockResolvedValue({ id: 'r1', title: 'Title here', status: 'draft', publishedAt: null });
+    const res = await promote(post('/x', { title: 'Title here', body: 'Body content long enough', tags: [] }), ctx);
+    expect(res.status).toBe(200);
+    expect(mocks.researchCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'draft' }),
+    }));
+  });
+
   it('dismiss is a conditional transition too', async () => {
     mocks.commentFind.mockResolvedValue(comment);
     mocks.commentUpdateMany.mockResolvedValue({ count: 0 });

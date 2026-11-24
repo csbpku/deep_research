@@ -87,7 +87,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     const research = await tx.research.create({
       data: {
         type: RESEARCH_TYPE.KNOWLEDGE,
-        status: RESEARCH_STATUS.PUBLISHED,
+        status: RESEARCH_STATUS.DRAFT,
         title: body.title,
         body: body.body,
         conclusion: body.conclusion ?? null,
@@ -95,7 +95,6 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         authorId: u.id,
         creationMethod: CREATION_METHOD.MANUAL,
         sourceCommentId: comment.id,
-        publishedAt: new Date(),
       },
       select: {
         id: true,

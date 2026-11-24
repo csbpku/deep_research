@@ -17,3 +17,38 @@
 .snippet mark { padding-inline: 2px; border-radius: var(--dr-radius-xs); background: var(--dr-color-warning-container); color: var(--dr-color-warning); }
 .date { color: var(--dr-color-text-muted); font-size: var(--dr-type-caption); line-height: var(--dr-line-height-body); font-variant-numeric: tabular-nums; }
 @media (min-width: 640px) { .submitLabel { display: inline; } }
+.judgementLabel {
+  color: var(--dr-color-warning);
+  font-weight: 600;
+}
+.reason {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--dr-color-text-secondary);
+}
+.preview {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dr-color-text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.stale {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--dr-color-warning);
+}
+.staleAction {
+  color: var(--dr-color-warning);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.abandoned {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dr-color-danger);
+}

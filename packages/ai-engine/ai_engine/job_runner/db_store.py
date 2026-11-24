@@ -220,7 +220,10 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
         topic=str(row["topic"]),
         context=context_str,
         report_type=cast(
-            Literal["research_report", "summary_brief", "slides", "web_brief", "evidence_search"],
+            Literal[
+                "research_report", "decision_memo", "comparison_matrix", "learning_path", "summary_brief", "slides",
+                "web_brief", "evidence_search",
+            ],
             str(row.get("reportType", "research_report")),
         ),
         source_policy=cast(
@@ -236,6 +239,7 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
         source_refs=tuple(clean),
         report_length=str(row.get("reportLength") or "standard"),
         max_urls_to_scrape=max_urls,
+        objective=str(row.get("objective") or ""),
     )
 
 
@@ -762,7 +766,7 @@ class DbJobStore(JobStore):
         t = f'"{self._table_name}"'
         sql = (
             f"SELECT j.\"id\", j.\"requesterId\", j.\"topic\", j.\"context\", "
-            f"j.\"reportType\", j.\"brief\", j.\"sourcePolicy\", j.\"reportLength\", j.\"maxUrlsToScrape\", "
+            f"j.\"reportType\", j.\"objective\", j.\"brief\", j.\"sourcePolicy\", j.\"reportLength\", j.\"maxUrlsToScrape\", "
             f"j.\"status\", j.\"currentStep\", j.\"attempts\", j.\"idempotencyKey\", j.\"sourceRefs\" "
             f"FROM {t} j "
             f"WHERE j.\"requesterId\" = %s AND j.\"idempotencyKey\" = %s "
@@ -830,7 +834,7 @@ class DbJobStore(JobStore):
             )
         else:
             returning_cols = (
-                'j."id", j."requesterId", j."topic", j."context", j."reportType", '
+                'j."id", j."requesterId", j."topic", j."context", j."reportType", j."objective", '
                 'j."sourcePolicy", j."brief", j."reportLength", j."maxUrlsToScrape", '
                 'j."status", j."currentStep", j."attempts", '
                 'j."idempotencyKey", j."sourceRefs"'
@@ -1176,7 +1180,7 @@ class DbJobStore(JobStore):
             'FROM "research_review_runs" rr '
             'JOIN "researches" r ON r."id" = rr."researchId" '
             'LEFT JOIN "ai_research_jobs" j ON j."id" = rr."aiResearchJobId" '
-            'WHERE r."status" = \'draft\' '
+            'WHERE r."status" IN (\'draft\', \'published\') '
             '  AND rr."executionStatus" IN (\'queued\', \'reviewing\') '
             '  AND (rr."executionStatus" = \'queued\' '
             '       OR (rr."leaseExpiresAt" IS NOT NULL AND rr."leaseExpiresAt" < now()) '
@@ -1696,7 +1700,7 @@ class DbJobStore(JobStore):
             )
         else:
             sql = (
-                f'SELECT "id", "requesterId", "topic", "context", "reportType", '
+                f'SELECT "id", "requesterId", "topic", "context", "reportType", "objective", '
                 f'       "sourcePolicy", "brief", "reportLength", "maxUrlsToScrape", "status", "currentStep", "attempts", '
                 f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
                 f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
@@ -1798,7 +1802,7 @@ class DbJobStore(JobStore):
             params.extend(status_filter)
         sql = (
             f"SELECT j.\"id\", j.\"requesterId\", j.\"topic\", j.\"context\", "
-            f"       j.\"reportType\", j.\"brief\", j.\"sourcePolicy\", j.\"status\", "
+            f"       j.\"reportType\", j.\"objective\", j.\"brief\", j.\"sourcePolicy\", j.\"status\", "
             f"       j.\"reportLength\", j.\"maxUrlsToScrape\", j.\"currentStep\", j.\"attempts\", j.\"idempotencyKey\", "
             f"       j.\"sourceRefs\", j.\"partialSources\", j.\"failedSources\", "
             f"       j.\"tokenInputTotal\", j.\"tokenOutputTotal\", j.\"costCents\", "

@@ -75,11 +75,11 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   if (
     !research
     || (research.authorId !== user.id && user.role !== 'admin')
-    || research.status !== 'draft'
+    || (research.status !== 'draft' && research.status !== 'published')
   ) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
-      message: '草稿不存在',
+      message: '调研不存在',
       requestId,
     });
   }
@@ -208,7 +208,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       // rolled back instead of leaving an active run attached to a published
       // row (or publishing a snapshot that just entered review).
       const draftUpdated = await tx.research.updateMany({
-        where: { id: research.id, status: 'draft' },
+        where: { id: research.id, status: { in: ['draft', 'published'] } },
         data: {
           reviewStatus: 'queued',
           reviewAttempts: 0,
@@ -220,21 +220,21 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           reviewDetails: queuedDetails as Prisma.InputJsonValue,
         },
       });
-      if (draftUpdated.count !== 1) throw new Error('REVIEW_DRAFT_CHANGED');
+      if (draftUpdated.count !== 1) throw new Error('REVIEW_STATE_CHANGED');
     });
   } catch (error) {
     if (
       error instanceof Error
-      && (error.message === 'REVIEW_ALREADY_RUNNING' || error.message === 'REVIEW_DRAFT_CHANGED')
+      && (error.message === 'REVIEW_ALREADY_RUNNING' || error.message === 'REVIEW_STATE_CHANGED')
     ) {
       return NextResponse.json(
-        { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '这份草稿正在审核，请等待当前审核结束。', requestId },
+        { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '这份调研正在审核，请等待当前审核结束。', requestId },
         { status: 409 },
       );
     }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       return NextResponse.json(
-        { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '这份草稿正在审核，请等待当前审核结束。', requestId },
+        { code: ERROR_CODES.AI_REVIEW_CONFLICT, message: '这份调研正在审核，请等待当前审核结束。', requestId },
         { status: 409 },
       );
     }
