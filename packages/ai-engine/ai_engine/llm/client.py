@@ -23,6 +23,8 @@ from ai_engine.llm.config import (
     parse_spec,
     resolve_route,
 )
+from ai_engine.llm.work_budget import WorkBudgetExceeded, reserve_attempt
+from ai_engine.llm.runtime_policy import LiveModelCallsDisabled, ensure_live_calls_allowed
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 from ai_engine.llm.provider_quota import (
     ProviderQuotaExhausted, active_quota_error, remember_quota_error, require_quota_available,
@@ -332,6 +334,8 @@ def is_provider_policy_error(exc: BaseException) -> bool:
 
 def is_retryable_llm_error(exc: BaseException) -> bool:
     """Whether a configured fallback model may recover this provider failure."""
+    if isinstance(exc, (WorkBudgetExceeded, LiveModelCallsDisabled)):
+        return False
     # The provider SDK can surface a dropped streaming/socket write as a
     # built-in transport exception rather than an HTTP error. It is safe to
     # retry these boundedly; classifying them as INTERNAL makes long research
@@ -388,10 +392,29 @@ async def _with_token_reservation(
     output deltas were delivered the provider has billed them, so that part is
     settled (or recorded) instead of releasing the whole reservation as zero.
     """
+    ensure_live_calls_allowed()
+    original_call = call
+
+    async def metered_call() -> TextGenerationResult:
+        estimate = estimate_call_tokens(
+            user_prompt=user_prompt, system_prompt=system_prompt, max_output_tokens=max_tokens,
+        )
+        with reserve_attempt(estimate) as attempt:
+            try:
+                result = await original_call()
+            except BaseException:
+                if consumed_estimate is not None:
+                    inp, out = consumed_estimate()
+                    if out > 0:
+                        attempt.record(inp, out)
+                raise
+            attempt.record(result.input_tokens, result.output_tokens)
+            return result
+
     budget_task = current_budget_task()
     if budget_task is not None:
         try:
-            result = await call()
+            result = await metered_call()
         except BaseException:
             if consumed_estimate is not None:
                 spent_in, spent_out = consumed_estimate()
@@ -411,7 +434,7 @@ async def _with_token_reservation(
         user_id=budget_user_id,
     )
     try:
-        result = await call()
+        result = await metered_call()
     except BaseException:
         if reservation is not None:
             spent_in, spent_out = consumed_estimate() if consumed_estimate else (0, 0)

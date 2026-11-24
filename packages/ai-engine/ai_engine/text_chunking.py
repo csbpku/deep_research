@@ -89,15 +89,13 @@ def _preferred_boundary(text: str, start: int, upper: int) -> int:
 
 def _section_at(text: str, offset: int) -> str:
     headings: list[tuple[int, str]] = []
-    heading_re = re.compile(r"(?m)^(#{1,6})\s+(.+?)\s*#*\s*$")
-    for match in heading_re.finditer(text[:offset]):
+    # Horizontal whitespace only; never classify an unbounded flattened
+    # body as a heading or a partial prefix as a new heading.
+    heading_re = re.compile(r"(?m)^(#{1,6})[ \t]+([^\r\n]{1,160}?)[ \t]*#*[ \t]*$")
+    for match in heading_re.finditer(text):
+        if match.start() > offset:
+            break
         level = len(match.group(1))
-        title = match.group(2).strip()
         headings = [item for item in headings if item[0] < level]
-        headings.append((level, title))
-    next_heading = heading_re.match(text, offset)
-    if next_heading is not None:
-        level = len(next_heading.group(1))
-        headings = [item for item in headings if item[0] < level]
-        headings.append((level, next_heading.group(2).strip()))
-    return " > ".join(title for _level, title in headings)
+        headings.append((level, match.group(2).strip()))
+    return " > ".join(title for _level, title in headings)[-160:]
