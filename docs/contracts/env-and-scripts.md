@@ -102,6 +102,7 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `DB_POOL_MAX_SIZE` | int | ai-engine PostgreSQL 连接池最大连接数 | `10` |
 | `RADAR_SOURCE_CONCURRENCY` | int | 同时运行的雷达来源数 | `5` |
 | `RADAR_CANDIDATE_CONCURRENCY` | int | 单来源同时处理的候选数 | `3` |
+| `RADAR_BRIEF_TIMEOUT_SECONDS` | float | 雷达单篇导读的总预算，包含抓取复核、分块提炼、合成及重试退避；范围 60–900 秒，无效值回退默认值 | `300` |
 | `RADAR_FETCH_RETRIES` | int | 来源与候选传输失败后的额外重试次数 | `2` |
 | `RADAR_FETCH_RETRY_BACKOFF_SECONDS` | float | 传输重试的初始退避秒数（指数增长） | `0.5` |
 | `RADAR_LLM_CONCURRENCY` | int | 全局 LLM 调用上限，sync/enrichment 共用 | `8` |
@@ -137,9 +138,9 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `TOPIC_PROPOSAL_CRON_TIME` | time | 专题提案 cron 时刻 | `09:00` |
 | `TOPIC_PRESETS_JSON` | json | 预置专题定义（可选） | 空 |
 | `ZREAD_REMOTE_ENABLED` | bool | 先尝试公共 Zread 远程页生成 GitHub wiki 缓存 | `1` |
-| `ZREAD_CLI_ENABLED` | bool | 远程无已发布目录时回退本地 zread CLI | `1` |
-| `ZREAD_CLI_BIN` | str | 本地 zread CLI 可执行名 | `zread` |
-| `ZREAD_CLI_TIMEOUT_SECONDS` | int | CLI 目录+页面生成超时；0=不限时，中断保留已生成的部分页 | `7200` |
+| `ZREAD_CLI_ENABLED` | bool | 已隔离（GHSA-3429-mj25-c5wf）；运行时固定禁用，旧配置不能重新启用 | `0` |
+| `ZREAD_CLI_BIN` | str | 历史兼容配置；隔离期间不发现或执行本地 CLI | `zread` |
+| `ZREAD_CLI_TIMEOUT_SECONDS` | int | 历史兼容配置；隔离期间不启动生成，保留已有缓存和草稿 | `7200` |
 | `GBRAIN_MCP_URL` | url | 只读 GBrain HTTP MCP sidecar 端点（可选） | 空 |
 | `GBRAIN_MCP_TOKEN` | secret | GBrain sidecar 鉴权 token（可选） | 空 |
 | `ADMIN_ALERT_WEBHOOK_URL` | secret | 雷达同步异常告警 webhook（飞书或通用 JSON，必须 https；空=关闭）。日志不记录该 URL | 空 |

@@ -28,6 +28,44 @@ def test_generate_command_is_strict() -> None:
     assert "--skip-failed" not in _generate_command("zread")
 
 
+def test_cli_quarantine_cannot_be_disabled_by_legacy_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZREAD_CLI_ENABLED", "1")
+    monkeypatch.setenv("ZREAD_CLI_BIN", "/tmp/previously-installed-zread")
+    assert zread_cli._enabled() is False
+    assert zread_cli._binary() is None
+
+
+@pytest.mark.asyncio
+async def test_quarantined_generation_never_discovers_or_starts_a_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZREAD_CLI_ENABLED", "1")
+
+    def forbidden_binary() -> str:
+        pytest.fail("quarantined CLI must not be discovered")
+
+    monkeypatch.setattr(zread_cli, "_binary", forbidden_binary)
+    assert await generate_zread_wiki(
+        owner="example", repo="repo", branch="main", commit_sha="abc1234",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_subprocess_boundary_rejects_local_generation(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="GHSA-3429-mj25-c5wf"):
+        await zread_cli._run("zread", "generate", cwd=tmp_path, timeout=1)
+
+
+def test_production_image_does_not_install_quarantined_cli() -> None:
+    root = Path(__file__).resolve().parents[3]
+    dockerfile = (root / "infra" / "ai-engine.Dockerfile").read_text()
+    assert "npm install" not in dockerfile
+    assert "ZREAD_CLI_VERSION" not in dockerfile
+    assert "ZREAD_CLI_ENABLED=0" in dockerfile
+
+
 def test_zread_log_detects_only_fresh_rate_limit_entries(tmp_path: Path) -> None:
     log = tmp_path / "zread.log"
     log.write_text("old 429 too many requests\n", encoding="utf-8")
@@ -305,6 +343,8 @@ async def test_generate_preserves_draft_pages_when_outer_timeout_cancels(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # Exercise historical cache handling with mocked subprocesses only.
+    monkeypatch.setattr(zread_cli, "_enabled", lambda: True)
     monkeypatch.setenv("ZREAD_CLI_WORK_DIR", str(tmp_path))
 
     async def fake_run(*args: str, cwd: Path, timeout: float | None) -> tuple[int, str, str]:
@@ -345,6 +385,7 @@ async def test_generate_persists_draft_and_marks_rate_limit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(zread_cli, "_enabled", lambda: True)
     monkeypatch.setenv("ZREAD_CLI_WORK_DIR", str(tmp_path))
 
     async def fake_run(*args: str, cwd: Path, timeout: float | None) -> tuple[int, str, str]:
@@ -384,6 +425,7 @@ async def test_generate_resumes_durable_checkout_with_draft_resume(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(zread_cli, "_enabled", lambda: True)
     calls: list[tuple[str, ...]] = []
     monkeypatch.setenv("ZREAD_CLI_WORK_DIR", str(tmp_path))
 

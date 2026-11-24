@@ -13,6 +13,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import os
 import re as _re
 import socket
@@ -1674,9 +1675,13 @@ async def _generate_brief_with_retry(
     timeout_seconds: float,
     context_max_chars: int | None = None,
 ) -> Any:
-    """Call generate_brief, retrying transient provider failures."""
+    """Retry transient failures within one shared generation deadline."""
     last: Any = None
+    deadline = time.monotonic() + timeout_seconds
     for attempt in range(_BRIEF_RATE_LIMIT_RETRIES + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         delay = (
             _BRIEF_RATE_LIMIT_BACKOFF[attempt]
             if attempt < len(_BRIEF_RATE_LIMIT_BACKOFF)
@@ -1687,7 +1692,7 @@ async def _generate_brief_with_retry(
                 adapter,
                 item,
                 canonical_url,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=remaining,
                 context_max_chars=context_max_chars,
             )
             if getattr(brief, "error_code", None) == WorkBudgetExceeded.error_code:
@@ -1700,7 +1705,7 @@ async def _generate_brief_with_retry(
                 )
             if brief.status == AI_JOB_STATUS["FAILED"] and _is_retryable_brief_failure(brief=brief):
                 last = brief
-                if delay <= 0:
+                if delay <= 0 or deadline - time.monotonic() <= delay:
                     break
                 logger.info(
                     "ai-engine.radar.brief_retry",
@@ -1712,7 +1717,7 @@ async def _generate_brief_with_retry(
         except Exception as exc:
             last = exc
             if _is_retryable_brief_failure(exc=exc):
-                if delay <= 0:
+                if delay <= 0 or deadline - time.monotonic() <= delay:
                     break
                 logger.info(
                     "ai-engine.radar.brief_retry",
@@ -1723,6 +1728,8 @@ async def _generate_brief_with_retry(
             raise
     if isinstance(last, BaseException):
         raise last
+    if last is None:
+        raise _BriefGenerationError("WORKER_TIMEOUT", "Radar brief generation deadline exhausted")
     return last
 
 
@@ -2869,7 +2876,7 @@ async def run_radar_sync(
     fetchers: dict[str, SourceFetcher] | None = None,
     document_fetcher: SafeFetcher = safe_fetch,
     generate_brief: BriefGenerator = _generate_brief,
-    generation_timeout_seconds: float = 60.0,
+    generation_timeout_seconds: float | None = None,
     distilled_scorer: DistilledScorerFn | None = None,
     monitor: Any | None = None,
     embedding_scorer: EmbeddingScorerFn | None = None,
@@ -2881,6 +2888,14 @@ async def run_radar_sync(
 
     if triggered_by not in {"cron", "admin"}:
         raise ValueError("triggered_by must be cron or admin")
+    if generation_timeout_seconds is None:
+        try:
+            generation_timeout_seconds = float(os.environ.get("RADAR_BRIEF_TIMEOUT_SECONDS", "300"))
+        except ValueError:
+            generation_timeout_seconds = 300.0
+        if not math.isfinite(generation_timeout_seconds):
+            generation_timeout_seconds = 300.0
+        generation_timeout_seconds = max(60.0, min(generation_timeout_seconds, 900.0))
     sources = await load_enabled_sources(
         pool,
         source_ids=source_ids,
