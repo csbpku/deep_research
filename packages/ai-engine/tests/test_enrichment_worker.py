@@ -769,7 +769,7 @@ async def test_enrich_github_candidate_persists_zread_pages_as_original_markdown
     assert "Fallback only" not in params[1]
 
 
-async def test_enrich_github_candidate_uses_cli_for_remote_partial(
+async def test_enrich_github_candidate_retains_remote_partial_under_cli_quarantine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pool = _Pool(row={
@@ -808,17 +808,7 @@ async def test_enrich_github_candidate_uses_cli_for_remote_partial(
         }
 
     async def fake_cli(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "provider": "zread-cli",
-            "status": "complete",
-            "pageCount": 2,
-            "expectedPageCount": 2,
-            "pages": [{
-                "path": "1-overview.md",
-                "section": "Get Started",
-                "content": "Complete page",
-            }],
-        }
+        raise AssertionError("quarantined CLI must not be called")
 
     from ai_engine.radar import zread_cli, zread_remote
 
@@ -839,11 +829,12 @@ async def test_enrich_github_candidate_uses_cli_for_remote_partial(
     )
 
     assert result is not None
-    assert result["zread"]["provider"] == "zread-cli"
-    assert result["zread"]["pages"][0]["section"] == "Get Started"
+    assert result["zread"]["provider"] == "zread-remote"
+    assert result["zread"]["status"] == "partial"
+    assert result["zread"]["pages"][0]["content"] == "Remote page"
 
 
-async def test_enrich_github_candidate_resumes_existing_cli_draft_without_remote(
+async def test_enrich_github_candidate_preserves_existing_cli_draft_without_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pool = _Pool(row={
@@ -881,19 +872,10 @@ async def test_enrich_github_candidate_resumes_existing_cli_draft_without_remote
         return {}
 
     async def should_not_call_remote(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise AssertionError("an existing CLI draft must resume locally")
+        raise AssertionError("an existing CLI draft must remain available")
 
     async def fake_cli(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "provider": "zread-cli",
-            "status": "complete",
-            "pageCount": 2,
-            "expectedPageCount": 2,
-            "pages": [
-                {"path": "1-overview.md", "content": "Existing page"},
-                {"path": "2-runtime.md", "content": "Resumed page"},
-            ],
-        }
+        raise AssertionError("quarantined CLI must not be called")
 
     from ai_engine.radar import zread_cli, zread_remote
 
@@ -915,8 +897,9 @@ async def test_enrich_github_candidate_resumes_existing_cli_draft_without_remote
     )
 
     assert result is not None
-    assert result["zread"]["status"] == "complete"
-    assert result["zread"]["pageCount"] == 2
+    assert result["zread"]["status"] == "partial"
+    assert result["zread"]["pageCount"] == 1
+    assert result["zread"]["pages"][0]["content"] == "Existing page"
 
 
 async def test_enrich_arxiv_uses_cached_abstract_when_pdf_is_too_large(

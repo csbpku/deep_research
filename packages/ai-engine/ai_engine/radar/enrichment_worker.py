@@ -1560,9 +1560,7 @@ async def enrich_github_candidate(
     ) else None
     # Remote retrieval and local generation are separate providers. Disabling
     # the CLI must never disable fetching an already-published Zread wiki.
-    zread_cli_enabled = os.environ.get("ZREAD_CLI_ENABLED", "1").strip().lower() not in {
-        "0", "false", "no", "off",
-    }
+    from ai_engine.radar.zread_cli import _enabled as zread_cli_enabled
     if zread_payload is None and not existing_cli_draft:
         try:
             from ai_engine.radar.zread_remote import fetch_zread_wiki
@@ -1585,7 +1583,7 @@ async def enrich_github_candidate(
     # A remote catalog with missing pages is not a usable document. Try the
     # local generator for both "remote unavailable" and "remote partial";
     # retain the remote partial only when the CLI cannot produce anything.
-    if zread_cli_enabled and not remote_complete:
+    if zread_cli_enabled() and not remote_complete:
         try:
             from ai_engine.radar.zread_cli import generate_zread_wiki
 
