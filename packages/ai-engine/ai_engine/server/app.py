@@ -47,6 +47,7 @@ from ai_engine.adapters.base import AdapterSource, ResearchEngineAdapter, build_
 from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.contracts.errors import AdapterError, ERROR_CODES, HTTP_STATUS
 from ai_engine.evidence_reconciliation import research_revision_hash
+from ai_engine.research_summary import derive_research_summary
 from ai_engine.contracts.states import (
     AI_JOB_STATUS,
     AI_JOB_STEP,
@@ -465,13 +466,20 @@ async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
             await asyncio.sleep(1.0)
 
 
-def _fact_review_timeout_seconds() -> int:
-    """Bound one independent review attempt; it must not hold the job queue."""
+def _fact_review_timeout_seconds(report_chars: int = 0) -> int:
+    """Bound one independent review attempt; it must not hold the job queue.
+
+    The budget scales with report length: a 30k-character report needs a dozen
+    inventory chunks plus several adjudication batches, and a flat 180s cut
+    the review off mid-batch (``review_unavailable``) even though every model
+    call succeeded.
+    """
     try:
-        value = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "180"))
+        base = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "300"))
     except (TypeError, ValueError):
-        value = 180
-    return min(max(value, 30), 600)
+        base = 300
+    scaled = base + max(0, report_chars) // 30
+    return min(max(scaled, 30), 1500)
 
 
 def _fact_review_heartbeat_seconds(store: JobStore) -> float:
@@ -724,7 +732,7 @@ async def _review_one_item(store: JobStore, work: ReviewWorkItem) -> None:
                             risk=cast(Any, target_risk),
                             phase_callback=review_progress,
                         ),
-                        timeout=_fact_review_timeout_seconds(),
+                        timeout=_fact_review_timeout_seconds(len(work.report)),
                     )
                 if result.claims:
                     challenged = result.claims[0]
@@ -759,7 +767,7 @@ async def _review_one_item(store: JobStore, work: ReviewWorkItem) -> None:
                             report_type=work.report_type,
                             phase_callback=review_progress,
                         ),
-                        timeout=_fact_review_timeout_seconds(),
+                        timeout=_fact_review_timeout_seconds(len(work.report)),
                     )
         except asyncio.TimeoutError:
             checkpoint_claims = _claims_from_review_inventory(workflow_checkpoints)
@@ -3268,6 +3276,15 @@ async def review_research(body: ReviewResearchBody, request: Request) -> dict[st
     }
 
 
+@app.get("/health/preflight")
+async def preflight(force: bool = False) -> dict[str, object]:
+    # The normal internal-service middleware protects this endpoint. Unlike
+    # public liveness, it may inspect credentials and provider readiness.
+    from ai_engine.server.preflight import research_preflight
+
+    return dict(await research_preflight(_adapter_singleton(), force=force))
+
+
 @app.get("/health")
 async def health_alias(
     request: Request,
@@ -3571,13 +3588,17 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"deep-research:ai-job:{snapshot.job_id}"))
             body = output_text.strip()
             origin_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
-            revision_sha256 = research_revision_hash({"title": snapshot.topic[:300], "body": body})
+            summary_fields = derive_research_summary(body)
+            summary_values = {key: summary_fields[key] or None for key in ("background", "conclusion", "risks")}
+            revision_sha256 = research_revision_hash({
+                "title": snapshot.topic[:300], "body": body, **summary_values, "tags": [],
+            })
             sql = (
                 'INSERT INTO "researches" '
-                '("id", "type", "status", "title", "body", "authorId", "creationMethod", '
+                '("id", "type", "status", "title", "body", "background", "conclusion", "risks", "authorId", "creationMethod", '
                 ' "reviewStatus", "reviewAttempts", "reviewSummary", "reviewClaims", "reviewDetails", "reviewedAt", '
                 ' "aiAssisted", "originContentSha256", "createdAt", "updatedAt") '
-                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NULL, true, %s, now(), now()) "
+                "VALUES (%s, 'research', 'draft', %s, %s, %s, %s, %s, %s, 'ai_research', %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NULL, true, %s, now(), now()) "
                 'ON CONFLICT ("id") DO NOTHING'
             )
             review_status = review_details.get("status") if review_details else None
@@ -3609,6 +3630,9 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                             new_id,
                             snapshot.topic[:300],
                             body,
+                            summary_values["background"],
+                            summary_values["conclusion"],
+                            summary_values["risks"],
                             snapshot.requester_id,
                             review_status,
                             review_attempts,
@@ -3684,6 +3708,7 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             "requester_id": snapshot.requester_id,
             "sources": len(sources),
             "body": output_text,
+            **{key: value or None for key, value in derive_research_summary(output_text).items()},
             "review": review_details or {},
         }
         return new_id

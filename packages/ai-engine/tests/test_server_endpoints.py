@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -35,7 +36,8 @@ from ai_engine.server.app import (
     _research_deliverable_status,
     _store_singleton,
 )
-from ai_engine.job_runner.db_store import _drafts_for_tests
+from ai_engine.evidence_reconciliation import research_revision_hash
+from ai_engine.job_runner.db_store import DbJobStore, _drafts_for_tests
 from ai_engine.job_runner.store import InMemoryJobStore, make_job_snapshot
 
 
@@ -692,6 +694,34 @@ async def test_in_memory_draft_factory_is_idempotent_per_job() -> None:
     assert first == second
     assert first is not None
     assert _drafts_for_tests[first]["body"] == "draft body"
+
+
+@pytest.mark.parametrize("with_risks", [False, True])
+async def test_db_draft_summary_and_review_hash_use_the_same_persisted_values(
+    monkeypatch: pytest.MonkeyPatch, with_risks: bool,
+) -> None:
+    conn = MagicMock()
+    conn.execute = AsyncMock()
+    pool = MagicMock()
+    pool.connection.return_value.__aenter__.return_value = conn
+    monkeypatch.setattr(DbJobStore, "pool", property(lambda _self: pool))
+    store = DbJobStore(dsn="postgresql://127.0.0.1/not_connected")
+    snapshot = make_job_snapshot(topic="Summary persistence", report_type="research_report")
+    body = "## 背景\n已有的背景说明。\n\n## 结论\n已有的条件结论。"
+    if with_risks:
+        body += "\n\n## 风险\n仍需验证的风险。"
+
+    assert await _make_draft_factory(store)(snapshot, (), body) is not None
+
+    insert_sql, values = conn.execute.call_args_list[0].args
+    assert '\"background\", \"conclusion\", \"risks\"' in insert_sql
+    stored = dict(zip(("title", "body", "background", "conclusion", "risks"), values[1:6], strict=True))
+    assert stored["background"] == "已有的背景说明。"
+    assert stored["conclusion"] == "已有的条件结论。"
+    assert stored["risks"] == ("仍需验证的风险。" if with_risks else None)
+    review_sql, review_values = conn.execute.call_args_list[1].args
+    assert 'INSERT INTO "research_review_runs"' in review_sql
+    assert review_values[3] == research_revision_hash({**stored, "tags": []})
 
 
 async def test_logs_do_not_contain_secrets(

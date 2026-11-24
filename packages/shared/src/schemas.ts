@@ -70,7 +70,7 @@ const AiResearchConversationMessage = z.object({
 export const CreateAiJobInput = z.object({
   topic: z.string().min(2).max(RESEARCH_INPUT_MAX_CHARS),
   context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
-  reportType: z.enum(['research_report', 'summary_brief', 'slides', 'web_brief']).default('research_report'),
+  reportType: z.enum(['decision_memo', 'comparison_matrix', 'learning_path', 'research_report', 'summary_brief', 'slides', 'web_brief']).default('decision_memo'),
   // P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE.
   // brief  = ~500 words / 5 URLs  (default for summary_brief)
   // standard = 800 words / 10 URLs (legacy default for research_report)
@@ -514,6 +514,10 @@ export const DEFAULT_RESEARCH_DECISION_DIMENSIONS = [
 
 export const ResearchBriefSchema = z.object({
   objective: ResearchObjectiveSchema,
+  // A comparison is often a deliberate "show me the differences, not a
+  // winner". Keep that separate from the objective so the plan does not turn
+  // back into a recommendation request.
+  comparisonOnly: z.boolean().default(false),
   question: z.string().min(2).max(RESEARCH_INPUT_MAX_CHARS),
   context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
   scope: ResearchScopeSchema,
@@ -553,7 +557,7 @@ export const CreateAiJobInputV2 = z.object({
   // v2 以 brief 为准，但允许保留旧 topic/context/reportType 等以便老调用不变。
   brief: ResearchBriefSchema.optional(),
   context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
-  reportType: z.enum(['research_report', 'summary_brief', 'slides', 'web_brief']).default('research_report'),
+  reportType: z.enum(['decision_memo', 'comparison_matrix', 'learning_path', 'research_report', 'summary_brief', 'slides', 'web_brief']).default('decision_memo'),
   reportLength: z.enum(['brief', 'standard', 'deep']).default('standard'),
   sourcePolicy: z.enum(['prefer_user_sources', 'only_user_sources']).default('prefer_user_sources'),
   maxUrlsToScrape: z.number().int().min(5).max(48).optional(),

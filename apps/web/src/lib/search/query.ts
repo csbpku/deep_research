@@ -8,8 +8,10 @@
 //   - 全部结果中，已发布雷达只保留 radar 形态，避免与 summary 重复
 
 import type { Prisma } from '@prisma/client';
+import { SEARCH_STALENESS_BOOST, STALENESS_THRESHOLDS } from './staleness-policy';
 import { cleanResearchLabel } from '@/lib/research-markdown-cleanup';
 import { RADAR_PUBLIC_SCORE_SQL } from '@/lib/radar/score-validity';
+import { RADAR_CACHED_CONTENT_REDACT_SQL, RADAR_PUBLIC_REVIEW_SQL } from '@/lib/radar/visibility';
 
 /**
  * 搜索参数。
@@ -57,9 +59,8 @@ export function buildSearchSql(args: BuildSearchArgs): {
 } {
   const { q, type, page, perPage } = args;
   const offset = (page - 1) * perPage;
-  const externalReading = "'external_reading' = ANY(COALESCE(s.tags, ARRAY[]::text[]))";
-  const radarBodyForSearch = `CASE WHEN ${externalReading} THEN '' ELSE COALESCE(s.body, '') END`;
-  const radarSnippet = `CASE WHEN ${externalReading} THEN LEFT(COALESCE(NULLIF(s.interpretation, ''), ''), 1000) ELSE LEFT(COALESCE(NULLIF(s.interpretation, ''), s.body), 1000) END`;
+  const radarBodyForSearch = `CASE WHEN ${RADAR_CACHED_CONTENT_REDACT_SQL} THEN '' ELSE COALESCE(s.body, '') END`;
+  const radarSnippet = `LEFT(COALESCE(NULLIF(s.interpretation, ''), ${radarBodyForSearch}), 1000)`;
 
   // 四类结果共用同一组参数；SQL 全部静态，用户输入只通过占位符进入。
   // 参数顺序：$1=q, $2=type, $3=owner UUID, $4=limit, $5=offset
@@ -160,9 +161,7 @@ export function buildSearchSql(args: BuildSearchArgs): {
           )
           OR (
             s."distilledTier" IN ('collection', 'deep_read')
-            AND s."enrichmentStatus" = 'ready'
-            AND s."readerQualityStatus" = 'ready'
-            AND s."contentReviewStatus" = 'approved'
+            AND ${RADAR_PUBLIC_REVIEW_SQL}
           )
         )
         AND (
@@ -247,18 +246,84 @@ export function buildSearchSql(args: BuildSearchArgs): {
 
   const rowsSql = `${matchesSql}
     SELECT
-      id,
-      type,
-      "refId",
-      title,
-      snippet,
-      highlighted,
-      "publishedAt",
-      "isPrivate",
-      rank
-    FROM matches
-    WHERE ($2::text IS NULL OR type = $2)
-    ORDER BY rank DESC, "publishedAt" DESC
+      ranked.id, ranked.type, ranked."refId", ranked.title, ranked.snippet,
+      ranked.highlighted, ranked."publishedAt", ranked."isPrivate", ranked.rank,
+      CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT left(r2.judgement, 240)
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+          AND r2.judgement IS NOT NULL
+          AND (
+            strpos(lower(r2.judgement), lower($1)) > 0
+            OR similarity(lower(r2.judgement), lower($1)) >= 0.35
+          )
+      ) END AS "judgementMatch",
+      CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT left(r2.body, 240)
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+      ) END AS "bodyPreview",
+      CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT r2."judgementConfidence"
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+      ) END AS "judgementConfidence",
+      CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT left(r2."judgementScope", 120)
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+      ) END AS "judgementScope",
+      CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT r2."judgementReviewAt"
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+      ) END AS "judgementReviewAt",
+      CASE WHEN ranked.type = 'knowledge' THEN (
+        SELECT r2."judgementReviewAt" < now()
+        FROM researches r2
+        WHERE r2.id = ranked."refId"::uuid
+      ) END AS "judgementStale",
+      CASE WHEN strpos(lower(ranked.title), lower($1)) > 0 OR lower(ranked.title) = lower($1)
+        THEN true ELSE false END AS "titleMatch",
+      CASE WHEN ranked.type = 'radar' AND EXISTS (
+        SELECT 1 FROM summaries s2
+        WHERE s2.id = ranked."refId"::uuid
+          AND EXISTS (SELECT 1 FROM unnest(s2.tags) tag WHERE strpos(lower(tag), lower($1)) > 0)
+      ) THEN true ELSE false END AS "tagMatch"
+    FROM (
+      SELECT
+        id, type, "refId", title, snippet, highlighted, "publishedAt", "isPrivate", rank,
+        CASE
+          WHEN type = 'knowledge' AND EXISTS (
+            SELECT 1 FROM researches r2
+            WHERE r2.id = matches."refId"::uuid
+              AND r2.judgement IS NOT NULL
+              AND (
+                strpos(lower(r2.judgement), lower($1)) > 0
+                OR similarity(lower(r2.judgement), lower($1)) >= 0.35
+              )
+          ) THEN
+            CASE
+              WHEN EXISTS (
+                SELECT 1 FROM researches r2
+                WHERE r2.id = matches."refId"::uuid
+                  AND r2."judgementReviewAt" IS NOT NULL
+                  AND r2."judgementReviewAt" < now() - interval '${STALENESS_THRESHOLDS.abandoned} days'
+              ) THEN ${SEARCH_STALENESS_BOOST.abandoned}
+              WHEN EXISTS (
+                SELECT 1 FROM researches r2
+                WHERE r2.id = matches."refId"::uuid
+                  AND r2."judgementReviewAt" IS NOT NULL
+                  AND r2."judgementReviewAt" < now() - interval '${STALENESS_THRESHOLDS.aged} days'
+              ) THEN ${SEARCH_STALENESS_BOOST.aged}
+              ELSE ${SEARCH_STALENESS_BOOST.fresh}
+            END
+          ELSE 0.0
+        END AS boost
+      FROM matches
+      WHERE ($2::text IS NULL OR type = $2)
+    ) ranked
+    ORDER BY (rank + boost) DESC, "publishedAt" DESC
     LIMIT $4 OFFSET $5
   `;
 
@@ -289,7 +354,20 @@ export function shapeSearchRow(row: {
   publishedAt: Date;
   rank: number;
   isPrivate?: boolean;
+  judgementMatch?: string | null;
+  bodyPreview?: string | null;
+  judgementConfidence?: string | null;
+  judgementScope?: string | null;
+  judgementStale?: boolean;
+  judgementReviewAt?: Date | string | null;
+  titleMatch?: boolean;
+  tagMatch?: boolean;
 }) {
+  const judgementMatch = row.judgementMatch?.trim() || null;
+  const matchReasons: Array<'judgement' | 'title' | 'tag'> = [];
+  if (judgementMatch) matchReasons.push('judgement');
+  if (row.titleMatch) matchReasons.push('title');
+  if (row.tagMatch) matchReasons.push('tag');
   return {
     id: row.id,
     type: row.type,
@@ -297,6 +375,14 @@ export function shapeSearchRow(row: {
     title: cleanResearchLabel(row.title),
     snippet: row.snippet,
     highlighted: sanitizeSearchHighlight(row.highlighted),
+    judgementMatch,
+    bodyPreview: row.bodyPreview?.trim() || null,
+    judgementConfidence: row.judgementConfidence ?? null,
+    judgementScope: row.judgementScope?.trim() || null,
+    judgementStale: row.judgementStale === true,
+    judgementReviewAt: row.judgementReviewAt ?? null,
+    matchReasons,
+    matchReason: matchReasons[0] ?? null,
     publishedAt: row.publishedAt.toISOString(),
     rank: Number(row.rank.toFixed(4)),
     isPrivate: row.isPrivate === true,

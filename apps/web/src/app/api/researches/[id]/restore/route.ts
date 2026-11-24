@@ -14,6 +14,7 @@ import {
 } from '../../../../../lib/radar/admin-actions';
 import {
   ResearchRestoreReviewRequiredError,
+  ResearchRestoreJudgementRequiredError,
   restoreReviewRequiredResponse,
   transitionResearchStatus,
 } from '../../../../../lib/research-status-actions';
@@ -79,6 +80,14 @@ export const POST = apiHandler<
   } catch (error) {
     if (error instanceof ResearchRestoreReviewRequiredError) {
       return restoreReviewRequiredResponse(error, requestId);
+    }
+    if (error instanceof ResearchRestoreJudgementRequiredError) {
+      return toApiErrorResponse({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: `知识卡缺少判断，恢复前请先补充：${error.reason}`,
+        requestId,
+        details: { requiresKnowledgeJudgement: true },
+      });
     }
     throw error;
   }

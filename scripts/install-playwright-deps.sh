@@ -121,13 +121,19 @@ apt_options=(
   -o "Dir::Cache::archives=${APT_ARCHIVE_DIR}"
 )
 
-"${sudo_cmd[@]}" apt-get update
-
 # Prefer the cached archive: with --no-download apt fails fast instead of
 # waiting for a throttled mirror. If a package is genuinely missing from
 # the cache, fall back to a normal install so the run can still succeed.
-if ! "${sudo_cmd[@]}" apt-get install "${apt_options[@]}" --no-download "${packages[@]}"; then
-  echo "The cached apt archive is incomplete; downloading the missing packages." >&2
+#
+# `apt-get update` used to run unconditionally. On a cache hit every package
+# is already local, so the only thing that update can do is wait on a 503
+# mirror — the reader job failed three times in a row on exactly that. Try
+# the cache first, and only touch the package index when the cache is short.
+if "${sudo_cmd[@]}" apt-get install "${apt_options[@]}" --no-download "${packages[@]}"; then
+  echo "Playwright system dependencies installed from the cached archive."
+else
+  echo "The cached apt archive is incomplete; refreshing the package index and downloading." >&2
+  "${sudo_cmd[@]}" apt-get update || echo "apt-get update failed; trying the install anyway." >&2
   "${sudo_cmd[@]}" apt-get install "${apt_options[@]}" "${packages[@]}"
 fi
 

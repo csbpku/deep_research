@@ -13,6 +13,7 @@ import React, { useEffect, useMemo, useRef, useState, type ReactNode } from 'rea
 import NextLink from 'next/link';
 import {
   BookOpenCheck,
+  Settings2,
   Sparkles,
   Tag,
 } from 'lucide-react';
@@ -21,6 +22,7 @@ import Button from '@mui/material/Button';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Checkbox from '@mui/material/Checkbox';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
 import Paper from '@mui/material/Paper';
@@ -45,10 +47,18 @@ const OBJECTIVE_LABELS: Record<Objective, string> = {
   decide: '决策对比',
 };
 
+const COMPARISON_ONLY_STEPS = [
+  { title: '梳理备选方案', detail: '枚举待比较方案与各自适用前提' },
+  { title: '逐格对照', detail: '按已确认的关键维度逐格对照' },
+  { title: '标注未知与冲突', detail: '每个单元格标明有证据/未知/冲突' },
+  { title: '条件性结论', detail: '说明各方案在什么条件下更合适，不给唯一推荐' },
+];
+
 interface PlanResponse {
   assistantMessage: string;
   brief: {
     objective: Objective;
+    comparisonOnly?: boolean;
     question: string;
     constraints?: string[];
     questionsToAnswer?: string[];
@@ -88,7 +98,8 @@ interface BriefProps {
   context: string;
   topicHint?: string;
   initialBrief?: BriefValue | null;
-  children?: ReactNode;
+  outputControls?: ReactNode;
+  advancedControls?: ReactNode;
   startAction?: ReactNode;
   onBriefReady?: (brief: BriefValue) => void;
   onPlanningChange?: (planning: boolean) => void;
@@ -106,6 +117,7 @@ export interface BriefValue {
   decisionNeedsConfirmation?: boolean;
   brief?: {
     objective: Objective;
+    comparisonOnly?: boolean;
     question: string;
     constraints: string[];
     questionsToAnswer: string[];
@@ -127,10 +139,14 @@ interface FetchState {
   authRequired?: boolean;
 }
 
-export function AiResearchBrief({ question, context, topicHint, initialBrief, children, startAction, onBriefReady, onPlanningChange }: BriefProps) {
+export function AiResearchBrief({ question, context, topicHint, initialBrief, outputControls, advancedControls, startAction, onBriefReady, onPlanningChange }: BriefProps) {
   const trimmed = question.trim();
   const isShort = trimmed.length < 2;
   const [state, setState] = useState<FetchState>({ status: 'idle' });
+  // The loading and ready layouts use different DOM trees. Keep the user's
+  // disclosure choice above both so a completed plan cannot close it.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const toggleAdvanced = () => setAdvancedOpen((open) => !open);
   const initialIds = initialBrief?.suggestedContextIds ?? [];
   const initialLegacy = initialBrief?.legacyContextSelection ?? (!initialBrief?.selectedContextItems && initialIds.length
     ? { ids: initialIds, refs: initialBrief?.brief?.contextRefs ?? [] } : null);
@@ -142,6 +158,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
   const legacySelectionRef = useRef(initialLegacy);
   const [focusText, setFocusText] = useState(initialBrief?.brief?.questionsToAnswer.join('\n') ?? '');
   const [comparisonText, setComparisonText] = useState(initialBrief?.brief?.comparisonOptions.join('\n') ?? '');
+  const [comparisonOnly, setComparisonOnly] = useState(initialBrief?.brief?.comparisonOnly ?? false);
   const [objective, setObjective] = useState<Objective>(initialBrief?.objective ?? 'investigate');
   const [timeRange, setTimeRange] = useState<ResearchTimeRange['preset']>(initialBrief?.brief?.scope.timeRange.preset ?? 'any');
   const [scopeFrom, setScopeFrom] = useState(initialBrief?.brief?.scope.timeRange.from ?? '');
@@ -155,6 +172,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
   const editedBriefRef = useRef<BriefValue | null>(initialBrief ?? null);
   const focusTouchedRef = useRef(!!initialBrief?.brief?.questionsToAnswer.length);
   const decisionDimensionsRef = useRef<string[]>(initialBrief?.objective === 'decide' ? initialBrief.brief?.decisionDimensions ?? [] : []);
+  const [dimensionDraft, setDimensionDraft] = useState<string[]>(decisionDimensionsRef.current);
+  const [dimensionInput, setDimensionInput] = useState('');
   const callbacksRef = useRef({ onBriefReady, onPlanningChange });
   callbacksRef.current = { onBriefReady, onPlanningChange };
   const contextSearchQuery = getPersonalContextSearchQuery(contextPanelOpen, contextSearch, trimmed);
@@ -235,7 +254,12 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
         const data = (await response.json()) as PlanResponse;
         if (cancelled) return;
         setState({ status: 'ready', plan: data });
-        if (!editedBriefRef.current && data.brief.objective === 'decide') decisionDimensionsRef.current = data.brief.decisionDimensions ?? [];
+        if (!editedBriefRef.current && data.brief.objective === 'decide') {
+          decisionDimensionsRef.current = data.brief.decisionDimensions ?? [];
+          setDimensionDraft(decisionDimensionsRef.current);
+        } else if (data.brief.objective === 'decide' && dimensionDraft.length === 0 && decisionDimensionsRef.current.length > 0) {
+          setDimensionDraft(decisionDimensionsRef.current);
+        }
         const edited = editedBriefRef.current;
         if (edited?.brief?.question === trimmed) {
           callbacksRef.current.onPlanningChange?.(false);
@@ -244,6 +268,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
         }
         setFocusText((data.brief.questionsToAnswer ?? []).join('\n'));
         setComparisonText((data.brief.comparisonOptions ?? []).join('\n'));
+        setComparisonOnly(data.brief.comparisonOnly ?? false);
         setObjective(data.brief.objective);
         setTimeRange(data.brief.scope?.timeRange?.preset ?? 'any');
         setScopeFrom(data.brief.scope?.timeRange?.from ?? '');
@@ -321,10 +346,13 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
     return (
       <PlanningFallback
         loading
+        advancedOpen={advancedOpen}
+        onAdvancedToggle={toggleAdvanced}
         question={trimmed}
         startAction={startAction}
+        outputControls={outputControls}
+        advancedControls={advancedControls}
       >
-        {children}
         <PersonalContextSuggestions items={availableContext} selectedIds={acceptedContextIds} loading={contextSearchLoading} onToggle={toggleContext} />
       </PlanningFallback>
     );
@@ -333,12 +361,15 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
   if (state.status === 'error') {
     return (
       <PlanningFallback
+        advancedOpen={advancedOpen}
+        onAdvancedToggle={toggleAdvanced}
         question={trimmed}
         error={state.error ?? '规划请求失败'}
         authRequired={state.authRequired}
         startAction={startAction}
+        outputControls={outputControls}
+        advancedControls={advancedControls}
       >
-        {children}
         <PersonalContextSuggestions items={availableContext} selectedIds={acceptedContextIds} loading={contextSearchLoading} onToggle={toggleContext} />
       </PlanningFallback>
     );
@@ -351,6 +382,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
     nextObjective = objective,
     nextFocusText = focusText,
     nextComparisonText = comparisonText,
+    nextComparisonOnly = comparisonOnly,
+    nextDecisionDimensions = decisionDimensionsRef.current,
     nextTimeRange = timeRange,
     nextScopeFrom = scopeFrom,
     nextScopeTo = scopeTo,
@@ -360,6 +393,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
     nextObjective?: Objective;
     nextFocusText?: string;
     nextComparisonText?: string;
+    nextComparisonOnly?: boolean;
+    nextDecisionDimensions?: string[];
     nextTimeRange?: ResearchTimeRange['preset'];
     nextScopeFrom?: string;
     nextScopeTo?: string;
@@ -379,7 +414,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
         selectedContextItems: selected, legacyContextSelection: retainedLegacy, contextSelectionIncomplete: legacyIncomplete,
         assistantMessage: '', scopeValid: true,
         brief: {
-          objective, primaryTopicId: topicHint, question: trimmed,
+          objective, comparisonOnly: nextComparisonOnly, primaryTopicId: topicHint, question: trimmed,
           constraints: context.trim() ? [context.trim()] : [], questionsToAnswer: [],
           comparisonOptions: [], decisionDimensions: [], successCriteria: [],
           sourcePolicy: 'prefer_user_sources', outputType: 'markdown', scope: emptyScope(),
@@ -391,19 +426,23 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
       return;
     }
     const ids = selectedIds;
+    const comparisonOnlyActive = nextObjective === 'decide' && nextComparisonOnly;
     const questionsToAnswer = nextFocusText
       .split(/\n|；|;/u)
       .map((item) => item.trim())
       .filter(Boolean)
-      .slice(0, 20);
+      .slice(0, 20)
+      .map((item) => comparisonOnlyActive && /推荐/u.test(item)
+        ? '哪些差异只在特定条件下成立，条件变化时结论如何变化？'
+        : item);
     const comparisonOptions = nextComparisonText
       .split(/\n|；|;|、/u)
       .map((item) => item.trim())
       .filter(Boolean)
       .slice(0, 20);
-    const explicitDecisionDimensions = inferDecisionDimensions(trimmed, nextFocusText);
+    const explicitDecisionDimensions = inferDecisionDimensions(trimmed, nextFocusText, comparisonOptions);
     const decisionDimensions = nextObjective === 'decide'
-      ? decisionDimensionsRef.current.length ? decisionDimensionsRef.current : explicitDecisionDimensions
+      ? nextDecisionDimensions.length ? nextDecisionDimensions : explicitDecisionDimensions
       : [];
     const validScope = nextTimeRange !== 'custom'
       || (!!nextScopeFrom && !!nextScopeTo && nextScopeFrom <= nextScopeTo);
@@ -417,12 +456,18 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
       decisionNeedsConfirmation: nextObjective === 'decide' && (comparisonOptions.length < 2 || decisionDimensions.length === 0),
       brief: {
         objective: nextObjective,
+        comparisonOnly: nextObjective === 'decide' ? nextComparisonOnly : false,
         question: plan!.brief.question,
         constraints: plan!.brief.constraints ?? [],
         questionsToAnswer,
         comparisonOptions: nextObjective === 'decide' ? comparisonOptions : [],
         decisionDimensions,
-        successCriteria: plan!.brief.successCriteria ?? [],
+        successCriteria: comparisonOnlyActive
+          ? [
+              ...(plan!.brief.successCriteria ?? []).filter((item) => !/推荐/u.test(item)),
+              '说明每个选项在什么条件下更合适，不给出唯一推荐',
+            ]
+          : plan!.brief.successCriteria ?? [],
         sourcePolicy: plan!.brief.sourcePolicy ?? 'prefer_user_sources',
         scope: {
           timeRange: {
@@ -492,286 +537,364 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
     ? `还可以补充：${missingFields.map((field) => translateMissing(field)).join('、')}；也可以直接开始。`
     : '研究方案已准备好，可以直接开始。';
 
+  const startFooter = (
+    <Box component="footer" sx={{ position: { xs: 'fixed', sm: 'sticky' }, left: { xs: 0, sm: 'auto' }, right: { xs: 0, sm: 'auto' }, bottom: 0, zIndex: 1200, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 1.5, px: { xs: 2, sm: 3 }, py: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider', boxShadow: { xs: '0 -8px 24px -12px rgba(0,0,0,0.35)', sm: '0 -8px 16px -16px rgba(0,0,0,0.45)' } }}>
+      <Typography variant="metadata" color="text.secondary">确认以上设置，启动后将锁定。</Typography>
+      {startAction}
+    </Box>
+  );
+
   return (
-    <Paper component="div" variant="outlined" sx={{ minWidth: 0, borderColor: 'divider', fontSize: 'var(--dr-type-label)' }}>
-      <Box component="header" sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
-        <Box>
+    <Paper component="div" variant="outlined" sx={{ minWidth: 0, borderColor: 'divider', fontSize: 'var(--dr-type-label)', pb: { xs: 10, sm: 0 } }}>
+      <Box component="header" sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
+        <Box sx={{ minWidth: 0 }}>
           <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'listTitle', fontWeight: 600, color: 'text.primary' }}>
             <BookOpenCheck size={18} aria-hidden /> 研究方案
           </Box>
-          <Typography component="p" variant="metadata" sx={{ mt: 0.5, lineHeight: 1.6, color: 'text.secondary' }}>确认要回答什么、参考哪些资料和需要什么产出；启动后设置会锁定。</Typography>
+          <Typography component="p" variant="body2" title={trimmed} sx={{ mt: 0.5, fontWeight: 500, lineHeight: 1.6, overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden' }}>
+            {trimmed || '（未填写研究问题）'}
+          </Typography>
         </Box>
         <Box sx={{ display: 'flex', flexShrink: 0, alignSelf: { xs: 'flex-end', sm: 'auto' }, alignItems: 'center', gap: 1 }}>
           <Chip size="small" color="primary" variant="outlined" label={OBJECTIVE_LABELS[objective]} />
         </Box>
       </Box>
 
-      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', minWidth: 0, gap: 3, px: { xs: 2, sm: 3 }, py: 3 }}>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
-          <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>研究什么</Typography>
-          <Typography component="span" variant="metadata" color="text.secondary">AI 已根据问题整理，可调整</Typography>
-        </Box>
+      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', minWidth: 0, gap: 2, px: { xs: 2, sm: 3 }, py: 2 }}>
+        {outputControls}
 
-        <TextField select label="研究方式" value={objective} onChange={event => handleObjectiveChange(event.target.value as Objective)} sx={{ width: { xs: '100%', sm: 200 } }}>
-          {(Object.keys(OBJECTIVE_LABELS) as Objective[]).map(value => <MenuItem key={value} value={value}>{OBJECTIVE_LABELS[value]}</MenuItem>)}
-        </TextField>
-
-      <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
-        {objectiveChanged
-          ? `已调整为「${OBJECTIVE_LABELS[objective]}」；提交时以当前目标、重点问题和对比对象为准。`
-          : planStatusText}
-      </Typography>
-
-      {resolvedPlan.plan || resolvedPlan.brief.successCriteria?.length ? (
-        <Box component="details" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'action.hover' }}>
-          <Box component="summary" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1, fontWeight: 500, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' } }}>
-            <Box component="span">AI 会怎样完成这次研究？</Box>
-            <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>研究路径与完成标准</Typography>
+        <Box component="details" open={advancedOpen} data-testid="ai-research-advanced" sx={{ borderTop: 1, borderColor: 'divider' }}>
+          <Box component="summary" aria-label="高级设置" onClick={(event) => { event.preventDefault(); toggleAdvanced(); }} sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, py: 1.5, fontWeight: 600, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}>
+            <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Settings2 size={16} aria-hidden />高级设置</Box>
+            <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>研究方式、投入、资料与检索偏好</Typography>
           </Box>
-          <Box sx={{ display: 'grid', gap: 1, borderTop: 1, borderColor: 'divider', px: 1.5, py: 1 }}>
-            {resolvedPlan.plan ? (
-              <div>
-                <Typography component="p" variant="body2" sx={{ fontWeight: 500 }}>
-                  {objectiveChanged
-                    ? objective === 'decide' && currentComparisons.length > 0
-                      ? `对比 ${currentComparisons.join('、')}，并形成有证据支撑的优先级建议。`
-                      : `按「${OBJECTIVE_LABELS[objective]}」目标组织证据并生成结论。`
-                    : resolvedPlan.plan.summary}
-                </Typography>
-                <Typography component="p" variant="metadata" sx={{ mt: 0.5, color: 'text.secondary' }}>
-                  预计需要几分钟到十几分钟；可以离开页面，完成后再回来查看。
-                </Typography>
-                {resolvedPlan.plan.steps?.length ? (
-                  <Box component="ul" sx={{ mt: 1, pt: 1, display: 'flex', flexWrap: 'wrap', columnGap: 1.5, rowGap: 0.5, borderTop: 1, borderColor: 'divider', color: 'text.secondary', listStyle: 'none', m: 0, pl: 0 }}>
-                    {resolvedPlan.plan.steps.slice(0, 4).map((step) => <Box component="li" key={step.title}><Box component="span" aria-hidden="true">·</Box>{' '}{step.title}</Box>)}
-                  </Box>
-                ) : null}
-              </div>
-            ) : null}
-            {resolvedPlan.brief.successCriteria?.length ? (
-              <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 1 }}>
-                <Typography component="p" variant="body2" sx={{ fontWeight: 500 }}>完成标准</Typography>
-                <Box component="ul" sx={{ mt: 0.5, display: 'grid', gap: 0.5, p: 0, listStyle: 'none', typography: 'metadata', lineHeight: 1.6, color: 'text.secondary' }}>
-                  {resolvedPlan.brief.successCriteria.slice(0, 4).map((criterion) => (
-                    <Box component="li" key={criterion} sx={{ display: 'flex', gap: 1 }}>
-                      <Box component="span" sx={{ color: 'primary.main' }} aria-hidden="true">✓</Box>
-                      <Box component="span">{criterion}</Box>
+          <Box sx={{ display: 'grid', gap: 2.5, pt: 0.5, pb: 1, minWidth: 0 }}>
+            <Box sx={{ display: 'grid', gap: 1, minWidth: 0 }}>
+              <TextField select label="研究方式" value={objective} onChange={event => handleObjectiveChange(event.target.value as Objective)} sx={{ width: { xs: '100%', sm: 200 } }}>
+                {(Object.keys(OBJECTIVE_LABELS) as Objective[]).map(value => <MenuItem key={value} value={value}>{OBJECTIVE_LABELS[value]}</MenuItem>)}
+              </TextField>
+              <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
+                {objectiveChanged
+                  ? `已调整为「${OBJECTIVE_LABELS[objective]}」；提交时以当前目标、重点问题和对比对象为准。`
+                  : planStatusText}
+              </Typography>
+            </Box>
+
+            {resolvedPlan.plan || resolvedPlan.brief.successCriteria?.length ? (
+              <Box component="details" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'action.hover' }}>
+                <Box component="summary" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1, fontWeight: 500, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' } }}>
+                  <Box component="span">AI 会怎样完成这次研究？</Box>
+                  <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>研究路径与完成标准</Typography>
+                </Box>
+                <Box sx={{ display: 'grid', gap: 1, borderTop: 1, borderColor: 'divider', px: 1.5, py: 1 }}>
+                  {resolvedPlan.plan ? (
+                    <div>
+                      <Typography component="p" variant="body2" sx={{ fontWeight: 500 }}>
+                        {objectiveChanged
+                          ? objective === 'decide' && currentComparisons.length > 0
+                            ? comparisonOnly
+                              ? `对比 ${currentComparisons.join('、')}，只给差异与条件性结论，不给唯一推荐。`
+                              : `对比 ${currentComparisons.join('、')}，并形成有证据支撑的优先级建议。`
+                            : `按「${OBJECTIVE_LABELS[objective]}」目标组织证据并生成结论。`
+                          : comparisonOnly && objective === 'decide'
+                            ? `对比 ${currentComparisons.join('、')}，只给差异与条件性结论，不给唯一推荐。`
+                            : resolvedPlan.plan.summary}
+                      </Typography>
+                      <Typography component="p" variant="metadata" sx={{ mt: 0.5, color: 'text.secondary' }}>
+                        预计需要几分钟到十几分钟；可以离开页面，完成后再回来查看。
+                      </Typography>
+                      {resolvedPlan.plan.steps?.length ? (
+                        <Box component="ul" sx={{ mt: 1, pt: 1, display: 'flex', flexWrap: 'wrap', columnGap: 1.5, rowGap: 0.5, borderTop: 1, borderColor: 'divider', color: 'text.secondary', listStyle: 'none', m: 0, pl: 0 }}>
+                          {(comparisonOnly && objective === 'decide' ? COMPARISON_ONLY_STEPS : resolvedPlan.plan.steps).slice(0, 4).map((step) => <Box component="li" key={step.title}><Box component="span" aria-hidden="true">·</Box>{' '}{step.title}</Box>)}
+                        </Box>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {resolvedPlan.brief.successCriteria?.length ? (
+                    <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 1 }}>
+                      <Typography component="p" variant="body2" sx={{ fontWeight: 500 }}>完成标准</Typography>
+                      <Box component="ul" sx={{ mt: 0.5, display: 'grid', gap: 0.5, p: 0, listStyle: 'none', typography: 'metadata', lineHeight: 1.6, color: 'text.secondary' }}>
+                        {resolvedPlan.brief.successCriteria.slice(0, 4).map((criterion) => (
+                          <Box component="li" key={criterion} sx={{ display: 'flex', gap: 1 }}>
+                            <Box component="span" sx={{ color: 'primary.main' }} aria-hidden="true">✓</Box>
+                            <Box component="span">{criterion}</Box>
+                          </Box>
+                        ))}
+                      </Box>
                     </Box>
-                  ))}
+                  ) : null}
                 </Box>
               </Box>
             ) : null}
-          </Box>
-        </Box>
-      ) : null}
 
-      <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: objective === 'decide' ? { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } : '1fr' }}>
-        <Box component="label" sx={{ display: 'grid', gap: 1 }}>
-          <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>重点回答</Typography>
-          <TextField
-            fullWidth
-            multiline
-            value={focusText}
-            onChange={(event) => {
-              const next = event.target.value;
-              focusTouchedRef.current = true;
-              setFocusText(next);
-              publishPlan({ nextFocusText: next });
-            }}
-            rows={2}
-            placeholder="例如：上线成本\n团队维护复杂度\n适合什么时候采用"
-            aria-label="研究重点回答"
-            sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
-          />
-        </Box>
-
-        {objective === 'decide' ? (
-          <Box component="label" sx={{ display: 'grid', gap: 1 }}>
-              <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>对比对象</Typography>
-            <TextField
-              fullWidth
-              multiline
-              value={comparisonText}
-              onChange={(event) => {
-                const next = event.target.value;
-                setComparisonText(next);
-                publishPlan({ nextComparisonText: next });
-              }}
-              rows={2}
-              placeholder="例如：Claude Research\nGemini Deep Research\nChatGPT Deep Research"
-              aria-label="研究对比对象"
-              sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
-            />
-          </Box>
-        ) : null}
-      </Box>
-
-      {children ? (
-        <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 2 }} aria-label="资料与产出">
-          {children}
-        </Box>
-      ) : null}
-      </Box>
-
-      {acceptedContextIds.length > 0 ? (
-        <Box component="section" aria-label="已选历史资料" sx={{ borderTop: 1, borderColor: 'divider', px: { xs: 2, sm: 3 }, py: 2, display: 'grid', gap: 1 }}>
-          <Typography variant="body2" sx={{ color: 'info.main', fontWeight: 600 }}>已选历史资料</Typography>
-          {availableContext.filter(item => acceptedContextIds.includes(item.id)).map(item => (
-            <Box key={item.id} sx={{ display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
-              <Typography variant="metadata" sx={{ overflowWrap: 'anywhere', minWidth: 0 }}>{item.title}</Typography>
-              <Button type="button" size="small" aria-label={`取消选择：${item.title}`} onClick={() => toggleContext(item.id)} sx={{ flexShrink: 0 }}>移除</Button>
-            </Box>
-          ))}
-        </Box>
-      ) : null}
-      {legacySelectionRef.current && acceptedContextIds.some((id) => legacySelectionRef.current?.ids.includes(id)) &&
-       legacySelectionRef.current.ids.some((id) => !acceptedContextIds.includes(id)) ? (
-        <Box role="alert" sx={{ typography: 'metadata', color: 'warning.main', mt: 1 }}>
-          旧草稿没有保存资料与来源的对应关系。请取消其余旧资料，再重新选择需要的资料。
-        </Box>
-      ) : null}
-      <Box component="details" sx={{ borderTop: 1, borderColor: 'divider' }}>
-        <Box component="summary" sx={{ cursor: 'pointer', px: { xs: 2, sm: 3 }, py: 2, color: 'info.main', typography: 'body2', fontWeight: 600 }}>历史资料建议（可选） · 已选 {acceptedContextIds.length} 条</Box>
-      <PersonalContextSuggestions
-        items={availableContext}
-        selectedIds={acceptedContextIds}
-        loading={contextSearchLoading}
-        onToggle={toggleContext}
-      />
-      </Box>
-
-      <Box component="section" aria-label="更多设置" sx={{ borderTop: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
-        <Box sx={{ mb: 1 }}>
-          <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>更多设置</Typography>
-          <Typography component="p" variant="metadata" sx={{ mt: 0.5, lineHeight: 1.6, color: 'text.secondary' }}>默认由 AI 安排；只有有明确偏好时再调整。</Typography>
-        </Box>
-        <Box sx={{ display: 'grid', gap: 1 }} aria-label="更多检索设置">
-      <Box component="details" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' }}>
-        <Box component="summary" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1, fontWeight: 500, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' } }}>
-          <Box component="span">检索偏好（可选）</Box>
-          <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>{hasSearchPreferences ? '已设置' : '只在需要时展开'}</Typography>
-        </Box>
-        <Box sx={{ display: 'grid', gap: 1, borderTop: 1, borderColor: 'divider', px: 1.5, py: 1 }}>
-          <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>告诉 AI 先看什么、重点关注什么；不填写表示由 AI 自行安排。</Typography>
-          <Box component="fieldset" sx={{ display: 'grid', gap: 0.5, m: 0, p: 0, border: 0, minWidth: 0 }}>
-            <Box component="legend" sx={{ mb: 0.5, p: 0, fontWeight: 500, color: 'text.primary' }}>优先参考时间</Box>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {TIME_RANGE_OPTIONS.map((option) => (
-                <Button
-                  key={option.value}
-                  type="button"
-                  aria-pressed={timeRange === option.value}
-                  size="small"
-                  variant={timeRange === option.value ? 'contained' : 'outlined'}
-                  onClick={() => {
-                    setTimeRange(option.value);
-                    publishPlan({ nextTimeRange: option.value });
+            <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: objective === 'decide' ? { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } : '1fr' }}>
+              <Box component="label" sx={{ display: 'grid', gap: 1 }}>
+                <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>重点回答</Typography>
+                <TextField
+                  fullWidth
+                  multiline
+                  value={focusText}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    focusTouchedRef.current = true;
+                    setFocusText(next);
+                    publishPlan({ nextFocusText: next });
                   }}
-                  sx={{ minHeight: 32, borderRadius: 'var(--dr-radius-pill)', px: 1.5 }}
+                  rows={2}
+                  placeholder="例如：上线成本\n团队维护复杂度\n适合什么时候采用"
+                  aria-label="研究重点回答"
+                  sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
+                />
+              </Box>
+
+              {objective === 'decide' ? (
+                <Box sx={{ display: 'grid', gap: 1 }}>
+                  <FormControlLabel
+                    control={<Checkbox size="small" checked={comparisonOnly} onChange={(event) => { const next = event.target.checked; setComparisonOnly(next); publishPlan({ nextComparisonOnly: next }); }} />}
+                    label={<Box component="span"><Box component="span" sx={{ fontWeight: 500 }}>只对比，不推荐</Box><Typography component="span" variant="metadata" sx={{ display: 'block', color: 'text.secondary' }}>输出差异矩阵和条件性结论，不给唯一选择</Typography></Box>}
+                    sx={{ m: 0, alignItems: 'flex-start' }}
+                  />
+                </Box>
+              ) : null}
+
+              {objective === 'decide' ? (
+                <Box component="label" sx={{ display: 'grid', gap: 1 }}>
+                  <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>对比对象</Typography>
+                  <TextField
+                    fullWidth
+                    multiline
+                    value={comparisonText}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setComparisonText(next);
+                      publishPlan({ nextComparisonText: next });
+                    }}
+                    rows={2}
+                    placeholder="例如：Claude Research\nGemini Deep Research\nChatGPT Deep Research"
+                    aria-label="研究对比对象"
+                    sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
+                  />
+                </Box>
+              ) : null}
+              {objective === 'decide' ? (
+                <Box component="section" aria-label="对比维度" sx={{ display: 'grid', gap: 1 }}>
+                  <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>对比维度</Typography>
+                  <Typography component="span" variant="metadata" sx={{ color: 'text.secondary', lineHeight: 1.6 }}>
+                    矩阵的列。默认由 AI 提议，可以删掉不关心的，或补一个自己的。
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+                    {dimensionDraft.map((dimension) => (
+                      <Chip
+                        key={dimension}
+                        label={dimension}
+                        onDelete={() => {
+                          const next = dimensionDraft.filter((item) => item !== dimension);
+                          setDimensionDraft(next);
+                          decisionDimensionsRef.current = next;
+                          publishPlan({ nextDecisionDimensions: next });
+                        }}
+                        size="small"
+                      />
+                    ))}
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <TextField
+                      size="small"
+                      value={dimensionInput}
+                      onChange={(event) => setDimensionInput(event.target.value)}
+                      placeholder="补充一个维度，例如：迁移成本"
+                      aria-label="补充对比维度"
+                      slotProps={{ htmlInput: { 'aria-label': '补充对比维度' } }}
+                      sx={{ flex: 1 }}
+                    />
+                    <Button
+                      type="button"
+                      size="small"
+                      disabled={!dimensionInput.trim() || dimensionDraft.includes(dimensionInput.trim())}
+                      onClick={() => {
+                        const next = [...dimensionDraft, dimensionInput.trim()].slice(0, 6);
+                        setDimensionDraft(next);
+                        decisionDimensionsRef.current = next;
+                        setDimensionInput('');
+                        publishPlan({ nextDecisionDimensions: next });
+                      }}
+                    >
+                      添加
+                    </Button>
+                  </Box>
+                </Box>
+              ) : null}
+
+            </Box>
+
+            {advancedControls ? (
+              <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 2.5 }} aria-label="资料与产出">
+                {advancedControls}
+              </Box>
+            ) : null}
+
+            {acceptedContextIds.length > 0 ? (
+              <Box component="section" aria-label="已选历史资料" sx={{ borderTop: 1, borderColor: 'divider', pt: 2, display: 'grid', gap: 1 }}>
+                <Typography variant="body2" sx={{ color: 'info.main', fontWeight: 600 }}>已选历史资料</Typography>
+                {availableContext.filter(item => acceptedContextIds.includes(item.id)).map(item => (
+                  <Box key={item.id} sx={{ display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
+                    <Typography variant="metadata" sx={{ overflowWrap: 'anywhere', minWidth: 0 }}>{item.title}</Typography>
+                    <Button type="button" size="small" aria-label={`取消选择：${item.title}`} onClick={() => toggleContext(item.id)} sx={{ flexShrink: 0 }}>移除</Button>
+                  </Box>
+                ))}
+              </Box>
+            ) : null}
+            {legacySelectionRef.current && acceptedContextIds.some((id) => legacySelectionRef.current?.ids.includes(id)) &&
+             legacySelectionRef.current.ids.some((id) => !acceptedContextIds.includes(id)) ? (
+              <Box role="alert" sx={{ typography: 'metadata', color: 'warning.main' }}>
+                旧草稿没有保存资料与来源的对应关系。请取消其余旧资料，再重新选择需要的资料。
+              </Box>
+            ) : null}
+            <Box component="details" sx={{ borderTop: 1, borderColor: 'divider', pt: 1 }}>
+              <Box component="summary" sx={{ cursor: 'pointer', py: 1, color: 'info.main', typography: 'body2', fontWeight: 600 }}>历史资料建议（可选） · 已选 {acceptedContextIds.length} 条</Box>
+              <PersonalContextSuggestions
+                items={availableContext}
+                selectedIds={acceptedContextIds}
+                loading={contextSearchLoading}
+                onToggle={toggleContext}
+              />
+            </Box>
+
+            <Box component="section" aria-label="更多设置" sx={{ borderTop: 1, borderColor: 'divider', pt: 2 }}>
+              <Box sx={{ mb: 1 }}>
+                <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>更多设置</Typography>
+                <Typography component="p" variant="metadata" sx={{ mt: 0.5, lineHeight: 1.6, color: 'text.secondary' }}>默认由 AI 安排；只有有明确偏好时再调整。</Typography>
+              </Box>
+              <Box sx={{ display: 'grid', gap: 1 }} aria-label="更多检索设置">
+                <Box component="details" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' }}>
+                  <Box component="summary" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1, fontWeight: 500, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' } }}>
+                    <Box component="span">检索偏好（可选）</Box>
+                    <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>{hasSearchPreferences ? '已设置' : '只在需要时展开'}</Typography>
+                  </Box>
+                  <Box sx={{ display: 'grid', gap: 1, borderTop: 1, borderColor: 'divider', px: 1.5, py: 1 }}>
+                    <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>告诉 AI 先看什么、重点关注什么；不填写表示由 AI 自行安排。</Typography>
+                    <Box component="fieldset" sx={{ display: 'grid', gap: 0.5, m: 0, p: 0, border: 0, minWidth: 0 }}>
+                      <Box component="legend" sx={{ mb: 0.5, p: 0, fontWeight: 500, color: 'text.primary' }}>优先参考时间</Box>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                        {TIME_RANGE_OPTIONS.map((option) => (
+                          <Button
+                            key={option.value}
+                            type="button"
+                            aria-pressed={timeRange === option.value}
+                            size="small"
+                            variant={timeRange === option.value ? 'contained' : 'outlined'}
+                            onClick={() => {
+                              setTimeRange(option.value);
+                              publishPlan({ nextTimeRange: option.value });
+                            }}
+                            sx={{ minHeight: 32, borderRadius: 'var(--dr-radius-pill)', px: 1.5 }}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </Box>
+                    </Box>
+                    {timeRange === 'custom' ? (
+                      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1 }}>
+                        <Box component="label" sx={{ display: 'grid', gap: 0.5 }}>
+                          <Typography component="span" variant="metadata" color="text.secondary">起始日期</Typography>
+                          <TextField
+                            fullWidth
+                            type="date"
+                            value={scopeFrom}
+                            aria-invalid={scopeIncomplete && (!scopeFrom || scopeFrom > scopeTo) ? true : undefined}
+                            onChange={(event) => {
+                              const next = event.target.value;
+                              setScopeFrom(next);
+                              publishPlan({ nextScopeFrom: next });
+                            }}
+                            aria-label="优先参考起始日期"
+                            slotProps={{ htmlInput: { max: scopeTo || undefined } }}
+                            sx={{ minWidth: 0 }}
+                          />
+                        </Box>
+                        <Box component="label" sx={{ display: 'grid', gap: 0.5 }}>
+                          <Typography component="span" variant="metadata" color="text.secondary">结束日期</Typography>
+                          <TextField
+                            fullWidth
+                            type="date"
+                            value={scopeTo}
+                            aria-invalid={scopeIncomplete && (!scopeTo || scopeFrom > scopeTo) ? true : undefined}
+                            onChange={(event) => {
+                              const next = event.target.value;
+                              setScopeTo(next);
+                              publishPlan({ nextScopeTo: next });
+                            }}
+                            aria-label="优先参考结束日期"
+                            slotProps={{ htmlInput: { min: scopeFrom || undefined } }}
+                            sx={{ minWidth: 0 }}
+                          />
+                        </Box>
+                      </Box>
+                    ) : null}
+                    <Box component="label" sx={{ display: 'grid', gap: 0.5 }}>
+                      <Typography component="span" variant="metadata" color="text.secondary">关注点或偏好</Typography>
+                      <TextField
+                        fullWidth
+                        multiline
+                        value={retrievalNotes}
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          setRetrievalNotes(next);
+                          publishPlan({ nextRetrievalNotes: next });
+                        }}
+                        rows={2}
+                        placeholder="例如：优先官方文档；关注迁移和兼容性"
+                        aria-label="检索关注点或偏好"
+                        slotProps={{ htmlInput: { maxLength: 400 } }}
+                        sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
+                      />
+                    </Box>
+                    {scopeIncomplete ? (
+                      <Box component="p" role="alert" sx={{ border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }}>
+                        请同时填写开始和结束日期；结束日期不能早于开始日期。补全后才能启动研究。
+                      </Box>
+                    ) : null}
+                    <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>时间只影响检索优先级；网页可能没有可靠的发布日期。</Typography>
+                  </Box>
+                </Box>
+
+                <Box
+                  component="details"
+                  sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' }}
+                  onToggle={(event) => setContextPanelOpen(event.currentTarget.open)}
                 >
-                  {option.label}
-                </Button>
-              ))}
-            </Box>
-          </Box>
-          {timeRange === 'custom' ? (
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1 }}>
-              <Box component="label" sx={{ display: 'grid', gap: 0.5 }}>
-            <Typography component="span" variant="metadata" color="text.secondary">起始日期</Typography>
-                <TextField
-                  fullWidth
-                  type="date"
-                  value={scopeFrom}
-                  aria-invalid={scopeIncomplete && (!scopeFrom || scopeFrom > scopeTo) ? true : undefined}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setScopeFrom(next);
-                    publishPlan({ nextScopeFrom: next });
-                  }}
-                  aria-label="优先参考起始日期"
-                  slotProps={{ htmlInput: { max: scopeTo || undefined } }}
-                  sx={{ minWidth: 0 }}
-                />
-              </Box>
-              <Box component="label" sx={{ display: 'grid', gap: 0.5 }}>
-                <Typography component="span" variant="metadata" color="text.secondary">结束日期</Typography>
-                <TextField
-                  fullWidth
-                  type="date"
-                  value={scopeTo}
-                  aria-invalid={scopeIncomplete && (!scopeTo || scopeFrom > scopeTo) ? true : undefined}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setScopeTo(next);
-                    publishPlan({ nextScopeTo: next });
-                  }}
-                  aria-label="优先参考结束日期"
-                  slotProps={{ htmlInput: { min: scopeFrom || undefined } }}
-                  sx={{ minWidth: 0 }}
-                />
+                  <Box
+                    component="summary"
+                    onClick={(event) => {
+                      const details = event.currentTarget.parentElement as HTMLDetailsElement;
+                      setContextPanelOpen(!details.open);
+                    }}
+                    aria-expanded={contextPanelOpen}
+                    sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1, fontWeight: 500, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' } }}
+                  >
+                    <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Tag size={12} />已有资料（可选）</Box>
+                    <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>历史研究、知识库、收藏、专题议题</Typography>
+                  </Box>
+                  <Box sx={{ display: 'grid', gap: 1, borderTop: 1, borderColor: 'divider', px: 1.5, py: 1 }}>
+                    <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>只会把你选中的资料带入本次研究；不选择也可以直接搜索网页。</Typography>
+                    <Box component="label" sx={{ display: 'grid', gap: 0.5 }}>
+                      <Typography component="span" variant="metadata" color="text.secondary">搜索可用资料（历史研究、知识库、收藏与专题议题）</Typography>
+                      <TextField
+                        fullWidth
+                        value={contextSearch}
+                        onChange={(event) => setContextSearch(event.target.value)}
+                        placeholder="按标题或正文关键词搜索"
+                        aria-label="搜索个人资料"
+                        sx={{ minWidth: 0 }}
+                      />
+                    </Box>
+                    <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>只显示你有权限使用的资料；选中后会随本次研究保存为来源。</Typography>
+                  </Box>
+                </Box>
               </Box>
             </Box>
-          ) : null}
-          <Box component="label" sx={{ display: 'grid', gap: 0.5 }}>
-            <Typography component="span" variant="metadata" color="text.secondary">关注点或偏好</Typography>
-            <TextField
-              fullWidth
-              multiline
-              value={retrievalNotes}
-              onChange={(event) => {
-                const next = event.target.value;
-                setRetrievalNotes(next);
-                publishPlan({ nextRetrievalNotes: next });
-              }}
-              rows={2}
-              placeholder="例如：优先官方文档；关注迁移和兼容性"
-              aria-label="检索关注点或偏好"
-              slotProps={{ htmlInput: { maxLength: 400 } }}
-              sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
-            />
           </Box>
-          {scopeIncomplete ? (
-            <Box component="p" role="alert" sx={{ border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }}>
-              请同时填写开始和结束日期；结束日期不能早于开始日期。补全后才能启动研究。
-            </Box>
-          ) : null}
-          <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>时间只影响检索优先级；网页可能没有可靠的发布日期。</Typography>
-        </Box>
-      </Box>
-
-      <Box
-        component="details"
-        sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' }}
-        onToggle={(event) => setContextPanelOpen(event.currentTarget.open)}
-      >
-        <Box
-          component="summary"
-          onClick={(event) => {
-            const details = event.currentTarget.parentElement as HTMLDetailsElement;
-            setContextPanelOpen(!details.open);
-          }}
-          aria-expanded={contextPanelOpen}
-          sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1, fontWeight: 500, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' } }}
-        >
-          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Tag size={12} />已有资料（可选）</Box>
-          <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>历史研究、知识库、收藏、专题议题</Typography>
-        </Box>
-        <Box sx={{ display: 'grid', gap: 1, borderTop: 1, borderColor: 'divider', px: 1.5, py: 1 }}>
-          <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>只会把你选中的资料带入本次研究；不选择也可以直接搜索网页。</Typography>
-          <Box component="label" sx={{ display: 'grid', gap: 0.5 }}>
-          <Typography component="span" variant="metadata" color="text.secondary">搜索可用资料（历史研究、知识库、收藏与专题议题）</Typography>
-            <TextField
-              fullWidth
-              value={contextSearch}
-              onChange={(event) => setContextSearch(event.target.value)}
-              placeholder="按标题或正文关键词搜索"
-              aria-label="搜索个人资料"
-              sx={{ minWidth: 0 }}
-            />
-          </Box>
-          <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>只显示你有权限使用的资料；选中后会随本次研究保存为来源。</Typography>
-        </Box>
-      </Box>
         </Box>
       </Box>
 
@@ -780,27 +903,32 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
           建议补充：{missingFields.map((field) => translateMissing(field)).join('、')}
         </Typography>
       ) : null}
-      <Box component="footer" sx={{ position: 'sticky', bottom: 0, zIndex: 1, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 1.5, px: { xs: 2, sm: 3 }, py: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>
-        <Typography variant="metadata" color="text.secondary">确认以上设置，启动后将锁定。</Typography>
-        {startAction}
-      </Box>
+      {startFooter}
     </Paper>
   );
 }
 
 function PlanningFallback({
   question,
+  advancedOpen,
+  onAdvancedToggle,
   loading = false,
   error,
   authRequired = false,
   startAction,
+  outputControls,
+  advancedControls,
   children,
 }: {
   question: string;
+  advancedOpen: boolean;
+  onAdvancedToggle: () => void;
   loading?: boolean;
   error?: string;
   authRequired?: boolean;
   startAction?: ReactNode;
+  outputControls?: ReactNode;
+  advancedControls?: ReactNode;
   children?: ReactNode;
 }) {
   return (
@@ -840,12 +968,42 @@ function PlanningFallback({
             </Box>
           )}
       </Box>
-      {children ? (
-        <Box component="section" aria-label="资料与产出" sx={{ borderTop: 1, borderColor: 'divider', px: { xs: 2, sm: 3 }, py: 3 }}>
-          {children}
+      {outputControls || advancedControls || children ? (
+        <Box component="section" aria-label="资料与产出" sx={{ display: 'grid', gap: 2, px: { xs: 2, sm: 3 }, py: 2 }}>
+          {outputControls}
+          {advancedControls || children ? (
+            <Box component="details" open={advancedOpen} data-testid="ai-research-advanced" sx={{ borderTop: 1, borderColor: 'divider' }}>
+              <Box component="summary" aria-label="高级设置" onClick={(event) => { event.preventDefault(); onAdvancedToggle(); }} sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, py: 1.5, fontWeight: 600, color: 'text.primary', '&::-webkit-details-marker': { display: 'none' }, '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}>
+                <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Settings2 size={16} aria-hidden />高级设置</Box>
+                <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>研究方式、投入、资料与检索偏好</Typography>
+              </Box>
+              <Box sx={{ display: 'grid', gap: 2, py: 1 }}>
+                {advancedControls}
+                {children}
+              </Box>
+            </Box>
+          ) : null}
         </Box>
       ) : null}
-      <Box component="footer" sx={{ display: 'flex', justifyContent: 'flex-end', p: 2, borderTop: 1, borderColor: 'divider' }}>{startAction}</Box>
+      {/* Keep the primary action reachable: the confirmation form is longer
+          than a viewport, and the button used to sit ~2 screens down. */}
+      <Box
+        component="footer"
+        sx={{
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 2,
+          display: 'flex',
+          justifyContent: 'flex-end',
+          p: 2,
+          borderTop: 1,
+          borderColor: 'divider',
+          bgcolor: 'background.paper',
+          boxShadow: '0 -8px 16px -16px rgba(0,0,0,0.45)',
+        }}
+      >
+        {startAction}
+      </Box>
     </Paper>
   );
 }

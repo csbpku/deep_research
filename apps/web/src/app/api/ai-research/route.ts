@@ -84,6 +84,9 @@ function briefInstruction(brief: ResearchBrief | undefined): string {
     '[用户确认的研究计划]',
     `- 研究目标：${brief.objective}`,
     `- 核心问题：${brief.question}`,
+    ...(brief.objective === 'decide' && brief.comparisonOnly
+      ? ['- 输出约束：只对比，不推荐。给出差异矩阵与条件性结论，不要给唯一选择或推荐方案。']
+      : []),
     ...(brief.questionsToAnswer.length > 0
       ? ['- 必须回答的问题：', ...brief.questionsToAnswer.map((item) => `  - ${item}`)]
       : []),
@@ -94,6 +97,15 @@ function briefInstruction(brief: ResearchBrief | undefined): string {
       ? [
           '- 必须逐格覆盖的决策维度（每个方案都要标记：有证据 / 未找到 / 待实测）：',
           ...brief.decisionDimensions.map((item) => `  - ${item}`),
+        ]
+      : []),
+    ...(brief.objective === 'learn'
+      ? [
+          '- 学习产物首屏必须写成三行，每行一句：',
+          '  - 是什么：…',
+          '  - 什么时候用：…',
+          '  - 什么时候不要用：…',
+          '- “什么时候不要用”必须写成“当 … 时不要…”或直接禁止动作；没有证据就写“本轮未确认（证据缺口）”，不要拿局限冒充边界。',
         ]
       : []),
     ...(brief.constraints.length > 0
@@ -175,8 +187,8 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   }
 
   const topic = briefFallbackTopic(v2?.brief, v1?.topic ?? v2?.topic);
-  const reportType = v2?.reportType ?? v1?.reportType ?? 'research_report';
-  const reportLength = v2?.reportLength ?? v1?.reportLength ?? (reportType === 'summary_brief' ? 'brief' : 'deep');
+  const reportType = v2?.reportType ?? v1?.reportType ?? 'decision_memo';
+  const reportLength = v2?.reportLength ?? v1?.reportLength ?? (reportType === 'summary_brief' ? 'brief' : 'standard');
   const maxUrlsToScrape = v2?.maxUrlsToScrape ?? v1?.maxUrlsToScrape ?? null;
   const sourcePolicy = v2?.sourcePolicy ?? v1?.sourcePolicy ?? 'prefer_user_sources';
   const sourceRefs = v2?.sourceRefs ?? v1?.sourceRefs ?? [];

@@ -36,7 +36,7 @@ function archivedAi(body: string, runs: Array<Record<string, unknown>>) {
 }
 const passingRun = {
   id: 'run-1', revisionHash: hashResearchRevision(fields), executionStatus: 'completed', outcome: 'clear',
-  attempt: 1, summary: { coverage: { status: 'sufficient' } }, claims: [], decisions: [], createdAt: new Date(),
+  attempt: 1, summary: { coverage_status: 'complete' }, claims: [], decisions: [], createdAt: new Date(),
 };
 
 const restore = () => POST(
@@ -70,5 +70,21 @@ describe('POST /api/researches/[id]/restore for AI research', () => {
     expect(res.status).toBe(200);
     expect(mocks.researchUpdate).toHaveBeenCalledTimes(1);
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('knowledge card restore judgement gate', () => {
+  it('refuses to republish a knowledge card without a judgement', async () => {
+    mocks.requireUser.mockResolvedValue({ id: USER_ID, role: 'admin' });
+    mocks.researchFindUnique.mockResolvedValue({
+      id: RESEARCH_ID, authorId: USER_ID, status: 'archived', publishedAt: new Date(), type: 'knowledge',
+      creationMethod: 'manual', ...fields, reviewStatus: 'passed', judgement: null,
+      judgementConfidence: null, judgementScope: null, judgementReviewAt: null, reviewRuns: [],
+    });
+    const tx = { research: { update: vi.fn(), findUnique: mocks.researchFindUnique }, researchAudit: { create: vi.fn() } };
+    mocks.transaction.mockImplementation(async (fn: (t: unknown) => unknown) => fn(tx));
+    const res = await restore();
+    expect(res.status).toBe(400);
+    expect(tx.research.update).not.toHaveBeenCalled();
   });
 });

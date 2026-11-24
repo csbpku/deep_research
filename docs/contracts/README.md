@@ -7,6 +7,7 @@
 | [env-and-scripts.md](env-and-scripts.md) | 环境变量、脚本及服务命名 | 修改运行配置时 |
 | [radar-governance.md](radar-governance.md) | 条件治理、补救预算、确认噪声删除与恢复 | 维护生产雷达与核验重试时 |
 | [radar-quality-checklist.md](radar-quality-checklist.md) | 每条雷达必需内容、例外、公开门槛与逐条检查 | 检查完整性和质量证据时 |
+| [research-publication.md](research-publication.md) | 发布版本确认、事务并发边界及读者核验披露 | 修改研究发布、重新核验或导出时 |
 
 修改契约时同时核对对应代码及消费者：共享 TypeScript/Python 类型位于 `packages/shared/` 和 AI engine 对应模块，数据库定义位于 `apps/web/prisma/schema.prisma`。按项目规则评审 schema/migration；接口或状态行为变化同步相关文档，并执行适用的跨运行时验证。架构决策保存在本地维护层，不引用历史实施计划作为现役流程。
 

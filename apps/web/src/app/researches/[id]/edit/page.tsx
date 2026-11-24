@@ -1,5 +1,7 @@
 'use client';
 
+import { researchReviewDisclosureMessages, type ResearchReviewReaderItem, type ResearchReviewReaderSummary } from '@/lib/research-review-reader';
+
 // 调研库编辑器页面 —— 新建 + 编辑。
 //
 // 路由：
@@ -15,6 +17,7 @@
 
 import { forwardRef, useState, useEffect, useCallback, useMemo, useRef, type ButtonHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import { publicationSummaryRequirement } from '@/lib/research-publish-requirements';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -24,6 +27,8 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
 import Paper from '@mui/material/Paper';
+import Checkbox from '@mui/material/Checkbox';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import Typography from '@mui/material/Typography';
 import { alpha, type SxProps, type Theme } from '@mui/material/styles';
 import { space } from '@deep-research/design-system';
@@ -69,6 +74,7 @@ import { useUnsavedGuard } from '@/lib/editor/use-unsaved-guard';
 import { useAutoSave } from '@/lib/editor/use-auto-save';
 import { resolveResearchSourceLink } from '@/lib/research-source-link';
 import { sha256Hex } from '@/lib/text-anchor';
+import { hasDisclosableIntentCoverage, parseIntCoverage } from '@/lib/research-intent-coverage';
 import { commandQuery, matchingCommands, type MarkdownCommand } from '@/lib/editor/markdown-commands';
 import { activeOutlineItem, parseOutline } from '@/lib/editor/outline';
 import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
@@ -89,9 +95,14 @@ interface ResearchDetail {
   creationMethod: string;
   aiAssisted: boolean;
   supersedesResearchId?: string | null;
+  researchReportType?: string | null;
   publishedAt: string | null;
   createdAt: string;
   reviewStatus: string | null;
+  publicationVersion: string;
+  publicationHardBlocked?: boolean;
+  publicationDisclosure?: ResearchReviewReaderItem[];
+  publicationDisclosureSummary?: ResearchReviewReaderSummary | null;
   reviewAttempts: number;
   reviewSummary: {
     corrected_count?: number;
@@ -219,6 +230,7 @@ export default function EditorPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+  const [disclosureAcked, setDisclosureAcked] = useState(false);
   const [restoreConfirmAudit, setRestoreConfirmAudit] = useState<AuditEntry | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState(() =>
     draftSnapshot({ title: '', body: '', background: '', conclusion: '', risks: '', tagsInput: '' }),
@@ -727,8 +739,12 @@ export default function EditorPage() {
 
   // 发布
   const publishMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/researches/${existing?.id}/publish`, { method: 'POST' });
+    mutationFn: async ({ acknowledgeDisclosure, publicationVersion }: { acknowledgeDisclosure: boolean; publicationVersion?: string }) => {
+      const res = await fetch(`/api/researches/${existing?.id}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acknowledgeDisclosure, publicationVersion }),
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.message ?? '发布失败');
@@ -787,26 +803,41 @@ export default function EditorPage() {
     await reviewMutation.mutateAsync(undefined);
   }, [existing, isDirty, reviewMutation, saveMutation]);
 
-  const handlePublish = useCallback(async () => {
+  const handlePublish = useCallback(async (acknowledgeDisclosure: boolean) => {
     if (!existing) return;
     setError('');
     if (isDirty) {
       await saveMutation.mutateAsync({ mode: 'manual' });
+      if (existing.creationMethod === 'ai_research') {
+        setDisclosureAcked(false);
+        setError('已保存修改，请根据当前版本的核验与披露重新确认发布。');
+        return;
+      }
     }
-    await publishMutation.mutateAsync();
+    await publishMutation.mutateAsync({ acknowledgeDisclosure, publicationVersion: existing.publicationVersion });
   }, [existing, isDirty, publishMutation, saveMutation]);
+
+  useEffect(() => { setDisclosureAcked(false); }, [existing?.publicationVersion]);
 
   const handleFork = useCallback(async () => {
     setError('');
     await forkMutation.mutateAsync();
   }, [forkMutation]);
 
-  const summaryComplete = background.trim().length > 0 && conclusion.trim().length > 0 && risks.trim().length > 0;
-  const missingSummaryFields = [
-    !background.trim() ? '背景' : null,
-    !conclusion.trim() ? '结论' : null,
-    !risks.trim() ? '风险或待验证项' : null,
-  ].filter((field): field is string => Boolean(field));
+  const isKnowledgeCard = existing?.type === 'knowledge';
+  // A knowledge card is source + note, so it publishes without the research
+  // report's background/risk sections; only the body is required.
+  const summaryRequirement = publicationSummaryRequirement({
+    type: existing?.type,
+    creationMethod: existing?.creationMethod,
+    reportType: existing?.researchReportType,
+    body,
+    background,
+    conclusion,
+    risks,
+  });
+  const summaryComplete = summaryRequirement.complete;
+  const missingSummaryFields = summaryRequirement.missingLabels;
   const reviewRequired = existing?.creationMethod === 'ai_research';
   // The API marks the run that covers the exact current snapshot. Historical
   // runs remain useful in the audit trail, but must never drive the publish
@@ -823,26 +854,36 @@ export default function EditorPage() {
     : latestReviewRun
       ? latestReviewRun.executionStatus === 'completed' && latestReviewRun.outcome === 'clear'
       : existing?.reviewStatus === 'passed';
-  const reviewPublishable = reviewPassed
-    || publicationGate?.status === 'clear'
-    || publicationGate?.status === 'publish_with_disclosure';
+  const publishHardBlocked = existing?.publicationHardBlocked === true || publicationGate?.status === 'blocked';
+  const gateClean = publicationGate?.status === 'clear'
+    || publicationGate?.status === 'publish_with_disclosure'
+    || (!publicationGate && Boolean(reviewPassed));
+  const reviewPublishable = gateClean;
+  // A team publish with residual uncertainty is allowed, but never silently:
+  // the author ticks the same disclosure the reader will see.
+  const intentCoverage = parseIntCoverage(body);
+  const requiresIntentCoverageAck = reviewRequired && hasDisclosableIntentCoverage(intentCoverage);
+  const requiresDisclosureAck = (reviewRequired && !gateClean && !publishHardBlocked) || requiresIntentCoverageAck;
   const currentReviewIsCurrent = existing?.currentReview?.isCurrentRevision === true;
-  const reviewInstruction = !currentReviewIsCurrent
+  const reviewInstruction = publishHardBlocked
+    ? '同版本仍有高风险来源冲突；必须修订相关结论，或完成新一轮核验后再发布。'
+    : !currentReviewIsCurrent
     ? '当前稿还没有最新的资料检查结果。保存后可以更新检查。'
     : existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing'
       ? '资料正在后台整理；完成后会告诉你哪些内容需要处理。'
       : publicationGate?.status === 'needs_action'
-      ? `有 ${publicationGate.openCount} 条结论缺少直接依据；请补充资料或修改相关内容。`
+      ? `有 ${publicationGate.openCount} 条结论缺少直接依据；可以带披露发布，或补充资料后再发。`
       : publicationGate?.status === 'blocked'
-        ? '来源之间存在不一致；请修改相关结论后再发布。'
+        ? '来源之间存在高风险冲突；必须修改相关结论并重新审核。'
       : publicationGate?.status === 'coverage_insufficient'
-          ? '现有资料还不足以支撑完整报告；请补充资料后再发布。'
+          ? '本轮机器核验没有完整覆盖全文；可以带披露发布，或重新检查。'
         : publicationGate?.status === 'research_insufficient'
-          ? '现有资料还没有覆盖原问题的关键部分；请补充资料后再发布。'
+          ? '资料覆盖还有缺口；可以带披露发布，但读者会看到这一点。'
         : publicationGate?.status === 'unavailable'
-          ? '资料检查暂未完成；可以稍后重试。'
+          ? '资料检查尚未完成；可以带披露先发，或稍后重试。'
           : '当前内容还需要处理后才能发布。';
-  const publishDisabled = publishMutation.isPending || !summaryComplete || (reviewRequired && !reviewPublishable);
+  const publishDisabled = publishMutation.isPending || !summaryComplete || publishHardBlocked;
+  const disclosureAckSatisfied = !requiresDisclosureAck || disclosureAcked;
   const reviewInProgress = existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing';
   const reviewDisabled = saving || reviewMutation.isPending || reviewInProgress;
 
@@ -863,10 +904,14 @@ export default function EditorPage() {
       }
     : reviewRequired && !reviewPublishable
       ? {
-          label: currentReviewIsCurrent && (existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing')
-            ? '正在整理资料'
-            : '需要处理',
-          detail: reviewInstruction,
+          label: publishHardBlocked
+            ? '需要处理'
+            : currentReviewIsCurrent && (existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing')
+            ? '可先带披露发布'
+            : publicationGate?.status === 'blocked'
+              ? '需要处理'
+              : '可带披露发布',
+          detail: publicationGate ? reviewInstruction : '这份 AI 调研还没有核验结果；发布时会标注“尚未完成自动核验”。',
           tone: 'warning' as const,
         }
       : {
@@ -932,7 +977,7 @@ export default function EditorPage() {
             </Button>
           )}
           {existing && existing.status === 'draft' && (
-            <Button type="button" size="sm" onClick={() => setPublishConfirmOpen(true)} disabled={publishDisabled} title={!summaryComplete ? '发布前必须填写背景、结论和风险或待验证项' : '发布调研'}>
+            <Button type="button" size="sm" onClick={() => { setDisclosureAcked(false); setPublishConfirmOpen(true); }} disabled={publishDisabled} title={!summaryComplete ? '发布前必须填写正文' : '发布调研'}>
               <Send />
               {publishMutation.isPending ? '发布中…' : '发布调研'}
             </Button>
@@ -1537,8 +1582,44 @@ export default function EditorPage() {
                 ? `当前版本保留 ${publicationGate.disclosedCount} 条已接受的不确定性，请确认它们已反映在风险或后续行动中。`
                 : publicationGate?.status === 'clear' && researchCoverageLabel === '未评估'
                   ? '关键依据已有，但资料范围没有自动评估；请确认当前资料确实足以回答原始问题。'
+                : requiresDisclosureAck
+                  ? '这份调研仍有未完成核验或未覆盖的内容；发布后读者会看到同样的披露。'
                 : '请确认结论、证据和风险已核对。'}
           </DialogContentText>
+          {requiresDisclosureAck && (
+            <Box sx={{ mt: 2, p: 1.5, border: 1, borderColor: 'var(--dr-color-warning)', bgcolor: 'var(--dr-color-warning-container)' }}>
+              <Typography variant="metadata" component="p" sx={{ fontWeight: 600 }}>发布时披露</Typography>
+              {requiresIntentCoverageAck ? (
+                <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>
+                  必答问题还有 {intentCoverage?.counts.unknown ?? 0} 个未知、{intentCoverage?.counts.conflict ?? 0} 个冲突、{intentCoverage?.counts.partial ?? 0} 个部分覆盖；发布后读者会在「必答问题覆盖」中看到同样的状态。
+                </Typography>
+              ) : null}
+              <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>
+                {existing?.publicationDisclosureSummary
+                  ? researchReviewDisclosureMessages(existing.publicationDisclosureSummary).join(' ')
+                  : publicationGate
+                  ? `${publicationGate.openCount} 条声明未完成核验`
+                    + (publicationGate.conflictCount > 0 ? `，${publicationGate.conflictCount} 条存在来源冲突` : '')
+                    + (publicationGate.coverageIncomplete ? '；本轮机器核验覆盖不完整' : '')
+                    + '。'
+                  : '本轮自动核验尚未完成。'}
+              </Typography>
+              {existing?.publicationDisclosure?.length ? (
+                <Box component="ul" sx={{ mt: 1, pl: 2, maxHeight: 240, overflow: 'auto' }}>
+                  {existing.publicationDisclosure.map((item) => (
+                    <Typography key={`${item.claimId}:${item.claim}`} component="li" variant="metadata" sx={{ mb: 0.5 }}>
+                      {item.claim} — {item.label}{item.reason ? `；作者理由：${item.reason}` : ''}
+                    </Typography>
+                  ))}
+                </Box>
+              ) : null}
+              <FormControlLabel
+                sx={{ mt: 1, alignItems: 'flex-start' }}
+                control={<Checkbox checked={disclosureAcked} onChange={(event) => setDisclosureAcked(event.target.checked)} />}
+                label={<Typography variant="metadata">我已知晓上述不确定性，并同意带披露发布。</Typography>}
+              />
+            </Box>
+          )}
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
             <Button type="button" variant="outline" onClick={() => setPublishConfirmOpen(false)}>
@@ -1546,9 +1627,9 @@ export default function EditorPage() {
             </Button>
             <Button
               type="button"
-              disabled={publishMutation.isPending}
+              disabled={publishMutation.isPending || !disclosureAckSatisfied}
               onClick={async () => {
-                await handlePublish();
+                await handlePublish(requiresDisclosureAck);
                 setPublishConfirmOpen(false);
               }}
             >

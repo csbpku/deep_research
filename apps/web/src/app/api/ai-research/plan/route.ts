@@ -31,6 +31,7 @@ const PlanInput = z.object({
   constraints: z.array(z.string().min(1).max(240)).max(20).optional(),
   questionsToAnswer: z.array(z.string().min(1).max(240)).max(20).optional(),
   comparisonOptions: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
+  comparisonOnly: z.boolean().optional(),
   decisionDimensions: z.array(z.string().trim().min(1).max(160)).max(20).optional(),
   scope: ResearchScopeSchema.optional(),
   outputType: z.enum(['markdown', 'slides', 'web']).optional(),
@@ -60,7 +61,15 @@ function inferObjective(question: string): ResearchObjective {
   return 'investigate';
 }
 
-function defaultQuestionsToAnswer(objective: ResearchObjective): string[] {
+function defaultQuestionsToAnswer(objective: ResearchObjective, comparisonOnly = false): string[] {
+  if (objective === 'decide' && comparisonOnly) {
+    return [
+      '每个候选方案解决什么问题，适用前提是什么？',
+      '围绕问题中关注的行为、适用边界和限制，有哪些可核对的差异？',
+      '哪些差异只在特定条件下成立，条件变化时结论如何变化？',
+      '哪些关键判断有直接来源支持，哪些仍存在证据缺口或冲突？',
+    ];
+  }
   if (objective === 'decide') {
     return [
       '每个候选方案解决什么问题，适用前提是什么？',
@@ -73,6 +82,7 @@ function defaultQuestionsToAnswer(objective: ResearchObjective): string[] {
     return [
       '核心概念、工作机制和必要前置知识是什么？',
       '怎样用最小实践验证理解，官方资料推荐的路径是什么？',
+      '什么情况下不应该使用它？有哪些反例、失败案例或不适用场景？',
       '常见误区、限制和失败信号有哪些？',
     ];
   }
@@ -90,14 +100,17 @@ function defaultQuestionsToAnswer(objective: ResearchObjective): string[] {
   ];
 }
 
-function defaultSuccessCriteria(objective: ResearchObjective): string[] {
+function defaultSuccessCriteria(objective: ResearchObjective, comparisonOnly = false): string[] {
   const criteria = [
     '重要判断都能回链到可检查的原文或明确标记为待核验',
     '清楚区分已确认事实、基于证据的推断和建议',
     '保留主要限制、反例与尚未解决的证据缺口',
   ];
-  if (objective === 'decide') {
+  if (objective === 'decide' && !comparisonOnly) {
     criteria.push('给出与当前场景相关的推荐和下一步验证动作');
+  }
+  if (objective === 'decide' && comparisonOnly) {
+    criteria.push('说明每个选项在什么条件下更合适，不给出唯一推荐');
   }
   return criteria;
 }
@@ -108,16 +121,18 @@ function questionToBrief(
   topicId: string | undefined,
   partial: Partial<ResearchBrief> & { scope?: ResearchScope } = {},
 ): ResearchBrief {
+  const comparisonOptions = partial.comparisonOptions ?? inferComparisonOptions(question);
   return {
     objective,
+    comparisonOnly: partial.comparisonOnly ?? false,
     question,
     context: partial.context,
     scope: partial.scope ?? ResearchScopeSchema.parse({}),
     constraints: partial.constraints ?? [],
-    questionsToAnswer: partial.questionsToAnswer ?? defaultQuestionsToAnswer(objective),
-    comparisonOptions: partial.comparisonOptions ?? inferComparisonOptions(question),
-    decisionDimensions: partial.decisionDimensions ?? (objective === 'decide' ? inferDecisionDimensions(question, partial.context) : []),
-    successCriteria: partial.successCriteria ?? defaultSuccessCriteria(objective),
+    questionsToAnswer: partial.questionsToAnswer ?? defaultQuestionsToAnswer(objective, partial.comparisonOnly),
+    comparisonOptions: partial.comparisonOptions ?? comparisonOptions,
+    decisionDimensions: partial.decisionDimensions ?? (objective === 'decide' ? inferDecisionDimensions(question, partial.context, comparisonOptions) : []),
+    successCriteria: partial.successCriteria ?? defaultSuccessCriteria(objective, partial.comparisonOnly),
     sourcePolicy: partial.sourcePolicy ?? 'prefer_user_sources',
     contextRefs: partial.contextRefs ?? [],
     primaryTopicId: partial.primaryTopicId ?? topicId,
@@ -125,8 +140,20 @@ function questionToBrief(
   };
 }
 
-function buildPlanSteps(objective: ResearchObjective, question: string, dimensions: string[]): ResearchPlan {
+function buildPlanSteps(objective: ResearchObjective, question: string, dimensions: string[], comparisonOnly = false): ResearchPlan {
   const trimmed = question.slice(0, 60);
+  if (objective === 'decide' && comparisonOnly) {
+    return {
+      summary: `围绕「${trimmed}」比较选项差异，不给出唯一推荐。`,
+      steps: [
+        { title: '梳理备选方案', detail: '枚举待比较方案与各自适用前提' },
+        { title: '逐格对照', detail: dimensions.length ? dimensions.join(' / ') : '按已确认的关键维度逐格对照' },
+        { title: '标注未知与冲突', detail: '每个单元格标明有证据/未知/冲突' },
+        { title: '条件性结论', detail: '说明各方案在什么条件下更合适，不给唯一推荐' },
+      ],
+      estimatedMinutes: 12,
+    };
+  }
   if (objective === 'decide') {
     return {
       summary: `围绕「${trimmed}」开展决策类调研，给出选项、利弊与可执行建议。`,
@@ -145,6 +172,7 @@ function buildPlanSteps(objective: ResearchObjective, question: string, dimensio
       steps: [
         { title: '核心概念与术语', detail: '梳理关键名词与适用边界' },
         { title: '入门示例与最小实践', detail: '可复制的最小可运行例子' },
+        { title: '反例与不适用场景', detail: '专门查找失败案例、禁用条件与替代方案' },
         { title: '深入阅读清单', detail: '官方文档与权威案例链接' },
         { title: '常见误区', detail: '总结上手期常见坑' },
       ],
@@ -244,6 +272,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<Record<string, st
   );
 
   const brief = questionToBrief(question, objective, primary, {
+    comparisonOnly: body.comparisonOnly,
     constraints: body.constraints,
     context: body.context,
     questionsToAnswer: body.questionsToAnswer,
@@ -254,7 +283,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<Record<string, st
     sourcePolicy: body.sourcePolicy,
   });
 
-  const plan = buildPlanSteps(objective, question, brief.decisionDimensions);
+  const plan = buildPlanSteps(objective, question, brief.decisionDimensions, brief.comparisonOnly);
   const missingFields: string[] = [];
   if (objective === 'decide' && brief.comparisonOptions.length === 0) {
     missingFields.push('comparisonOptions');

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   confirmedKnowledgeIndexText,
+  knowledgeCardIndexText,
   queuePersonalKnowledgeIndex,
   readingKnowledgeIndexText,
   readingKnowledgeIndexTextFromBody,
@@ -35,6 +36,27 @@ describe('personal knowledge index text', () => {
       conclusion: ' Start with a narrow retrieval scope. ',
       body: 'The evidence supports this only for small teams.',
     })).toBe('A bounded conclusion\n\nStart with a narrow retrieval scope.\n\nThe evidence supports this only for small teams.');
+  });
+
+  it('indexes the judgement and its scope before the supporting note', () => {
+    const text = confirmedKnowledgeIndexText({
+      title: 'GitNexus',
+      judgement: 'Cross-repository call graphs are its main use.',
+      judgementConfidence: 'medium',
+      judgementScope: 'Only indexed repositories.',
+      body: 'The demo showed symbol-level navigation.',
+    });
+    expect(text).toContain('Cross-repository call graphs are its main use.');
+    expect(text).toContain('适用边界：Only indexed repositories.');
+    expect(text).toContain('置信度 medium');
+  });
+
+  it('keeps a Reader quote out of the indexed judgement card', () => {
+    const body = '> Full page source text\n\n## 我的笔记\n\nOnly this note should be indexed.';
+    const text = knowledgeCardIndexText({ title: 'Card', body, judgement: 'A reusable claim.', judgementConfidence: 'high' });
+    expect(text).toContain('A reusable claim.');
+    expect(text).toContain('Only this note should be indexed.');
+    expect(text).not.toContain('Full page source text');
   });
 
   it('keeps the complete confirmed text instead of stopping at 12k characters', () => {

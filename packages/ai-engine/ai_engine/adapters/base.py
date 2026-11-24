@@ -52,6 +52,8 @@ class ResearchRequest:
     # queued job keeps the same research contract after a restart.
     report_length: str = "standard"
     max_urls_to_scrape: int | None = None
+    # User intent from the confirmed brief: explore / learn / investigate / decide.
+    objective: str = ""
     # Hint from the worker about expected max latency. Adapter should raise
     # AdapterError(code=WORKER_TIMEOUT) past this. Default 5 min — see
     # ARCHITECTURE §四.

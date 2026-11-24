@@ -16,6 +16,7 @@ import pytest
 from ai_engine.adapters.gpt_researcher import _collect_sources_from_research
 from ai_engine.adapters.gpt_researcher import (
     _append_references,
+    _report_output_contract,
     _ACTIVE_RESEARCH_JOB,
     _clean_report_output,
     _format_source_lines,
@@ -2179,3 +2180,72 @@ async def test_brief_preserves_spent_tokens_after_later_failure_or_cancellation(
         await task
         assert job.status == AI_JOB_STATUS["FAILED"]
     assert (job.token_in, job.token_out) == (23, 7)
+
+
+def test_comparison_matrix_cells_keep_citations_as_plain_labels() -> None:
+    sources = [
+        _source("https://example.com/one", "A very long official guide title", "Captured one."),
+    ]
+
+    materialized = _materialize_evidence_citations(
+        "| A | 有证据 [S1] |",
+        sources,
+        compact=True,
+        plain_matrix=True,
+    )
+
+    assert "有证据 [S1] |" in materialized
+    assert "](https://example.com/one)" not in materialized
+
+
+def test_adjacent_materialized_citations_are_separated() -> None:
+    sources = [
+        _source("https://example.com/one", "One guide", "Captured one."),
+        _source("https://example.com/two", "Two guide", "Captured two."),
+    ]
+
+    materialized = _materialize_evidence_citations("[S1][S2]", sources)
+
+    assert "[One guide](https://example.com/one) [Two guide](https://example.com/two)" == materialized
+
+
+def test_learning_path_citations_stay_compact() -> None:
+    sources = [_source("https://example.com/guide", "A very long official title", "Captured.")]
+
+    # A learning path passes the same plain-label flag as the matrix: a full
+    # URL inside the 90-second answer or the concept table makes it unreadable.
+    materialized = _materialize_evidence_citations(
+        "结论 [S1]。", sources, compact=True, plain_matrix=True
+    )
+
+    assert materialized == "结论 [S1]。"
+
+
+def test_web_brief_contract_has_a_brief_length_budget() -> None:
+    brief = _report_output_contract("问题", report_type="web_brief", report_length="brief")
+    standard = _report_output_contract("问题", report_type="web_brief", report_length="standard")
+
+    assert "900 个中文字符" in brief
+    assert "1800 个中文字符" in standard
+
+
+def test_web_brief_does_not_get_a_bibliography() -> None:
+    sources = [_source("https://example.com/one", "One guide", "Captured one.")]
+    body = "简报正文"
+    brief = _append_references(body, sources, report_type="web_brief")
+    report = _append_references(body, sources, report_type="research_report")
+
+    assert brief == body
+    assert "## 参考文献" in report
+
+
+def test_materialize_does_not_duplicate_an_existing_markdown_link() -> None:
+    sources = [_source("https://example.com/guide", "Guide", "Evidence.")]
+
+    materialized = _materialize_evidence_citations(
+        "结论 [S1](https://example.com/guide)。",
+        sources,
+        compact=True,
+    )
+
+    assert materialized == "结论 [S1](https://example.com/guide)。"
