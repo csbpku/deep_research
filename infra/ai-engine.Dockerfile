@@ -23,17 +23,10 @@ RUN uv sync --no-dev --no-install-project
 FROM --platform=linux/amd64 python:3.11-slim AS runtime
 WORKDIR /app
 
-# The optional local Zread fallback is invoked as a subprocess by the Python
-# enrichment worker. Keep it in the AI image (without Chromium) so the
-# remote -> CLI -> README fallback order is real in production. Git is needed
-# for commit-pinned resumable checkouts; Node/npm are only used when a CLI job
-# starts.
-ARG ZREAD_CLI_VERSION=0.2.13
+# Local Zread generation is quarantined by GHSA-3429-mj25-c5wf. Keep Git for
+# repository retrieval, but do not install the npm CLI or its runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git nodejs npm \
-    && npm install --global --no-fund --no-audit "zread_cli@${ZREAD_CLI_VERSION}" \
-    && command -v zread \
-    && npm cache clean --force \
+    ca-certificates git \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 1001 -U aiuser \
     && mkdir -p /data/import-tmp /data/zread \
@@ -45,6 +38,7 @@ COPY --from=deps --chown=aiuser:aiuser /app/packages/ai-engine/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    ZREAD_CLI_ENABLED=0 \
     AI_ENGINE_HOST=0.0.0.0 \
     AI_ENGINE_PORT=4000
 

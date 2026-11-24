@@ -15,7 +15,6 @@ import os
 import re
 import signal
 import shutil
-import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -63,34 +62,20 @@ def _generate_command(binary: str) -> tuple[str, ...]:
 
 
 def _enabled() -> bool:
-    return os.environ.get("ZREAD_CLI_ENABLED", "1").strip().lower() not in {
-        "0", "false", "no", "off",
-    }
+    # GHSA-3429-mj25-c5wf marks every npm release as malware. An old env file
+    # must not reactivate it; cached wiki readers below remain available.
+    return False
 
 
 def _binary() -> str | None:
-    configured = os.environ.get("ZREAD_CLI_BIN", "").strip()
-    if configured:
-        return configured
-    resolved = shutil.which("zread")
-    if resolved:
-        return resolved
-    # launchd/uvicorn often have a narrower PATH than the interactive shell.
-    # Ask npm for its global root so an npm-installed CLI is still discoverable.
-    try:
-        global_root = subprocess.check_output(
-            ["npm", "root", "-g"], text=True, timeout=3,
-        ).strip()
-        candidate = Path(global_root) / "zread_cli" / "bin" / "zread.js"
-        if candidate.is_file():
-            return str(candidate)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    # Do not discover or execute a previously installed quarantined package.
     return None
 
 
 async def _run(*args: str, cwd: Path, timeout: float | None) -> tuple[int, str, str]:
     command = list(args)
+    if len(command) >= 2 and command[1] == "generate":
+        raise RuntimeError("Local Zread CLI is quarantined: GHSA-3429-mj25-c5wf")
     zread_log_path: Path | None = None
     zread_log_offset = 0
     if len(command) >= 2 and command[1] == "generate":

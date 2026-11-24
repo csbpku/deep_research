@@ -10,6 +10,8 @@
 
 Zread 卷不属于镜像保留机制：普通阅读默认 browser 模式，但 AI engine 及独立 repair 仍挂载 `deep-research_zread-work`，repair 使用 `/data/zread/governance` 保存恢复状态。整卷不能按缓存删除；仓库 checkout 和 `.zread` 草稿需另外核验、列清单并确认后清理。
 
+本地 Zread CLI 因 GitHub 恶意软件公告 GHSA-3429-mj25-c5wf 被隔离：生产镜像不再安装 npm CLI 或 Node/npm 运行时，应用固定阻断本地生成，旧 `ZREAD_CLI_ENABLED=1` 不能重新启用。远程 Zread 与 README 回退仍可用，已有 wiki、草稿和治理证据不删除。该改动不等于对历史主机完成取证或凭据轮换；已安装过受影响包的机器需独立评估暴露范围。
+
 ## 部署基线
 
 - `docker-compose.yml`：PostgreSQL、Web、AI engine、内网 AnythingLLM 与 nginx；另提供可选的 `browser-review` Chromium profile。
