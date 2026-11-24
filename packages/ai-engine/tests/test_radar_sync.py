@@ -2038,6 +2038,115 @@ def test_build_score_reason_combines_limited_and_shell_prefix() -> None:
     assert "\u4f4e\u7f6e\u4fe1\u5ea6\u521d\u7b5b" in reason
 
 
+@pytest.mark.parametrize(
+    ("configured", "explicit", "expected"),
+    [
+        (None, None, 300.0),
+        ("450", None, 450.0),
+        ("1", None, 60.0),
+        ("1000", None, 900.0),
+        ("invalid", None, 300.0),
+        ("nan", None, 300.0),
+        ("inf", None, 300.0),
+        ("-inf", None, 300.0),
+        ("450", 30.0, 30.0),
+    ],
+)
+async def test_radar_brief_timeout_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str | None,
+    explicit: float | None,
+    expected: float,
+) -> None:
+    if configured is None:
+        monkeypatch.delenv("RADAR_BRIEF_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("RADAR_BRIEF_TIMEOUT_SECONDS", configured)
+    run_source = AsyncMock()
+    monkeypatch.setattr("ai_engine.radar.sync_runner._run_source", run_source)
+
+    await run_radar_sync(
+        _Pool([_source()]), adapter=FakeAdapter(), generation_timeout_seconds=explicit,
+    )
+
+    run_source.assert_awaited_once()
+    assert run_source.await_args is not None
+    assert run_source.await_args.kwargs["generation_timeout_seconds"] == expected
+
+
+@pytest.mark.parametrize("raises", [False, True])
+async def test_brief_retries_share_total_deadline(
+    monkeypatch: pytest.MonkeyPatch, raises: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    now = 100.0
+    budgets: list[float] = []
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    async def generate(*args: Any, timeout_seconds: float, **kwargs: Any) -> Any:
+        nonlocal now
+        budgets.append(timeout_seconds)
+        now += min(30.0, timeout_seconds)
+        if raises:
+            raise RuntimeError("WORKER_TIMEOUT")
+        return SimpleNamespace(status=AI_JOB_STATUS["FAILED"], error_code="WORKER_TIMEOUT")
+
+    monkeypatch.setattr("ai_engine.radar.sync_runner.time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run() -> Any:
+        return await _generate_brief_with_retry(
+            generate, FakeAdapter(), {}, "https://example.com/x", timeout_seconds=60.0,
+        )
+
+    if raises:
+        with pytest.raises(RuntimeError, match="WORKER_TIMEOUT"):
+            await run()
+    else:
+        assert (await run()).status == AI_JOB_STATUS["FAILED"]
+    assert budgets == [60.0, 25.0]
+    assert sleeps == [5.0]
+    assert now == 160.0
+
+
+async def test_brief_skips_backoff_when_deadline_is_near(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    now = 0.0
+    calls = 0
+    sleep = AsyncMock()
+    failure = SimpleNamespace(status=AI_JOB_STATUS["FAILED"], error_code="WORKER_TIMEOUT")
+
+    async def generate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal now, calls
+        calls += 1
+        now += 56.0
+        return failure
+
+    monkeypatch.setattr("ai_engine.radar.sync_runner.time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr("asyncio.sleep", sleep)
+    assert await _generate_brief_with_retry(
+        generate, FakeAdapter(), {}, "https://example.com/x", timeout_seconds=60.0,
+    ) is failure
+    assert calls == 1
+    sleep.assert_not_awaited()
+
+
+async def test_brief_expired_deadline_does_not_call_model() -> None:
+    generate = AsyncMock()
+    with pytest.raises(_BriefGenerationError, match="deadline exhausted"):
+        await _generate_brief_with_retry(
+            generate, FakeAdapter(), {}, "https://example.com/x", timeout_seconds=0.0,
+        )
+    generate.assert_not_awaited()
+
+
 async def test_generate_brief_with_retry_retries_429(monkeypatch: pytest.MonkeyPatch) -> None:
     sleeps: list[float] = []
 
