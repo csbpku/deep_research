@@ -83,6 +83,11 @@ unresolved/deferred lists, and verify public radar/search/topics/references. A
 
 ## Continuous repair and confirmed-noise deletion
 
+Radar sync gives each article brief a shared 300-second generation budget,
+configured with `RADAR_BRIEF_TIMEOUT_SECONDS` (60–900 seconds). Source hydration,
+full-text map/reduce, final synthesis, and transient retries share this deadline.
+Retrying a timed-out long article does not reset the generation budget.
+
 `python -m scripts.repair_radar --actor <real-admin> --state-dir <durable-path>`
 scans automatic radar plus approved shares, including archived/rejected rows.
 The default 20-item limit is per cycle, not a limit on the inventory. It retains

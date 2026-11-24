@@ -102,6 +102,7 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `DB_POOL_MAX_SIZE` | int | ai-engine PostgreSQL 连接池最大连接数 | `10` |
 | `RADAR_SOURCE_CONCURRENCY` | int | 同时运行的雷达来源数 | `5` |
 | `RADAR_CANDIDATE_CONCURRENCY` | int | 单来源同时处理的候选数 | `3` |
+| `RADAR_BRIEF_TIMEOUT_SECONDS` | float | 雷达单篇导读的总预算，包含抓取复核、分块提炼、合成及重试退避；范围 60–900 秒，无效值回退默认值 | `300` |
 | `RADAR_FETCH_RETRIES` | int | 来源与候选传输失败后的额外重试次数 | `2` |
 | `RADAR_FETCH_RETRY_BACKOFF_SECONDS` | float | 传输重试的初始退避秒数（指数增长） | `0.5` |
 | `RADAR_LLM_CONCURRENCY` | int | 全局 LLM 调用上限，sync/enrichment 共用 | `8` |
