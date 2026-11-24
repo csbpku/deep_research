@@ -249,7 +249,8 @@ services:
       # The CLI is installed in the AI image; its checkout/drafts survive
       # container replacement through this dedicated volume.
       ZREAD_REMOTE_ENABLED: ${ZREAD_REMOTE_ENABLED:-1}
-      ZREAD_CLI_ENABLED: ${ZREAD_CLI_ENABLED:-1}
+      # Quarantined package: GHSA-3429-mj25-c5wf; old .env cannot re-enable it.
+      ZREAD_CLI_ENABLED: "0"
       ZREAD_CLI_BIN: ${ZREAD_CLI_BIN:-zread}
       ZREAD_CLI_WORK_DIR: ${ZREAD_CLI_WORK_DIR:-/data/zread}
       ZREAD_CLI_TIMEOUT_SECONDS: ${ZREAD_CLI_TIMEOUT_SECONDS:-7200}
