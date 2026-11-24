@@ -33,10 +33,21 @@ const EVIDENCE = /\[S\d+\]/gu;
 // Writers sometimes emit bare labels ("S1", "S2S3") inside a matrix cell. Treat
 // them as citations instead of silently dropping the evidence and calling the
 // cell "unknown".
-const BARE_CITATION = /(?<![\w[])S\d+(?:S\d+)*/gu;
+const BARE_CITATION = /(?:^|[\s，,、])S\d+(?:[\s，,、]*S\d+)*\s*$/u;
 
+/**
+ * Writers sometimes end a cell with bare labels ("… S1", "… S1S3"). Only a
+ * trailing run of labels counts: `S3` inside "AWS S3" is a product name, not a
+ * source, and must not satisfy the evidence gate.
+ */
 function bracketBareCitations(cell: string): string {
-  return cell.replace(BARE_CITATION, (match) => match.split(/(?=S\d)/u).map(part => `[${part}]`).join(''));
+  const match = BARE_CITATION.exec(cell);
+  if (!match) return cell;
+  const tail = match[0];
+  const offset = match.index + tail.length - tail.trimStart().length;
+  const labels = tail.trim().match(/S\d+/gu);
+  if (!labels) return cell;
+  return `${cell.slice(0, offset).trimEnd()} ${labels.map(label => `[${label}]`).join('')}`.trim();
 }
 const HAS_EVIDENCE = /\[S\d+\]/u;
 const EXPLICIT_GAP = /未知|待实测|未确认|冲突|未找到|无直接证据|未核验|没有证据/u;

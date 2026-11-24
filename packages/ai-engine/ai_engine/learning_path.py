@@ -364,9 +364,22 @@ def enforce_answer_shape(text: str) -> str:
     section, rest = (body, "") if end == -1 else (body[:end], body[end:])
     bullets = [line.strip() for line in section.splitlines() if line.strip().startswith("-")]
     if bullets:
-        kept = "\n".join(bullets[:3])
-        for label in ("- 是什么：", "- 什么时候用：", "- 什么时候不要用："):
-            if not any(line.startswith(label) for line in bullets):
+        # Pick by label, not by position: the abstention bullet is routinely
+        # written fourth, and positional truncation silently dropped it.
+        labels = ("- 是什么：", "- 什么时候用：", "- 什么时候不要用：")
+        picked: list[str] = []
+        for label in labels:
+            match = next((line for line in bullets if line.startswith(label)), None)
+            if match is not None and match not in picked:
+                picked.append(match)
+        for line in bullets:
+            if len(picked) >= 3:
+                break
+            if line not in picked:
+                picked.append(line)
+        kept = "\n".join(picked[:3])
+        for label in labels:
+            if not any(line.startswith(label) for line in picked):
                 kept += f"\n{label}本轮未确认（证据缺口）。"
     else:
         sentences = re.findall(r"[^。！？!?]+[。！？!?]?", section)

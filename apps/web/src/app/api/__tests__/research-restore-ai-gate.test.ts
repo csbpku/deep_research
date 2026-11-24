@@ -72,3 +72,19 @@ describe('POST /api/researches/[id]/restore for AI research', () => {
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('knowledge card restore judgement gate', () => {
+  it('refuses to republish a knowledge card without a judgement', async () => {
+    mocks.requireUser.mockResolvedValue({ id: USER_ID, role: 'admin' });
+    mocks.researchFindUnique.mockResolvedValue({
+      id: RESEARCH_ID, authorId: USER_ID, status: 'archived', publishedAt: new Date(), type: 'knowledge',
+      creationMethod: 'manual', ...fields, reviewStatus: 'passed', judgement: null,
+      judgementConfidence: null, judgementScope: null, judgementReviewAt: null, reviewRuns: [],
+    });
+    const tx = { research: { update: vi.fn(), findUnique: mocks.researchFindUnique }, researchAudit: { create: vi.fn() } };
+    mocks.transaction.mockImplementation(async (fn: (t: unknown) => unknown) => fn(tx));
+    const res = await restore();
+    expect(res.status).toBe(400);
+    expect(tx.research.update).not.toHaveBeenCalled();
+  });
+});

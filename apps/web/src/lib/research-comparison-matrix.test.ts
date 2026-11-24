@@ -61,3 +61,26 @@ describe('parseComparisonMatrix', () => {
     expect(parseComparisonMatrix('## 对比矩阵\n\n没有表。')).toBeNull();
   });
 });
+
+  it('does not read an S3 product name as a citation', () => {
+    const body = `## 对比矩阵
+
+| 方案 | 存储 |
+|---|---|
+| A | 用 AWS S3 保存归档 |
+| B | 使用 S3 兼容接口 |
+`;
+    const check = checkComparisonMatrix(body);
+    expect(check.unmarked).toHaveLength(2);
+    expect(parseComparisonMatrix(body)?.rows[0].cells[0]).toMatchObject({ status: 'unknown' });
+  });
+
+  it('keeps the label text when a cell ends with a bare citation', () => {
+    const body = `## 对比矩阵
+
+| 方案 | 死锁 |
+|---|---|
+| A | **有证据**：多锁需统一顺序 S1S3 |
+`;
+    expect(parseComparisonMatrix(body)?.rows[0].cells[0].text).toContain('多锁需统一顺序');
+  });

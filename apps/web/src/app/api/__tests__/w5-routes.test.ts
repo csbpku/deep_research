@@ -1230,6 +1230,10 @@ describe('POST /api/radar-feedback', () => {
 });
 
 describe('DELETE /api/radar-feedback', () => {
+  beforeEach(() => {
+    mocks.summaryFindUnique.mockResolvedValue(visibleFeedbackSummary);
+  });
+
   it('returns 400 on missing params', async () => {
     const r = await feedbackDelete(
       new Request('http://localhost/api/radar-feedback') as never,
@@ -1250,6 +1254,18 @@ describe('DELETE /api/radar-feedback', () => {
     expect(body.removed).toBe(1);
     expect(mocks.summaryUpdateMany).not.toHaveBeenCalled();
     expect(body.judgmentScore).toBeNull();
+  });
+
+  it('refuses to delete feedback on a hidden candidate', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({ ...visibleFeedbackSummary, status: 'archived' });
+    const r = await feedbackDelete(
+      new Request(
+        `http://localhost/api/radar-feedback?summaryId=${SUM_ID}&feedbackType=pilot`,
+      ) as never,
+    );
+    expect(r.status).toBe(404);
+    expect(mocks.radarFeedbackDeleteMany).not.toHaveBeenCalled();
+    expect(mocks.summaryUpdateMany).not.toHaveBeenCalled();
   });
 
   it('removes a judgment and recomputes the aggregate to zero', async () => {

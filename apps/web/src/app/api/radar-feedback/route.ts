@@ -161,6 +161,27 @@ export const DELETE = apiHandler<[NextRequest]>(async (req) => {
   }
 
   const { summaryId, feedbackType } = parsed.data;
+  // Gate the delete path exactly like the create path: without it any member
+  // can erase feedback and recompute judgmentScore on hidden rows, and the
+  // 200/404 difference leaks whether an id exists.
+  const summary = await prisma.summary.findUnique({
+    where: { id: summaryId },
+    select: { ...radarVisibilitySelect, status: true },
+  });
+  if (
+    !summary
+    || summary.source !== 'daily'
+    || summary.syncRunId === null
+    || summary.status === 'archived'
+    || !isRadarSummaryVisible(summary, u.role === 'admin')
+  ) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '雷达候选不存在',
+      requestId,
+    });
+  }
+
   const outcome = await prisma.$transaction(async (tx) => {
     await lockJudgmentAggregate(tx, summaryId);
 

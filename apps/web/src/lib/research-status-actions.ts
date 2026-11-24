@@ -10,6 +10,7 @@ import { resolveResearchReviewInventory } from './research-review-inventory';
 import { getReviewPublicationGate, reviewCoverageStatus } from './research-review-decisions';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { toApiErrorResponse } from './errors';
+import { validateKnowledgeJudgement } from './research-knowledge-judgement';
 
 /**
  * Restoring an archived AI report returns it to published with no new review.
@@ -32,6 +33,16 @@ export function restoreReviewRequiredResponse(
     requestId,
     details: error.details,
   });
+}
+
+/**
+ * Restoring a knowledge card republishes it; a card without a claim,
+ * confidence, scope and review date must not re-enter the public library.
+ */
+export class ResearchRestoreJudgementRequiredError extends Error {
+  constructor(readonly reason: string) {
+    super('KNOWLEDGE_RESTORE_JUDGEMENT_REQUIRED');
+  }
 }
 
 export type ResearchStatusAction = 'archive' | 'restore';
@@ -73,6 +84,10 @@ export async function transitionResearchStatus(
       risks: true,
       tags: true,
       reviewStatus: true,
+      judgement: true,
+      judgementConfidence: true,
+      judgementScope: true,
+      judgementReviewAt: true,
       reviewRuns: {
         orderBy: { createdAt: 'desc' },
         take: 50,
@@ -153,6 +168,21 @@ export async function transitionResearchStatus(
         publicationGate: gate,
         createRevision: `/api/researches/${existing.id}/fork`,
       });
+    }
+  }
+
+  // Restoring a knowledge card republishes it, so the judgement contract that
+  // gates publishing must hold here too. Admin promote creates drafts for the
+  // same reason.
+  if (!isArchive && existing.type === 'knowledge') {
+    const judgement = validateKnowledgeJudgement({
+      judgement: existing.judgement,
+      judgementConfidence: existing.judgementConfidence,
+      judgementScope: existing.judgementScope,
+      judgementReviewAt: existing.judgementReviewAt,
+    });
+    if (!judgement.ok) {
+      throw new ResearchRestoreJudgementRequiredError(judgement.message);
     }
   }
 

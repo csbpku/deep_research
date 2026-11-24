@@ -653,3 +653,18 @@ SELECT 1;
     out = enforce_learning_budget(body)
     assert "### 第二层" in out and "### 第三层" in out
     assert out.count("本轮未确认（这一层还没有足够证据展开）") == 2
+
+
+def test_a_fourth_bullet_keeps_the_abstention_when_it_is_last() -> None:
+    text = (
+        "## 90 秒回答\n\n"
+        "- 是什么：autovacuum 负责回收死元组。\n"
+        "- 什么时候用：高更新表需要它。\n"
+        "- 为什么重要：否则表会膨胀。\n"
+        "- 什么时候不要用：长事务阻塞清理时不要调参。[S1]\n\n"
+        "## 概念图\n"
+    )
+    opening = enforce_answer_shape(text).split("## 概念图")[0]
+    assert "- 什么时候不要用：长事务阻塞清理时不要调参。[S1]" in opening
+    assert opening.count("- 什么时候不要用：") == 1
+    assert opening.count("- 为什么重要：") == 0

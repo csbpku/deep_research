@@ -22,44 +22,56 @@ def _is_separator(cells: list[str]) -> bool:
 
 
 def dedupe_option_rows(text: str) -> str:
-    """Keep one table row per option inside the comparison matrix section."""
+    """Keep one table row per option inside the comparison matrix section.
+
+    Only the first contiguous table under the heading is the matrix; prose and
+    any later table (e.g. the 未知与冲突 note table) are preserved verbatim.
+    """
     lines = text.splitlines()
     try:
         start = next(index for index, line in enumerate(lines) if line.strip() == _HEADING)
     except StopIteration:
         return text
 
-    seen: set[str] = set()
-    kept: list[str] = []
-    removed = 0
-    in_table = False
-    for line in lines[start + 1 :]:
-        if line.startswith("## "):
-            kept.extend(lines[start + 1 + len(kept) : start + 1 + len(kept) + 1][:0])
-            break
-        match = _TABLE_ROW.match(line)
-        if not match:
-            if in_table and kept and line.strip():
-                in_table = False
-            continue
-        cells = _cells(line)
-        if _is_separator(cells):
-            continue
-        key = re.sub(r"[`*\s]", "", cells[0]).casefold() if cells else ""
-        if key in seen:
-            removed += 1
-            continue
-        seen.add(key)
-        kept.append(line)
-        in_table = True
-    if not removed:
+    # Locate the first table block: header, separator, rows.
+    index = start + 1
+    while index < len(lines) and not _TABLE_ROW.match(lines[index].strip()):
+        if lines[index].startswith("## "):
+            return text
+        index += 1
+    if index >= len(lines):
+        return text
+    table_start = index
+    if table_start + 1 >= len(lines) or not _is_separator(_cells(lines[table_start + 1])):
         return text
 
-    # Rebuild the section: heading, blank line, table, then the original tail.
-    tail_start = start + 1
-    while tail_start < len(lines) and (lines[tail_start].strip() == "" or lines[tail_start].startswith("|")):
-        tail_start += 1
-    prefix = lines[: start + 1]
-    suffix = lines[tail_start:]
-    rebuilt = prefix + [""] + kept + [""] + suffix
+    header = lines[table_start]
+    separator = lines[table_start + 1]
+    row_start = table_start + 2
+    row_end = row_start
+    while row_end < len(lines) and _TABLE_ROW.match(lines[row_end].strip()):
+        row_end += 1
+    rows = lines[row_start:row_end]
+
+    seen: set[str] = set()
+    kept: list[str] = []
+    for line in rows:
+        cells = _cells(line)
+        key = re.sub(r"[`*\s]", "", cells[0]).casefold() if cells else ""
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        kept.append(line)
+
+    if len(kept) == len(rows):
+        return text
+
+    rebuilt = [
+        *lines[:table_start],
+        header,
+        separator,
+        *kept,
+        *lines[row_end:],
+    ]
     return "\n".join(rebuilt).rstrip() + "\n"
