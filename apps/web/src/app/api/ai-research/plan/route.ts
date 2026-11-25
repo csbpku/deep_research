@@ -43,6 +43,10 @@ const PlanInput = z.object({
 const DECIDE_KEYWORDS = /(决策|选型|是否|应不应该|该不该|迁移|上不|还是|比较|对比|区别|优劣|vs|vs\.|compare|comparison|选用|采用|替换|落地)/iu;
 const INVESTIGATE_KEYWORDS = /(深入|细节|原理|机制|分析|原理是|怎么实现|如何实现|底层|架构|调研|性能|瓶颈|安全|风险|成本)/iu;
 const LEARN_KEYWORDS = /(怎么用|如何用|教程|入门|学习|从零|基础|上手|了解)/iu;
+// A stated learning goal outranks topic words like 原理/机制: “系统学习 MVCC
+// 的原理” is still a learning request, not a mechanism investigation. An
+// explicit decision comparison still wins over both.
+const EXPLICIT_LEARN_KEYWORDS = /(系统学习|我想学习|想学习|学习路径|入门|教程|从零|上手|怎么用|如何用|带我学|教会我|科普)/iu;
 const EXPLORE_KEYWORDS = /(概览|概要|有哪些|最近|新出|动态|趋势)/iu;
 
 const OBJECTIVE_LABELS: Record<ResearchObjective, string> = {
@@ -55,6 +59,7 @@ const OBJECTIVE_LABELS: Record<ResearchObjective, string> = {
 function inferObjective(question: string): ResearchObjective {
   const text = question.slice(0, 500);
   if (DECIDE_KEYWORDS.test(text)) return 'decide';
+  if (EXPLICIT_LEARN_KEYWORDS.test(text)) return 'learn';
   if (INVESTIGATE_KEYWORDS.test(text)) return 'investigate';
   if (LEARN_KEYWORDS.test(text)) return 'learn';
   if (EXPLORE_KEYWORDS.test(text)) return 'explore';
