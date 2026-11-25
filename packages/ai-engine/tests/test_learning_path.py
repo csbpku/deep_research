@@ -668,3 +668,32 @@ def test_a_fourth_bullet_keeps_the_abstention_when_it_is_last() -> None:
     assert "- 什么时候不要用：长事务阻塞清理时不要调参。[S1]" in opening
     assert opening.count("- 什么时候不要用：") == 1
     assert opening.count("- 为什么重要：") == 0
+
+
+def test_an_unlabelled_boundary_bullet_is_relabelled_not_dropped() -> None:
+    text = (
+        "## 90 秒回答\n\n"
+        "- 是什么：MVCC 用快照判断可见版本。\n"
+        "- 什么时候用：普通读写需要并发时。\n"
+        "- 当两个事务更新同一行时不要把 MVCC 当作互斥锁。[S6]\n"
+        "- 什么时候不要用：本轮未确认（证据缺口）。\n\n"
+        "## 概念图\n"
+    )
+    opening = enforce_answer_shape(text).split("## 概念图")[0]
+    assert "- 什么时候不要用：当两个事务更新同一行时不要把 MVCC 当作互斥锁。[S6]" in opening
+    assert "本轮未确认（证据缺口）" not in opening
+
+
+def test_extra_sections_outside_the_contract_do_not_ship() -> None:
+    text = (
+        "## 90 秒回答\n\n- 是什么：x。\n\n"
+        "## 概念图\n\n| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |\n\n"
+        "## 分层解释\n\n### 第一层\n\n内容。\n\n"
+        "## 可运行示例\n\n```sql\nSELECT 1;\n```\n\n预期输出：一行。\n\n"
+        "## 常见误区\n\n- 不要全库 VACUUM FULL。[S1]\n\n"
+        "## 自检\n\n1. 问？ 答：答。\n\n"
+        "## 最小实践矩阵\n\n" + "补充材料。" * 400 + "\n"
+    )
+    out = enforce_learning_budget(text)
+    assert "最小实践矩阵" not in out
+    assert len(out) <= 3200

@@ -209,7 +209,8 @@ def _trim_section(content: str, cap: int) -> str:
 _SELF_CHECK_ITEM = re.compile(r"(?m)^(\d+)\.\s+")
 
 
-_ANSWER_LINE = re.compile(r"答案(?:要点)?\*{0,2}\s*[：:]")
+_ANSWER_LINE = re.compile(r"答(?:案(?:要点)?)?\*{0,2}\s*[：:]")
+_STALE_ANSWER_GAP = re.compile(r"\n\s*本轮未确认（该题缺少答案要点[^）]*）。?\s*$")
 
 
 def _trim_self_check(content: str, cap: int) -> str:
@@ -241,6 +242,11 @@ def _trim_self_check(content: str, cap: int) -> str:
             first = question.splitlines()[0] if question else "自检题未生成"
             items.append(f"{index + 1}. {first}\n   本轮未确认（该题缺少答案要点）。")
         else:
+            # A previous run may have appended the "missing answer" gap even
+            # though the writer did supply one (the old detector required the
+            # label at line start). Drop that stale gap once a real answer is
+            # present, otherwise the reader sees the answer and its denial.
+            item = _STALE_ANSWER_GAP.sub("", item).rstrip()
             items.append(item)
     budget = max(80, (cap - len(lead)) // 3 - 8)
     trimmed = []
@@ -368,16 +374,41 @@ def enforce_answer_shape(text: str) -> str:
         # written fourth, and positional truncation silently dropped it.
         labels = ("- 是什么：", "- 什么时候用：", "- 什么时候不要用：")
         picked: list[str] = []
-        for label in labels:
+        for label in labels[:2]:
             match = next((line for line in bullets if line.startswith(label)), None)
-            if match is not None and match not in picked:
+            if match is not None:
                 picked.append(match)
-        for line in bullets:
-            if len(picked) >= 3:
-                break
-            if line not in picked:
-                picked.append(line)
-        kept = "\n".join(picked[:3])
+        boundary = next(
+            (line for line in bullets if line.startswith(labels[2])), None
+        )
+        labelled_gap = boundary is not None and not is_boundary_statement(
+            boundary.split("：", 1)[-1]
+        )
+        if boundary is None or labelled_gap:
+            # The writer sometimes states a real boundary without the label.
+            # Relabel it instead of keeping a fourth bullet and a gap.
+            boundary = next(
+                (
+                    line
+                    for line in bullets
+                    if line not in picked
+                    and is_boundary_statement(line.lstrip("- ").strip())
+                ),
+                None,
+            )
+            if boundary is not None:
+                claim = boundary.lstrip("- ").strip()
+                claim = re.sub(r"^(?:什么时候不要用|不要用)[:：]\s*", "", claim)
+                boundary = f"{labels[2]}{claim}"
+            elif labelled_gap:
+                # No replacement found: keep the honest gap.
+                boundary = next(
+                    line for line in bullets if line.startswith(labels[2])
+                )
+        if boundary is not None:
+            picked.append(boundary)
+        kept = "\n".join(picked)
+        # Never keep a fourth bullet: the opening promises exactly three.
         for label in labels:
             if not any(line.startswith(label) for line in picked):
                 kept += f"\n{label}本轮未确认（证据缺口）。"
@@ -679,6 +710,22 @@ def _trim_concept_map(content: str) -> str:
     return prefix + "\n".join(kept + ([""] + rest if rest else [])) + "\n"
 
 
+def _keep_contract_sections(text: str) -> str:
+    """Drop headings the learning artifact does not define.
+
+    Extra sections were the reason a 6-section path shipped at 7.8k chars while
+    every individual cap was respected: the caps only cover known headings.
+    """
+    parts = re.split(r"^(##\s+.+)$", text, flags=re.MULTILINE)
+    kept = [parts[0]]
+    for index in range(1, len(parts), 2):
+        heading = parts[index].strip().lstrip("#").strip()
+        if heading in HEADINGS:
+            kept.append(parts[index])
+            kept.append(parts[index + 1] if index + 1 < len(parts) else "")
+    return "".join(kept)
+
+
 def enforce_learning_budget(text: str) -> str:
     """Trim overlong sections, keeping the six-section order and all headings."""
     text = strip_bibliography(
@@ -705,6 +752,11 @@ def enforce_learning_budget(text: str) -> str:
         else:
             out.append(_trim_section(body, cap) if cap else body)
     bounded = "".join(out)
+    # The writer sometimes appends "bonus" sections after the six-part path
+    # (边界与反例, 最小实践矩阵, 学习顺序…). They are useful prose, but they are
+    # not part of the artifact contract and they push the page far past the
+    # budget. Keep the contract sections in order and drop the rest.
+    bounded = _keep_contract_sections(bounded)
     # Per-section caps can still add up past the page budget. Trim the longest
     # explanatory section until the whole path fits, never dropping a heading.
     while len(bounded) > MAX_CHARS:
