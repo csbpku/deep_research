@@ -2249,3 +2249,15 @@ def test_materialize_does_not_duplicate_an_existing_markdown_link() -> None:
     )
 
     assert materialized == "结论 [S1](https://example.com/guide)。"
+
+
+def test_decision_memo_keeps_bare_labels_too() -> None:
+    sources = [_source("https://example.com/guide", "A very long official title", "Captured.")]
+
+    # A memo is a one-page decision artifact; a full URL in every claim breaks
+    # the scan even though the evidence ledger still has the link.
+    materialized = _materialize_evidence_citations(
+        "## 关键声明\n\n- 结论 [S1]。", sources, compact=True, plain_matrix=True
+    )
+
+    assert materialized == "## 关键声明\n\n- 结论 [S1]。"
