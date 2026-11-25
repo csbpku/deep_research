@@ -908,6 +908,15 @@ def _citation_ledger(
             if source is not None:
                 append_citation(sentence, source)
 
+        # Compact artifacts (memo, learning path, comparison matrix) keep a
+        # bare ``[S#]`` label instead of a Markdown link. It is still a
+        # citation to the source captured at that index, so ledger it rather
+        # than losing the relationship entirely.
+        for label in re.finditer(r"\[S(\d+)\]", sentence):
+            index = int(label.group(1))
+            if 1 <= index <= len(sources):
+                append_citation(sentence, sources[index - 1])
+
         for match in _CITATION_RE.finditer(sentence):
             author = match.group("author").strip()
             source = next((item for item in sources if _citation_matches_source(author, item)), None)

@@ -233,7 +233,8 @@ async def test_adapter_memo_with_real_llm_client_and_mock_http_provider(monkeypa
     assert len(requests) == 1
     assert job.status == 'succeeded', job.error_message
     assert job.review_phase == 'queued'
-    assert '[S1](https://example.com/captured)' in job.body
+    assert '[S1]' in job.body
+    assert '](https://example.com/captured)' not in job.body
     assert '[Captured docs]' not in job.body
     assert len(reviewer._citation_ledger(job.body, tuple(job.sources))) == 1
 
@@ -253,7 +254,8 @@ async def test_real_adapter_uses_captured_namespace_and_keeps_memo_citations_com
     assert job.status == 'succeeded', job.error_message
     assert '[S1] Captured docs' in prompts[0]
     assert 'Discovery only' not in prompts[0]
-    assert '[S1](https://example.com/captured)' in job.body
+    assert '[S1]' in job.body
+    assert '](https://example.com/captured)' not in job.body
     assert '[Captured docs]' not in job.body
     assert '## 参考文献' not in job.body
     assert len(reviewer._citation_ledger(job.body, tuple(job.sources))) == 1

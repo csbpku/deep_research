@@ -5216,10 +5216,12 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     llm_spec=memo_spec,
                 )
                 if memo:
-                    # A memo keeps short [S#] labels so the evidence ledger
-                    # still resolves while full source titles do not triple
-                    # the page length.
-                    memo = _materialize_evidence_citations(memo, sources, compact=True)
+                    # A one-page memo cannot carry full URLs: the reader is
+                    # scanning claims, not following links. Keep the label and
+                    # let the evidence ledger resolve it.
+                    memo = _materialize_evidence_citations(
+                        memo, sources, compact=True, plain_matrix=True
+                    )
                     memo = _clean_report_output(memo, sources)
                     memo_accepted = is_valid_decision_memo(memo)
                     if memo_accepted:
