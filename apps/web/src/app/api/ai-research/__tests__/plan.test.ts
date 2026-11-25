@@ -236,6 +236,25 @@ describe('POST /api/ai-research/plan', () => {
     expect(body.brief.objective).toBe('learn');
   });
 
+  it('keeps a stated learning goal when the topic contains 原理/机制', async () => {
+    const res = await planPost(
+      buildReq({ question: '我想系统学习 PostgreSQL 的 MVCC 可见性判断，从原理到实践。' }) as never,
+      ctx(),
+    );
+    const body = await res.json();
+    expect(body.brief.objective).toBe('learn');
+    expect(body.brief.reportType).toBeUndefined();
+  });
+
+  it('still treats an explicit comparison as a decision', async () => {
+    const res = await planPost(
+      buildReq({ question: '想系统学习一下，比较 Playwright 和 Cypress 哪个更适合我们' }) as never,
+      ctx(),
+    );
+    const body = await res.json();
+    expect(body.brief.objective).toBe('decide');
+  });
+
   it('推断探索类问题为 explore 且立即 ready', async () => {
     const res = await planPost(buildReq({ question: '最近有哪些 RAG 新趋势？' }) as never, ctx());
     const body = await res.json();
